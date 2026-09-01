@@ -85,6 +85,21 @@
 
 주의: vehicle_info를 sample_vehicle에 **덮어썼음** (별도 차량 패키지 안 만들고). upstream 업데이트 시 유실 가능 — 기술부채로 기록.
 
+## 5B. 필드 수준 호환 검증 (9/2 00시 — 소비 코드 직접 확인)
+
+토픽 이름·타입을 넘어, 소비하는 쪽 소스에서 실제로 읽는 필드를 확인한 결과:
+
+| 소비자 (확인한 코드) | 기대하는 것 | 브리지 충족 |
+|---|---|---|
+| traffic_light 모듈 (`scene.cpp findValidTrafficSignal`) | lanelet의 regulatory element id로 TrafficLightGroupArray 조회 | ✅ TlRouter가 같은 OSM의 relation id를 group_id로 발행 (map_loader와 동일 소스) |
+| 〃 (`isStopSignal`) | **데이터 없는 신호등: 실환경=정지, 시뮬=통과** | ⚠→✅ **is_simulation:=true로 수정** (우리는 "다음 신호등"에만 데이터를 주므로 필수. 안 고쳤으면 뒤쪽 신호등마다 영구 정지였음) |
+| 〃 (`isTrafficSignalTimedOut`) | tl_state_timeout(≈1s) 내 갱신 | ✅ 20Hz 발행 |
+| crosswalk 모듈 (`scene_crosswalk.cpp`) | `classification.front().label`(비어있으면 안 됨), `kinematics.initial_twist...linear`(객체 속도), `kinematics.predicted_paths` 순회 | ✅ label 1개 append, twist.linear.x=speed, 등속 8초 경로 1개 |
+| obstacle_stop 모듈 (`resample_highest_confidence_predicted_paths`) | predicted_paths + **confidence**, label 필터, **shape.dimensions.z로 높이 게이팅** | ✅ confidence=1.0, z=height(기본 1.6) 설정, 객체·ego 모두 월드 z 전달 |
+| 플래닝 공통 | kinematic_state의 pose(map)+twist(base_link), acceleration | ✅ 부호 있는 속도(후진 감지 포함)+yaw rate |
+
+남은 필드 수준 우려: **objects uuid의 프레임 간 안정성** — obstacle 모듈들이 uuid로 이력 추적을 하므로 VTD id가 흔들리면 추적이 끊김 (Q&A 답변 대기, 미답변 4번 항목).
+
 ## 6. 리스크 / 미검증 (우선순위순)
 
 1. **엔드투엔드 미검증** — Autoware 노드가 브리지 토픽으로 실제 궤적을 내는 건 내일이 처음

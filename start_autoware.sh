@@ -10,6 +10,8 @@
 #
 # 전제: ~/autoware 빌드 완료, ~/2026-HL-FMA-VTD/ros2_ws 빌드 완료
 # 구성: 인지·측위·센싱·차량IF는 브리지가 대체 → launch에서 끔
+# is_simulation:=true 필수: 신호등 모듈이 "데이터 없는 신호등"을 실환경에선 정지,
+# 시뮬에선 통과로 처리함. 우리는 다음 신호등에만 state를 주므로 true여야 함 (scene.cpp isStopSignal)
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,5 +52,5 @@ exec ros2 launch autoware_launch autoware.launch.xml \
   launch_vehicle_interface:=false \
   launch_system:=false \
   launch_dummy_diag_publisher:=false \
-  is_simulation:=false \
+  is_simulation:=true \
   rviz:=true
