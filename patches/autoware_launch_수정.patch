@@ -1,16 +1,3 @@
-diff --git a/autoware_launch/config/planning/preset/default_preset.yaml b/autoware_launch/config/planning/preset/default_preset.yaml
-index 30ff84c..1f0d14e 100644
---- a/autoware_launch/config/planning/preset/default_preset.yaml
-+++ b/autoware_launch/config/planning/preset/default_preset.yaml
-@@ -99,7 +99,7 @@ launch:
- 
-   - arg:
-       name: motion_path_planner_type
--      default: path_optimizer
-+      default: path_sampler
-       # option: path_optimizer
-       #         path_sampler
-       #         none
 diff --git a/autoware_launch/config/planning/scenario_planning/common/common.param.yaml b/autoware_launch/config/planning/scenario_planning/common/common.param.yaml
 index 8d2228d..f307790 100644
 --- a/autoware_launch/config/planning/scenario_planning/common/common.param.yaml
