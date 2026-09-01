@@ -20,10 +20,23 @@ from hlvtd_io import VTDClient
 from controller import PathTracker, Controller
 import scp_ctrl
 
+ROUTE_CONFIG = Path.home() / "hlfma/route/route_config.yaml"
+
+
+def route_from_config():
+    """route_config.yaml의 csv_path 한 줄을 읽는다 (경로 지정의 단일 기준점)."""
+    for line in ROUTE_CONFIG.read_text().splitlines():
+        line = line.split("#")[0].strip()
+        if line.startswith("csv_path:"):
+            return Path(line.split(":", 1)[1].strip())
+    raise SystemExit(f"{ROUTE_CONFIG}에 csv_path 없음")
+
+
 HOST = sys.argv[1] if len(sys.argv) > 1 else "192.168.50.11"
-ROUTE = Path(sys.argv[2] if len(sys.argv) > 2 else "real_route_path1.csv")
+ROUTE = Path(sys.argv[2]) if len(sys.argv) > 2 else route_from_config()
 XODR = Path(sys.argv[3] if len(sys.argv) > 3 else "HL_FMA_VTD_LivingLab.xodr")
 MAX_SEC = float(sys.argv[4]) if len(sys.argv) > 4 else 600.0
+print(f"경로 CSV: {ROUTE}")
 
 
 print("맵 로드...")
