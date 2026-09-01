@@ -5,7 +5,7 @@
                     /localization/acceleration, /vehicle/status/velocity_report·steering_report 등
   objects[30]     → /perception/object_recognition/objects (PredictedObjects, 크기 휴리스틱 분류)
   trafficLight    → /perception/traffic_light_recognition/traffic_signals
-                    (OSM의 xodr_signal_id 태그로 lanelet2 regulatory element id 매핑)
+                    (9/1 Q&A: ID 무매핑 → LaneletRoute 구독, 경로상 다음 신호등 그룹에 state 적용)
 
 송신(CtrlPacket 9B @20Hz) ← Autoware:
   /control/command/control_cmd (Control): steering_tire_angle·acceleration
@@ -40,8 +40,10 @@ from autoware_perception_msgs.msg import (
     PredictedObjects, PredictedPath, Shape,
     TrafficLightElement, TrafficLightGroup, TrafficLightGroupArray,
 )
+from autoware_planning_msgs.msg import LaneletRoute
 
 from .protocol import DATA_SIZE, unpack_data, pack_ctrl
+from .tl_router import TlRouter
 
 MAX_STEER_RAD = 0.48
 ACCEL_MIN, ACCEL_MAX = -6.0, 3.0
@@ -62,19 +64,6 @@ def yaw_to_quat(yaw: float):
     return 0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)
 
 
-def load_tl_mapping(osm_path: str):
-    """OSM에서 xodr_signal_id → regulatory element relation id 매핑 생성."""
-    mapping = {}
-    for _, elem in ET.iterparse(osm_path):
-        if elem.tag != 'relation':
-            continue
-        tags = {t.get('k'): t.get('v') for t in elem.findall('tag')}
-        if tags.get('subtype') == 'traffic_light' and 'xodr_signal_id' in tags:
-            mapping[int(tags['xodr_signal_id'])] = int(elem.get('id'))
-        elem.clear()
-    return mapping
-
-
 class VtdAutowareBridge(Node):
     def __init__(self):
         super().__init__('vtd_autoware_bridge')
@@ -89,15 +78,14 @@ class VtdAutowareBridge(Node):
         self.steer_sign = float(self.get_parameter('steer_sign').value)
 
         osm = self.get_parameter('map_osm').value
-        self.tl_map = {}
+        self.tl_router = None
         if osm:
             t0 = time.time()
             try:
-                self.tl_map = load_tl_mapping(osm)
-                self.get_logger().info(
-                    f'신호등 매핑 {len(self.tl_map)}개 로드 ({time.time()-t0:.1f}s): {osm}')
+                self.tl_router = TlRouter(osm, self.get_logger())
+                self.get_logger().info(f'TlRouter 로드 {time.time()-t0:.1f}s: {osm}')
             except Exception as e:
-                self.get_logger().error(f'OSM 신호등 매핑 실패: {e}')
+                self.get_logger().error(f'TlRouter 초기화 실패: {e}')
         else:
             self.get_logger().warning('map_osm 미지정 → 신호등 토픽 발행 안 함')
 
@@ -123,6 +111,10 @@ class VtdAutowareBridge(Node):
             Control, '/control/command/control_cmd', self.on_control, 1)
         self.sub_turn = self.create_subscription(
             TurnIndicatorsCommand, '/control/command/turn_indicators_cmd', self.on_turn, 1)
+        route_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                               durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.sub_route = self.create_subscription(
+            LaneletRoute, '/planning/mission_planning/route', self.on_route, route_qos)
 
         # 최신 명령 (Autoware 부호 기준)
         self.cmd_lock = threading.Lock()
@@ -331,17 +323,28 @@ class VtdAutowareBridge(Node):
             msg.objects.append(obj)
         self.pub_objects.publish(msg)
 
+    def on_route(self, msg: LaneletRoute):
+        if self.tl_router is None:
+            return
+        ids = [seg.preferred_primitive.id for seg in msg.segments]
+        # centroid 로드에 수 초 걸리므로 별도 스레드 (20Hz 루프 블로킹 방지)
+        threading.Thread(target=self._apply_route, args=(ids,), daemon=True).start()
+
+    def _apply_route(self, ids):
+        try:
+            self.tl_router.set_route(ids)
+        except Exception as e:
+            self.get_logger().error(f'경로 신호등 구축 실패: {e}')
+
     def publish_traffic_light(self, st, stamp):
-        if not self.tl_map:
+        """9/1 Q&A: tl_id는 무시, state를 경로상 다음 신호등 그룹에 적용."""
+        if self.tl_router is None:
             return
         msg = TrafficLightGroupArray()
         msg.stamp = stamp
-        if st.tl_id != 0 and st.tl_state in TL_STATE_MAP:
-            group_id = self.tl_map.get(st.tl_id)
-            if group_id is None:
-                self.get_logger().warning(
-                    f'trafficLightId {st.tl_id} 매핑 없음', throttle_duration_sec=10.0)
-            else:
+        if st.tl_state in TL_STATE_MAP:
+            group_id = self.tl_router.next_group(st.x, st.y)
+            if group_id is not None:
                 g = TrafficLightGroup()
                 g.traffic_light_group_id = group_id
                 for color, shape, status in TL_STATE_MAP[st.tl_state]:
