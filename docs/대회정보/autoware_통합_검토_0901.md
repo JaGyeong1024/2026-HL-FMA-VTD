@@ -83,6 +83,9 @@
 | `autoware_launch/config/.../common.param.yaml` | max_vel 4.17 → **13.3 m/s** | 도심 50km/h, +1km/h 허용 대비 –2km/h 마진 |
 | 브리지 | steer_sign +1.0 / host 192.168.50.11 / TlRouter | 실측·Q&A·대회장 IP |
 
+| `default_preset.yaml` | motion_path_planner_type: path_optimizer → **path_sampler** | path_optimizer가 acados(ansible로만 설치되는 외부 MPC 솔버) 요구 → CPU 전용 프레네 샘플러로 대체. 장애물 회피 경로 최적화 역할 동일 계열. 필요 시 acados 설치 후 원복 가능 |
+| perception/sensing/localization/evaluator 미사용 85개 | COLCON_IGNORE | launch 패키지의 exec_depend가 CUDA 체인을 끌고 오는 것 차단. 원복: `find ~/autoware/src -name COLCON_IGNORE -delete` |
+
 주의: vehicle_info를 sample_vehicle에 **덮어썼음** (별도 차량 패키지 안 만들고). upstream 업데이트 시 유실 가능 — 기술부채로 기록.
 
 ## 5B. 필드 수준 호환 검증 (9/2 00시 — 소비 코드 직접 확인)
