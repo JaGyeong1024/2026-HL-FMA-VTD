@@ -21,6 +21,9 @@ source /opt/ros/jazzy/setup.bash
 source "$HOME/autoware/install/setup.bash"
 source "$ROOT/ros2_ws/install/setup.bash"
 
+# acados 런타임 (path_optimizer가 libacados.so 로드) — bashrc 미로드 환경 대비
+export LD_LIBRARY_PATH="$HOME/acados/lib:${LD_LIBRARY_PATH:-}"
+
 COMMON_ARGS=(
   map_path:="$ROOT/map"
   vehicle_model:=sample_vehicle
