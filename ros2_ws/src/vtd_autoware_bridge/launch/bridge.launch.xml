@@ -1,0 +1,11 @@
+<launch>
+  <arg name="vtd_host" default="192.168.50.11"/>
+  <arg name="map_osm" default="$(env HOME)/2026-HL-FMA-VTD/map/lanelet2_map.osm"/>
+  <arg name="steer_sign" default="1.0"/>
+
+  <node pkg="vtd_autoware_bridge" exec="bridge_node" name="vtd_autoware_bridge" output="screen">
+    <param name="vtd_host" value="$(var vtd_host)"/>
+    <param name="map_osm" value="$(var map_osm)"/>
+    <param name="steer_sign" value="$(var steer_sign)"/>
+  </node>
+</launch>

@@ -1,0 +1,12 @@
+.claude/
+.claude.json
+.claude.json.backup
+CLAUDE.local.md
+.mcp.json
+
+# ROS 2 build artifacts
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+__pycache__/
+*.pyc
