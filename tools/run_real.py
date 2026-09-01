@@ -62,6 +62,17 @@ if not ATTACH:
     scp_ctrl.send(bus, '<SimCtrl><Start /></SimCtrl>')
     bus.close()
 
+# 관전 카메라: ego 후방 10m·고도 10m에서 전방 아래 부감 (ViewPlayer가 ego 조준)
+CAM_XML = ('<Camera name="birdCam"><PosRelative player="Ego" dx="-10.0" dy="0.0" dz="10.0"/>'
+           '<ViewPlayer player="Ego"/><Set/></Camera>')
+try:
+    cam = scp_ctrl.connect(HOST)
+    scp_ctrl.send(cam, CAM_XML)
+    cam.close()
+    print("관전 카메라 설정: 후방 10m 부감")
+except OSError as e:
+    print(f"(카메라 설정 실패: {e})")
+
 # 데이터 수신 대기 (Start 재전송 없이 접속만 재시도)
 client = None
 st = None
