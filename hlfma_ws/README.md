@@ -2,8 +2,6 @@
 
 ```
 hlfma_ws/
-  env.sh                 환경 (ROS Jazzy + 이 워크스페이스 오버레이 + acados + ROS_DOMAIN_ID=43 + colcon 기본옵션)
-  colcon_defaults.yaml   colcon build 기본 인자 (symlink-install, Release, 4 워커)
   build_targets.txt      빌드 최상위 타깃 (launch 패키지 + 런타임 플러그인). 의존성 폐쇄는 colcon 이 계산
   colcon_ignore_list.txt 빌드하지 않는 패키지 목록 (src/autoware 기준 경로) — 재구성 시 아래 한 줄로 마커 복원
   hlfma.repos            업스트림 Autoware 1.9.0 저장소 목록 (재현: vcs import src/autoware < hlfma.repos)
@@ -13,12 +11,11 @@ hlfma_ws/
 
 ## 일상 사용
 ```bash
-source ~/2026-HL-FMA-VTD/hlfma_ws/env.sh    # .bashrc 에 들어 있으므로 새 터미널이면 생략
 cd ~/2026-HL-FMA-VTD/hlfma_ws
 colcon build                                  # 전체 (증분)
 colcon build --packages-select vtd_autoware_bridge autoware_launch   # 우리 패키지만 (수 초)
 ```
-빌드 후 새 터미널을 열거나 `source install/setup.bash` (env.sh 가 이미 한다).
+빌드 후 `source install/setup.bash` (새 터미널은 .bashrc 가 한다). colcon 기본 인자(symlink-install, Release, 4워커)는 ~/.colcon/defaults.yaml, make 병렬도는 .bashrc 의 MAKEFLAGS. acados 는 /opt/acados (path_optimizer CMake 기본 경로, launch 가 /opt/acados/lib 를 자동 추가).
 
 ## 처음부터 재구성
 ```bash
