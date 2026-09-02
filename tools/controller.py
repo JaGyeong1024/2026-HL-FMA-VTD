@@ -8,7 +8,7 @@ MAX_STEER = 0.48
 ACCEL_MIN, ACCEL_MAX = -6.0, 2.5     # 평가 감점 고려한 안락 한계
 WHEELBASE = 2.944
 A_LAT_MAX = 2.0                       # 곡률 감속 기준 [m/s²]
-V_DEFAULT = 50 / 3.6                  # 국토교통부 도심 기본 50km/h
+V_DEFAULT = 47 / 3.6                  # 국토교통부 도심 기본 50km/h, 평가는 VTD 실속도 기준이라 마진 3km/h 확보
 
 
 class PathTracker:
@@ -38,6 +38,8 @@ class PathTracker:
             num = d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]
             den = (d1[:, 0] ** 2 + d1[:, 1] ** 2) ** 1.5
             k = num / np.maximum(den, 1e-6)
+        k = np.nan_to_num(k, nan=0.0, posinf=0.5, neginf=-0.5)
+        k = np.clip(k, -0.5, 0.5)
         return k
 
     def localize(self, x, y, window=400):

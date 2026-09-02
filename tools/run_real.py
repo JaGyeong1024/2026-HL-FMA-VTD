@@ -1,8 +1,12 @@
 """실기 VTD 주행 러너 — 자체 스택(Pure Pursuit)을 실기 VTD에 연결.
 
+대회장용. SCP(48179) 미사용 — 이미 돌고 있는(운영측이 채점 세션을 띄운) VTD에
+9910/TCP로 바로 붙어서 주행만 한다. 시나리오 재시작·관전 카메라 등 SCP를 쓰는
+기능은 이 파일에 없다 (연구실 전용 도구는 lab_restart_scenario.py 참조).
+
 usage: python3 run_real.py [host] [route.csv] [xodr] [max_sec]
 
-절차: SCP로 시뮬 재시작(stop→load 유지→init→start) → 경로 생성 → 20Hz 제어 루프.
+절차: 경로 생성 → 9910 접속(attach) → 20Hz 제어 루프.
 종료: 종점 도달 / 시간 초과 / Ctrl+C. 종료 시 정지 명령 송신, 통계·플롯(out/real_run.png) 출력.
 리스폰 감지: 프레임 간 위치 점프 > 3m.
 """
@@ -18,7 +22,6 @@ from xodr_map import OpenDriveMap
 from lane_graph import LaneGraph, build_route
 from hlvtd_io import VTDClient
 from controller import PathTracker, Controller
-import scp_ctrl
 
 ROUTE_CONFIG = Path.home() / "hlfma/route/route_config.yaml"
 
@@ -51,42 +54,9 @@ path, node_seq = build_route(graph, wps)
 plen = float(np.sum(np.hypot(*np.diff(path, axis=0).T)))
 print(f"경로: waypoint {len(wps)} → {len(path)}점, 총 {plen:.0f} m")
 
-SCENARIO = "HL_FMA_VTD_LivingLab_real.xml"
-ATTACH = "attach" in sys.argv  # 재시작 없이 이미 도는 시뮬에 바로 접속
+print("attach 모드 — SCP 미사용, 이미 도는 시뮬에 9910으로 바로 접속")
 
-if ATTACH:
-    print("attach 모드 — 시뮬 재시작 생략, 바로 접속")
-else:
-    print("시뮬 재시작 (SCP stop→load→init: InitDone 대기→start)...")
-bus = None
-if not ATTACH:
-    bus = scp_ctrl.connect(HOST)
-    scp_ctrl.send(bus, '<SimCtrl><Stop /></SimCtrl>'); time.sleep(2.0)
-    scp_ctrl.send(bus, f'<SimCtrl><LoadScenario filename="{SCENARIO}" /></SimCtrl>'); time.sleep(2.0)
-    scp_ctrl.send(bus, '<SimCtrl><Init mode="operation" /></SimCtrl>')
-    if not scp_ctrl.wait_for(bus, "InitDone", timeout=120.0):
-        bus.close()
-        raise SystemExit("Init 완료 신호(InitDone) 120초 내 미수신 — VTD 상태 확인 필요")
-    print("InitDone 수신 → IG ready 대기")
-    if not scp_ctrl.wait_for(bus, ['name="IG_', 'state="ready"'], timeout=90.0):
-        print("  (IG ready 브로드캐스트 미수신 — 그래도 Start 시도)")
-    time.sleep(3.0)
-    print("Start 전송")
-    scp_ctrl.send(bus, '<SimCtrl><Start /></SimCtrl>')
-    bus.close()
-
-# 관전 카메라: ego 후방 10m·고도 10m에서 전방 아래 부감 (ViewPlayer가 ego 조준)
-CAM_XML = ('<Camera name="birdCam"><PosRelative player="Ego" dx="-10.0" dy="0.0" dz="10.0"/>'
-           '<ViewPlayer player="Ego"/><Set/></Camera>')
-try:
-    cam = scp_ctrl.connect(HOST)
-    scp_ctrl.send(cam, CAM_XML)
-    cam.close()
-    print("관전 카메라 설정: 후방 10m 부감")
-except OSError as e:
-    print(f"(카메라 설정 실패: {e})")
-
-# 데이터 수신 대기 (Start 재전송 없이 접속만 재시도)
+# 데이터 수신 대기
 client = None
 st = None
 deadline = time.time() + 30.0
@@ -102,7 +72,7 @@ while time.time() < deadline:
             client = None
         time.sleep(2.0)
 if st is None:
-    raise SystemExit("Start 후 30초 내 VTD 데이터 수신 실패")
+    raise SystemExit("30초 내 VTD 데이터 수신 실패")
 
 tracker = PathTracker(path)
 ctrl = Controller(tracker)

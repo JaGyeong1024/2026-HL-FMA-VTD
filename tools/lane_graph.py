@@ -200,4 +200,11 @@ def build_route(graph: LaneGraph, waypoints, blend=25.0):
     i1 = half + int(np.argmin(d1[half:]))
     if i0 < i1:
         route = route[i0:i1 + 1]
+
+    # 접합부 등에서 생기는 완전/거의 동일 점 제거 (ds<1e-3 → np.gradient 0나눗셈 → 곡률 NaN/∞)
+    if len(route) > 1:
+        ds = np.hypot(*np.diff(route, axis=0).T)
+        keep = np.concatenate([[True], ds > 1e-3])
+        route = route[keep]
+
     return route, node_seq

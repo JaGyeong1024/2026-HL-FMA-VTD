@@ -1,0 +1,26 @@
+<launch>
+  <!-- VTD ↔ Autoware 어댑터. start_autoware.sh가 인자를 넘긴다. -->
+  <arg name="vtd_host" default="192.168.50.11"/>
+  <arg name="map_osm" default="$(env HOME)/2026-HL-FMA-VTD/map/lanelet2_map.osm"/>
+  <arg name="route_csv" default="" description="경로 CSV (seq,x,y). 비우면 route_node를 띄우지 않음"/>
+  <arg name="auto_engage" default="false" description="경로 SET 후 자율주행 전환까지 자동 요청"/>
+  <arg name="steer_sign" default="1.0"/>
+  <arg name="state4_go" default="true" description="VTD state 4(적+좌회전)를 '가라'로 해석"/>
+  <arg name="ego_z_mode" default="raw" description="raw: VTD z 그대로 (맵에 높이 반영됨) / zero: z=0 맵용"/>
+
+  <node pkg="vtd_autoware_bridge" exec="bridge_node" name="vtd_autoware_bridge" output="screen">
+    <param name="vtd_host" value="$(var vtd_host)"/>
+    <param name="map_osm" value="$(var map_osm)"/>
+    <param name="steer_sign" value="$(var steer_sign)"/>
+    <param name="state4_go" value="$(var state4_go)"/>
+    <param name="ego_z_mode" value="$(var ego_z_mode)"/>
+  </node>
+
+  <group unless="$(eval '\'$(var route_csv)\' == \'\'')">
+    <node pkg="vtd_autoware_bridge" exec="route_node" name="vtd_route_node" output="screen">
+      <param name="route_csv" value="$(var route_csv)"/>
+      <param name="map_osm" value="$(var map_osm)"/>
+      <param name="auto_engage" value="$(var auto_engage)"/>
+    </node>
+  </group>
+</launch>
