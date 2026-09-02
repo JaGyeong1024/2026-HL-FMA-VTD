@@ -37,7 +37,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Empty, UInt8MultiArray
 from geometry_msgs.msg import AccelWithCovarianceStamped, TransformStamped, Pose
 from nav_msgs.msg import Odometry, OccupancyGrid
-from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs.msg import Imu, PointCloud2, PointField
 from tf2_ros import TransformBroadcaster
 from unique_identifier_msgs.msg import UUID
 
@@ -129,6 +129,7 @@ class VtdAutowareBridge(Node):
         self.pub_accel = mk(AccelWithCovarianceStamped, '/localization/acceleration', qos)
         self.pub_init = mk(LocalizationInitializationState, '/localization/initialization_state', latched)
         self.pub_vel = mk(VelocityReport, '/vehicle/status/velocity_status', qos)
+        self.pub_imu = mk(Imu, '/sensing/imu/imu_data', qos)  # VTD는 IMU 미제공 → ego 운동에서 합성(AEB 등 표준입력)
         self.pub_steer = mk(SteeringReport, '/vehicle/status/steering_status', qos)
         self.pub_gear = mk(GearReport, '/vehicle/status/gear_status', qos)
         self.pub_mode = mk(ControlModeReport, '/vehicle/status/control_mode', qos)
@@ -292,6 +293,21 @@ class VtdAutowareBridge(Node):
         vel.longitudinal_velocity = self.vx_f
         vel.heading_rate = self.wz_f
         self.pub_vel.publish(vel)
+
+        # 합성 IMU: VTD가 IMU를 안 주므로 ego 운동 추정치(yaw rate wz_f, 종가속 ax_f)로 채운다.
+        # AEB 등 IMU 필수 컴포넌트의 표준입력. 값은 실차 IMU와 같은 body(base_link) 프레임.
+        imu = Imu()
+        imu.header.stamp = stamp
+        imu.header.frame_id = 'base_link'
+        imu.orientation.x, imu.orientation.y, imu.orientation.z, imu.orientation.w = qx, qy, qz, qw
+        imu.angular_velocity.z = self.wz_f
+        imu.linear_acceleration.x = self.ax_f
+        imu.linear_acceleration.y = self.vx_f * self.wz_f   # 원심(횡) 가속
+        for i in (0, 4, 8):
+            imu.orientation_covariance[i] = 0.01
+            imu.angular_velocity_covariance[i] = 0.01
+            imu.linear_acceleration_covariance[i] = 0.04
+        self.pub_imu.publish(imu)
 
         # 조향 보고: 실측값이 없어 명령값에 1차 지연을 씌운 근사 (개발계획_0902 §4 '임시 아님' 항목)
         with self.cmd_lock:
