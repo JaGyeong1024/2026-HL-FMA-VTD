@@ -25,7 +25,9 @@ set -o pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="${1:-192.168.50.11}"
-source "$ROOT/hlfma_ws/env.sh"   # ROS + hlfma_ws 오버레이 + acados + ROS_DOMAIN_ID
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-43}"
+source /opt/ros/jazzy/setup.bash
+source "$ROOT/hlfma_ws/install/setup.bash"
 
 RVIZ="${RVIZ:-true}"
 COMMON_ARGS=(

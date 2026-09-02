@@ -30,6 +30,14 @@ from autoware_adapi_v1_msgs.srv import SetRoutePoints, ClearRoute, ChangeOperati
 
 from .osm_map import OsmMap
 
+try:
+    import lanelet2
+    from lanelet2.projection import LocalCartesianProjector
+    from lanelet2.io import Origin
+    HAVE_LANELET2 = True
+except Exception:  # noqa
+    HAVE_LANELET2 = False
+
 
 def load_csv(path):
     pts = []
@@ -62,6 +70,20 @@ class RouteNode(Node):
         if not self.csv_path:
             raise RuntimeError('route_csv 파라미터가 비어 있음')
         self.map = OsmMap(g('map_osm'), self.get_logger())
+        # lanelet2 라우팅 그래프 (후보 조합 중 총길이 최소 선택용). 좌표계는 상대 비교용이라 원점은 임의
+        self.rg = None
+        if HAVE_LANELET2:
+            try:
+                lm = lanelet2.io.load(g('map_osm'), LocalCartesianProjector(Origin(37.2, 126.8)))
+                tr = lanelet2.traffic_rules.create(lanelet2.traffic_rules.Locations.Germany,
+                                                   lanelet2.traffic_rules.Participants.Vehicle)
+                self.rg = lanelet2.routing.RoutingGraph(lm, tr)
+                self.lm = lm
+                self.get_logger().info('lanelet2 라우팅 그래프 준비 (경로점 매칭 최적화 사용)')
+            except Exception as e:
+                self.get_logger().warning(f'lanelet2 로드 실패 → 탐욕 매칭 사용: {e}')
+        else:
+            self.get_logger().warning('lanelet2 python 없음 → 탐욕 매칭 사용')
         self.points = load_csv(self.csv_path)
         if len(self.points) < 2:
             raise RuntimeError(f'경로 점이 2개 미만: {self.csv_path}')
@@ -98,27 +120,58 @@ class RouteNode(Node):
         req = SetRoutePoints.Request()
         req.header.frame_id = 'map'
         req.option.allow_goal_modification = False
-        prev_lid = None
-        prev_pt = pts[0]
         poses = []
+        n = len(pts)
+        # 1) 점별 후보 (진입·진출 방향 어느 쪽과든 ±90° 안)
+        cand = []
         for i, (x, y) in enumerate(pts):
-            # heading 힌트 = CSV 인접점 방향 (첫 점은 다음 점 방향). 최근접만 쓰면 반대 차로(1.4~1.6m)가
-            # 정방향(4.4m)보다 가까운 경우가 있어 경로가 2배로 부풀 수 있음 (검토보고 D_맵v2 D-1)
+            hints = []
             if i > 0:
-                hint = math.atan2(y - prev_pt[1], x - prev_pt[0])
+                hints.append(math.atan2(y - pts[i - 1][1], x - pts[i - 1][0]))
+            if i < n - 1:
+                hints.append(math.atan2(pts[i + 1][1] - y, pts[i + 1][0] - x))
+            c = self.map.match_candidates(x, y, hints, self.lane_search, need_pred=(i > 0), need_succ=(i < n - 1))
+            if not c:
+                raise RuntimeError(f'점 {i} ({x:.1f},{y:.1f})에서 {self.lane_search}m 안에 진행방향 lanelet 없음')
+            cand.append(c)
+        # 2) 조합 선택: lanelet2 라우팅 총길이 + 벌점 최소 (DP). 라우팅 불가면 탐욕(벌점 최소)
+        choice = [c[0][0] for c in cand]
+        if self.rg is not None:
+            INF = float('inf')
+            cost = [{lid: pen for lid, pen, _ in cand[0]}]
+            back = [{}]
+            for i in range(1, n):
+                cost.append({}); back.append({})
+                for lid, pen, _ in cand[i]:
+                    best, barg = INF, None
+                    for plid, pc in cost[i - 1].items():
+                        if pc == INF:
+                            continue
+                        L = self._route_len(plid, lid)
+                        if L is None:
+                            continue
+                        if pc + L + pen < best:
+                            best, barg = pc + L + pen, plid
+                    cost[i][lid] = best
+                    back[i][lid] = barg
+            end = min(cost[-1], key=cost[-1].get) if cost[-1] else None
+            if end is not None and cost[-1][end] < INF:
+                choice = [end]
+                for i in range(n - 1, 0, -1):
+                    choice.append(back[i][choice[-1]])
+                choice.reverse()
+                self.get_logger().info(f'경로점 매칭: 라우팅 총길이+벌점 {cost[-1][end]:.0f}m (후보 조합 최적)')
             else:
-                nx, ny = pts[1]
-                hint = math.atan2(ny - y, nx - x)
-            lid = self.map.nearest_lanelet(x, y, hint, self.lane_search)
-            if lid is None:
-                lid = self.map.nearest_lanelet(x, y, None, self.lane_search)
-            if lid is None:
-                raise RuntimeError(f'점 {i} ({x:.1f},{y:.1f})에서 {self.lane_search}m 안에 lanelet 없음')
+                self.get_logger().error('어느 후보 조합으로도 lanelet2 경로가 이어지지 않음 → 탐욕 매칭으로 시도')
+        for i, (x, y) in enumerate(pts):
+            lid = choice[i]
+            info = next(inf for l, p, inf in cand[i] if l == lid)
             d, s, h = self.map.project(lid, x, y)
-            poses.append((x, y, h, lid, s, d))
-            dead = ' ⚠ 후속 lanelet 없음(막다른 차선)' if self.map.is_dead_end(lid) else ''
-            self.get_logger().info(f'  점 {i}: ({x:.1f},{y:.1f}) → lanelet {lid} 오프셋 {d:.2f}m heading {math.degrees(h):.0f}°{dead}')
-            prev_pt, prev_lid = (x, y), lid
+            # mission_planner는 waypoint를 자기 기준 최근접 lanelet에 붙이므로, 선택한 lanelet 중심선 위 점을 넘긴다
+            px, py, _ = self.map._interp(self.map.lanelets[lid], s)
+            poses.append((px, py, h, lid, s, d))
+            warn = (' ⚠ ' + ','.join(info['flags'])) if info['flags'] else ''
+            self.get_logger().info(f'  점 {i}: ({x:.1f},{y:.1f}) → lanelet {lid} 오프셋 {d:.2f}m 방향차 {info["dh_deg"]:.0f}° 폭 {info["w"]:.1f}m heading {math.degrees(h):.0f}° → 중심선 ({px:.1f},{py:.1f}){warn}')
         # goal: 마지막 점에서 차선을 따라 goal_extend 앞
         x, y, h, lid, s, _ = poses[-1]
         route_set = {p[3] for p in poses}
@@ -132,6 +185,16 @@ class RouteNode(Node):
             x, y, h, lid = poses[-1][:4]
             req.waypoints.append(self._pose(x, y, h, lid))
         return req
+
+    def _route_len(self, a, b):
+        """lanelet a → b 최단 경로 길이 [m] (lanelet2 routing). 경로 없으면 None."""
+        try:
+            r = self.rg.getRoute(self.lm.laneletLayer[a], self.lm.laneletLayer[b])
+        except Exception:
+            return None
+        if r is None:
+            return None
+        return sum(lanelet2.geometry.length2d(l) for l in r.shortestPath())
 
     def _pose(self, x, y, yaw, lid=None):
         p = Pose()

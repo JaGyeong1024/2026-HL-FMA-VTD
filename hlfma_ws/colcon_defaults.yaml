@@ -1,8 +1,0 @@
-# colcon 기본 인자 (env.sh 의 COLCON_DEFAULTS_FILE 로 적용). `colcon build` 만 쳐도 build.sh 와 동일.
-{
-  "build": {
-    "symlink-install": true,
-    "cmake-args": ["-DCMAKE_BUILD_TYPE=Release"],
-    "parallel-workers": 4
-  }
-}

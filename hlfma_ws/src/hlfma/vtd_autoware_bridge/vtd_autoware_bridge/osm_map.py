@@ -229,6 +229,52 @@ class OsmMap:
     def is_dead_end(self, lid):
         return not self.successors(lid)
 
+    def has_predecessor(self, lid):
+        ll = self.lanelets[lid]
+        l0, r0 = self.ways[ll.left][0], self.ways[ll.right][0]
+        for o in self.lanelets.values():
+            if o.id != lid and o.left is not None and self.ways[o.left][-1] == l0 and self.ways[o.right][-1] == r0:
+                return True
+        return False
+
+    def width_at(self, lid, x, y):
+        ll = self.lanelets[lid]
+        L = [self.nodes[n] for n in self.ways[ll.left]]
+        R = [self.nodes[n] for n in self.ways[ll.right]]
+        i = min(range(len(L)), key=lambda k: math.hypot(L[k][0] - x, L[k][1] - y))
+        j = min(range(len(R)), key=lambda k: math.hypot(R[k][0] - x, R[k][1] - y))
+        return math.hypot(L[i][0] - R[j][0], L[i][1] - R[j][1])
+
+    def match_candidates(self, x, y, headings, max_dist=8.0, need_pred=True, need_succ=True, min_width=2.0):
+        """경로 CSV 점의 lanelet 후보 목록 [(lanelet id, 벌점 m, 진단)]. 벌점은 라우팅 총길이에 더해 비교한다.
+        - headings: 허용 진행방향 힌트들(진입 방향·진출 방향). 어느 하나와 ±90° 안이면 후보
+        - 벌점: 거리 + 방향차(45°당 3m) + 선행 없음 6m(시작점 제외) + 후속 없음 6m(종료점 제외) + 폭<min_width 6m
+          → 폭 0에서 생기는 확폭 차선·막다른 차선보다 본선을 선호 (검토보고 D-1·E-2)"""
+        out = []
+        seen = set()
+        for lid in self.candidates(x, y):
+            if lid in seen:
+                continue
+            seen.add(lid)
+            d, s, h = self.project(lid, x, y)
+            if d > max_dist:
+                continue
+            dh = min(abs((h - hd + math.pi) % (2 * math.pi) - math.pi) for hd in headings)
+            if dh > math.pi / 2:
+                continue
+            w = self.width_at(lid, x, y)
+            flags = []
+            pen = d + 3.0 * dh / (math.pi / 4)
+            if need_pred and not self.has_predecessor(lid):
+                pen += 6.0; flags.append('선행없음')
+            if need_succ and not self.successors(lid):
+                pen += 6.0; flags.append('후속없음')
+            if w < min_width:
+                pen += 6.0; flags.append(f'폭{w:.1f}')
+            out.append((lid, pen, {'d': d, 'dh_deg': math.degrees(dh), 'w': w, 'flags': flags, 's': s, 'h': h}))
+        out.sort(key=lambda t: t[1])
+        return out[:5]
+
     def heading_at(self, lid, x, y):
         return self.project(lid, x, y)[2]
 
