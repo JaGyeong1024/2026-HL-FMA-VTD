@@ -14,12 +14,4 @@ OUT="$HOME/hlfma/logs/bags/${NAME}_$(date +%m%d_%H%M%S)"
 mkdir -p "$HOME/hlfma/logs/bags"
 echo "[record] → $OUT   (Ctrl+C 로 종료)"
 # 전 토픽. 점유격자(400KB×10Hz)·rviz 마커류가 크지만 10분에 수 GB 이내라 그대로 담는다.
-# 경량화: 데이터(pose·objects·control·trajectory·신호등·raw패킷 등)는 담고,
-# 무거운/불필요 토픽(점유격자·점군·디버그마커·rosout)만 제외 → DDS 부하·용량 대폭 감소.
-# 전부 담고 싶으면:  ALL=1 ./record.sh
-if [ "${ALL:-0}" = "1" ]; then
-  exec ros2 bag record -a -o "$OUT" --include-hidden-topics
-else
-  exec ros2 bag record -a -o "$OUT" --include-hidden-topics \
-    --exclude "(occupancy_grid_map|obstacle_segmentation/pointcloud|/debug/|/virtual_wall|_marker|processing_time_ms|/rosout|/parameter_events|/tf_static)"
-fi
+exec ros2 bag record -a -o "$OUT" --include-hidden-topics

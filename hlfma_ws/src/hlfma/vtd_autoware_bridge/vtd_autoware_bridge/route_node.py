@@ -15,6 +15,7 @@
   ros2 service call /api/operation_mode/change_to_autonomous autoware_adapi_v1_msgs/srv/ChangeOperationMode {}
 """
 import csv
+import heapq
 import math
 import time
 
@@ -185,13 +186,23 @@ class RouteNode(Node):
                 choice.reverse()
                 self.get_logger().info(f'경로점 매칭: 라우팅 총길이+벌점 {cost[-1][end]:.0f}m (후보 조합 최적)')
                 fl = self._expand_sequence(choice)
-                if fl and len(set(fl)) != len(fl):
-                    import collections as _c
-                    dups = [x for x, c in _c.Counter(fl).items() if c > 1]
-                    self.get_logger().warning(
-                        f'명시 세그먼트 경로에 순환 lanelet {dups} 발견 → set_route_points 로 폴백 '
-                        f'(mission_planner 가 loopless 경로를 계획하도록)')
-                    fl = None
+                if fl is None:
+                    # loopless 불가 → 중간 웨이포인트를 대안 후보로 재매칭해 단일경로 확보(폴백보다 우선)
+                    for i in range(1, n):
+                        picked = False
+                        for alt, _, _ in cand[i]:
+                            if alt == choice[i]:
+                                continue
+                            trial = list(choice); trial[i] = alt
+                            fl2 = self._expand_sequence(trial)
+                            if fl2 is not None:
+                                self.get_logger().info(
+                                    f'  웨이포인트 {i} 재매칭 {choice[i]}→{alt} 로 loopless 경로 확보')
+                                choice = trial; fl = fl2; picked = True; break
+                        if picked:
+                            break
+                    if fl is None:
+                        self.get_logger().warning('loopless 명시경로 실패 → set_route_points 폴백')
                 self.full_lanelets = fl
             else:
                 self.get_logger().error('어느 후보 조합으로도 lanelet2 경로가 이어지지 않음 → 탐욕 매칭으로 시도')
@@ -235,18 +246,50 @@ class RouteNode(Node):
             return None
         return [l.id for l in r.shortestPath()]
 
+    def _shortest_avoiding(self, a, b, blocked):
+        """a→b 최단(길이) 경로 id열. 이미 지난 lanelet(blocked) 재진입 금지(b 제외).
+        following + 차로변경(left/right)로 Dijkstra. 없으면 None. → loopless 보장."""
+        lay = self.lm.laneletLayer
+        if a == b:
+            return [a]
+        dist = {a: 0.0}; prev = {}; pq = [(0.0, a)]
+        while pq:
+            d, u = heapq.heappop(pq)
+            if u == b:
+                path = [b]
+                while path[-1] != a:
+                    path.append(prev[path[-1]])
+                path.reverse(); return path
+            if d > dist.get(u, 1e18):
+                continue
+            uo = lay[u]
+            nbrs = list(self.rg.following(uo))
+            for side in (self.rg.left(uo), self.rg.right(uo)):
+                if side is not None:
+                    nbrs.append(side)
+            for nb in nbrs:
+                v = nb.id
+                if v in blocked and v != b:
+                    continue
+                nd = d + float(lanelet2.geometry.length2d(lay[v]))
+                if nd < dist.get(v, 1e18):
+                    dist[v] = nd; prev[v] = u; heapq.heappush(pq, (nd, v))
+        return None
+
     def _expand_sequence(self, choice):
-        """선택 lanelet 열(웨이포인트별) → 사이를 최단경로로 채운 전체 lanelet id 열 (중복 제거).
-        순환 경로도 그대로 펼쳐지므로 set_route(명시 세그먼트)로 넘기면 mission_planner 붕괴 없음."""
+        """웨이포인트 열 → loopless 단일 최단경로 id열. 각 구간은 이미 지난 lanelet 재진입 없이 최단.
+        불가하면 None(→ 재매칭 또는 set_route_points 폴백). 순환을 구조적으로 배제한다."""
         seq = [choice[0]]
+        visited = {choice[0]}
         for a, b in zip(choice, choice[1:]):
-            sp = self._shortest_ids(a, b)
+            if b in visited:      # 다음 웨이포인트가 이미 지난 곳 → 그 웨이포인트 매칭이 부적절
+                return None
+            sp = self._shortest_avoiding(seq[-1], b, visited)
             if sp is None:
-                self.get_logger().warning(f'lanelet {a}→{b} 경로 없음 → set_route 불가, set_route_points 폴백')
                 return None
             for lid in sp[1:]:
-                if lid != seq[-1]:
-                    seq.append(lid)
+                if lid not in visited:
+                    seq.append(lid); visited.add(lid)
         return seq
 
     def build_seg_request(self):
