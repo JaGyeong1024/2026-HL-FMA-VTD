@@ -1,0 +1,21 @@
+--- hlfma_ws/src/autoware/core/autoware_core/planning/autoware_route_handler/src/route_handler.cpp.orig	2026-09-03 01:10:29.321113087 +0900
++++ hlfma_ws/src/autoware/core/autoware_core/planning/autoware_route_handler/src/route_handler.cpp	2026-09-03 01:10:29.321435187 +0900
+@@ -2823,7 +2823,18 @@
+   RCLCPP_INFO_STREAM(logger_, "getMainLanelets: lanelet_sequence = " << lanelet_sequence);
+ 
+   lanelet::ConstLanelets main_lanelets;
++  // getPreviousLaneletSequence() 는 lanelet_sequence.front() 만으로 다음 시퀀스를 결정한다.
++  // 맵의 좌/우 평행차선 위상이 순환을 이루면 front 레인렛이 반복되며 이 루프가 무한히
++  // 벡터에 append 한다(자동 생성 lanelet2 맵의 흔한 결함). front id 방문 집합으로 순환을 끊는다.
++  std::unordered_set<lanelet::Id> visited_front_ids;
+   while (!lanelet_sequence.empty()) {
++    if (!visited_front_ids.insert(lanelet_sequence.front().id()).second) {
++      RCLCPP_WARN_STREAM(
++        logger_, "getMainLanelets: lateral neighbor loop detected at lanelet "
++                   << lanelet_sequence.front().id()
++                   << " — stopping parallel-lane expansion (map topology defect).");
++      break;
++    }
+     main_lanelets.insert(main_lanelets.begin(), lanelet_sequence.begin(), lanelet_sequence.end());
+     lanelet_sequence = getPreviousLaneletSequence(lanelet_sequence);
+   }
