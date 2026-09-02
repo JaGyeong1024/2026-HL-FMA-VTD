@@ -16,3 +16,6 @@ hlfma_ws/src/autoware/
 hlfma_ws/build/
 hlfma_ws/install/
 hlfma_ws/log/
+
+# 런타임 로그
+autoware.log

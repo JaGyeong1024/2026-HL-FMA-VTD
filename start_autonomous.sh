@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# HL FMA — 브리지 + Autoware 기동 (단일 워크스페이스 hlfma_ws)
+# HL FMA — 준비: 브리지 + Autoware 기동 (rviz 없음 → 별도 터미널 ./rviz.sh, 출발은 ./start_hlfma.sh)
 #
 # usage:
-#   ./start_autoware.sh                       # 실기: VTD 192.168.50.11 (대회장·연구실 동일 IP)
-#   ./start_autoware.sh mock                  # 시뮬 PC 없이: 별도 터미널에서 python3 mock_vtd.py 를 먼저 띄울 것
-#   ./start_autoware.sh psim                  # Autoware 내장 planning_simulator (브리지 없음, 맵·플래닝만)
-#   ./start_autoware.sh <host>                # 다른 VTD 호스트
+#   ./start_autonomous.sh                     # 실기: VTD 192.168.50.11 (대회장·연구실 동일 IP)
+#   ./start_autonomous.sh mock                # 시뮬 PC 없이: 별도 터미널에서 python3 mock_vtd.py 를 먼저 띄울 것
+#   ./start_autonomous.sh psim                # Autoware 내장 planning_simulator (브리지 없음, 맵·플래닝만)
+#   ./start_autonomous.sh <host>              # 다른 VTD 호스트
+#
+#   순서:  터미널1 ./start_autonomous.sh  →  (터미널2 ./rviz.sh 로 경로 확인)  →  터미널3 ./start_hlfma.sh
 #
 # 환경변수 (선택):
 #   ROUTE_CSV=/path/to/route.csv   경로 자동 주입 (route_node). 기본: $HOME/hlfma/route/route_config.yaml 의 csv_path
 #   ROUTE_CSV=none                 경로 주입 안 함 (rviz 2D Goal Pose 수동)
 #   AUTO_ENGAGE=true               경로 SET 후 자율주행 전환 자동 (기본 false: 사람이 확인 후 engage)
-#   RVIZ=false                     rviz 끔 (본선 기동 시간 단축)
 #
 # 종료: Ctrl+C (브리지도 같이 종료)
 #
@@ -26,19 +27,20 @@ set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="${1:-192.168.50.11}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-43}"
+
 source /opt/ros/jazzy/setup.bash
 source "$ROOT/hlfma_ws/install/setup.bash"
+export LD_LIBRARY_PATH="$HOME/acados/lib:${LD_LIBRARY_PATH:-}"   # path_optimizer (acados MPC)
 
-RVIZ="${RVIZ:-true}"
 COMMON_ARGS=(
   map_path:="$ROOT/map"
   vehicle_model:=hlfma_vehicle
   sensor_model:=sample_sensor_kit
-  rviz:="$RVIZ"
+  rviz:=false
 )
 
 if [ "$MODE" = "psim" ]; then
-  exec ros2 launch autoware_launch planning_simulator.launch.xml "${COMMON_ARGS[@]}"
+  ros2 launch autoware_launch planning_simulator.launch.xml "${COMMON_ARGS[@]}" & AW_PID=$!; wait "$AW_PID"; exit 0
 fi
 
 # ── 실기 / mock ────────────────────────────────────────────────
@@ -55,9 +57,33 @@ if [ -n "$ROUTE_CSV" ] && [ ! -f "$ROUTE_CSV" ]; then
   echo "[route] CSV 없음: $ROUTE_CSV" >&2; exit 1
 fi
 
-cleanup() { pkill -f "vtd_autoware_bridge" 2>/dev/null; pkill -f "vtd_route_node" 2>/dev/null; }
-trap cleanup EXIT
-cleanup
+# 이미 떠 있는 Autoware/브리지가 있으면 중단 (VTD 9910 은 동시 접속 1개, ROS 그래프 중복 방지)
+if pgrep -f "autoware.launch.xml|planning_simulator.launch.xml" >/dev/null; then
+  echo "[start] Autoware 가 이미 실행 중입니다. 먼저 종료하세요:  pkill -f ros-args ; pkill -f vtd_autoware_bridge" >&2
+  exit 1
+fi
+# 종료 훅: Ctrl+C(SIGINT)/종료 시 브리지·route_node·Autoware 노드를 확실히 정리한다.
+# ros2 launch 가 자식에 SIGINT 를 보내지만 component_container 일부가 늦게 죽어 다음 실행을
+# 방해하므로(ROS 그래프 잔존), 여기서 프로세스 그룹째 정리한다.
+AW_PID=""
+cleanup() {
+  trap - EXIT INT TERM
+  echo "[start] 종료 정리..." >&2
+  [ -n "$AW_PID" ] && kill -INT "$AW_PID" 2>/dev/null
+  pkill -INT -f "vtd_autoware_bridge|vtd_route_node" 2>/dev/null
+  # component_container 등이 8초 안에 안 죽으면 강제
+  for i in $(seq 1 16); do pgrep -f "autoware.launch.xml|vtd_autoware_bridge" >/dev/null || break; sleep 0.5; done
+  pkill -KILL -f "vtd_autoware_bridge|vtd_route_node" 2>/dev/null
+  pkill -KILL -f "autoware.launch.xml" 2>/dev/null
+  pkill -KILL -f "rclcpp_components/component_container" 2>/dev/null
+  pkill -KILL -f "robot_state_publisher .*ros-args" 2>/dev/null
+  # 이 launch 가 띄운 잔존 노드(설치 경로로 식별) 정리
+  pkill -KILL -f "$ROOT/hlfma_ws/install/" 2>/dev/null
+  exit 0
+}
+trap cleanup EXIT INT TERM
+# 시작 전, 지난 실행의 잔존물이 있으면 정리
+pkill -KILL -f "vtd_autoware_bridge|vtd_route_node" 2>/dev/null
 
 mkdir -p "$HOME/hlfma/logs"
 BRIDGE_LOG="$HOME/hlfma/logs/bridge_$(date +%m%d_%H%M%S).log"
@@ -71,7 +97,7 @@ echo "[bridge] host=$VTD_HOST route_csv=${ROUTE_CSV:-없음} auto_engage=${AUTO_
 sleep 3
 grep -m3 "맵 로드\|VTD 연결\|경로 CSV" "$BRIDGE_LOG" 2>/dev/null || true
 
-exec ros2 launch autoware_launch autoware.launch.xml \
+ros2 launch autoware_launch autoware.launch.xml \
   "${COMMON_ARGS[@]}" \
   launch_perception:=false \
   launch_localization:=false \
@@ -82,4 +108,6 @@ exec ros2 launch autoware_launch autoware.launch.xml \
   system_run_mode:=planning_simulation \
   launch_system_monitor:=false \
   launch_dummy_diag_publisher:=true \
-  is_simulation:=true
+  is_simulation:=true &
+AW_PID=$!
+wait "$AW_PID"

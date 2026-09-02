@@ -1,5 +1,66 @@
 # 2026 HL FMA — VTD 자율주행
 
+# 운용 절차 (사전테스트 · 대회장 · 연구실)
+
+## A. 대회장 / 사전테스트 (제어기 PC 본체만 지참, 케이블 꽂으면 192.168.50.10 자동)
+
+```bash
+# 0) 받은 경로 CSV 넣기 (seq,x,y) — 한 줄 수정
+cp /media/.../route.csv ~/hlfma/route/            # USB 등
+sed -i 's|^csv_path:.*|csv_path: /home/a/hlfma/route/route.csv|' ~/hlfma/route/route_config.yaml
+python3 ~/2026-HL-FMA-VTD/tools/check_route.py ~/hlfma/route/route.csv   # 경로 점검 (선택)
+
+# 1) 기동 (브리지 + Autoware + rviz, 경로 자동 주입)  — 터미널 1
+cd ~/2026-HL-FMA-VTD && ./start_autonomous.sh
+#    rviz 는 터미널2: ./rviz.sh — ego 위치, 경로(초록), 다음 신호등 확인. 브리지 로그: tail -f ~/hlfma/logs/bridge_latest.log
+
+# 2) 기록 (선택, 터미널 2)
+./record.sh 사전테스트1
+
+# 3) 출발 (운영측 Start 후)  — 터미널 3
+./start_hlfma.sh
+
+# 종료: 터미널 1 에서 Ctrl+C (브리지도 같이 내려감)
+```
+- 자동 engage 를 원하면: `AUTO_ENGAGE=true ./start_autonomous.sh` (경로 SET 즉시 자율주행 전환)
+- 폴백(자체 스택): `python3 ~/2026-HL-FMA-VTD/tools/run_real.py 192.168.50.11 ~/hlfma/route/route.csv`
+
+## B. 연구실 (시뮬 PC 192.168.50.11)
+
+```bash
+# 시뮬 PC: 라이선스 + VTD (sudo 비번 필요)
+~/HLFMA/sim_start.sh --setup=00_HL_VTD --autoConfig
+#   VTD 가 CONFIG 단계에 머물면(9910 안 열림): 제어기에서  python3 tools/scp_ctrl.py 192.168.50.11 xml '<SimCtrl><Apply/></SimCtrl>'
+
+# 제어기: 시나리오 로드·Init·Start + 관전 카메라 (연구실 전용 — 대회장 금지)
+cd ~/2026-HL-FMA-VTD/tools && python3 lab_restart_scenario.py 192.168.50.11 HL_FMA_VTD_LivingLab_real.xml --cam high
+
+# 제어기: 기동 (route_config.yaml 의 CSV 사용)
+cd ~/2026-HL-FMA-VTD && ./start_autonomous.sh
+#   또는 특정 CSV:  ROUTE_CSV=~/2026-HL-FMA-VTD/tools/real_route_path1.csv ./start_autonomous.sh
+
+# mock 회귀 (시뮬 PC 없이, 약 6분): 9개 PASS 가 정상
+bash ~/2026-HL-FMA-VTD/tools/regress_mock.sh
+```
+
+## C. 확인 명령
+
+```bash
+tail -f ~/hlfma/logs/bridge_latest.log                       # 연결·경로·신호등·워치독
+ros2 topic echo /api/routing/state --once --qos-durability transient_local --qos-reliability reliable   # state 2 = SET
+ros2 topic echo /api/operation_mode/state --once --qos-durability transient_local --qos-reliability reliable  # mode 2 = AUTONOMOUS
+ros2 topic hz /planning/trajectory                            # 10Hz
+bash ~/2026-HL-FMA-VTD/tools/check_topic_contract.sh          # 발행자 없는 구독 토픽 0 이어야 정상
+```
+
+## D. 빌드 (hlfma_ws — 새 터미널이면 환경은 .bashrc 가 잡음)
+```bash
+cd ~/2026-HL-FMA-VTD/hlfma_ws && colcon build                          # 전체 (증분)
+colcon build --packages-select vtd_autoware_bridge autoware_launch      # 우리 것만 (수 초)
+```
+
+---
+
 VTD(Virtual Test Drive) 시뮬레이션 환경에서 동작하는 자율주행 스택.
 시뮬레이터로부터 센서 데이터를 수신해 **인지 → 판단 → 제어** 전 과정을 수행하고 제어 신호를 송출한다.
 
