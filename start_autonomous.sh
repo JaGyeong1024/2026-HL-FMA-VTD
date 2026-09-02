@@ -30,7 +30,7 @@ export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-43}"
 
 source /opt/ros/jazzy/setup.bash
 source "$ROOT/hlfma_ws/install/setup.bash"
-export LD_LIBRARY_PATH="$HOME/acados/lib:${LD_LIBRARY_PATH:-}"   # path_optimizer (acados MPC)
+# acados(MPC) 는 /etc/ld.so.conf.d/acados.conf + ldconfig 로 시스템 등록됨 (env 불필요)
 
 COMMON_ARGS=(
   map_path:="$ROOT/map"

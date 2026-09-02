@@ -112,6 +112,9 @@ class RouteNode(Node):
 
     def on_odom(self, msg):
         self.ego = msg.pose.pose.position
+        o = msg.pose.pose.orientation
+        self.ego_yaw = math.atan2(2.0 * (o.w * o.z + o.x * o.y),
+                                  1.0 - 2.0 * (o.y * o.y + o.z * o.z))
 
     def on_respawn(self, _):
         self.get_logger().warning('리스폰 이벤트 → 경로 재주입')
@@ -137,11 +140,28 @@ class RouteNode(Node):
             if not c:
                 raise RuntimeError(f'점 {i} ({x:.1f},{y:.1f})에서 {self.lane_search}m 안에 진행방향 lanelet 없음')
             cand.append(c)
+        # 시작 앵커: 시작점은 자유변수가 아니라 ego 가 실제로 있는 lanelet 이어야 한다.
+        # DP 가 전체 길이를 줄이려 시작을 옆 차선으로 갈아타면 route 가 ego 를 안 지나
+        # behavior_path_planner 가 "Ego is out of route" 로 판정해 궤적을 안 낸다.
+        start_lid = None
+        if self.ego is not None:
+            eh = getattr(self, 'ego_yaw', None)
+            h0 = [eh] if eh is not None else [
+                (math.atan2(pts[1][1] - pts[0][1], pts[1][0] - pts[0][0]) if n > 1 else 0.0)]
+            sc = self.map.match_candidates(self.ego.x, self.ego.y, h0, self.lane_search,
+                                           need_pred=False, need_succ=True)
+            if sc:
+                start_lid = min(sc, key=lambda t: t[2]['d'])[0]  # ego 를 품은(오프셋 최소) lanelet
+                if all(l != start_lid for l, _, _ in cand[0]):
+                    cand[0] = [x for x in sc if x[0] == start_lid] + cand[0]
+                self.get_logger().info(f'시작 앵커: ego lanelet {start_lid} (ego pose 기준, 시작 고정)')
         # 2) 조합 선택: lanelet2 라우팅 총길이 + 벌점 최소 (DP). 라우팅 불가면 탐욕(벌점 최소)
         choice = [c[0][0] for c in cand]
+        if start_lid is not None:
+            choice[0] = start_lid
         if self.rg is not None:
             INF = float('inf')
-            cost = [{lid: pen for lid, pen, _ in cand[0]}]
+            cost = [{start_lid: 0.0}] if start_lid is not None else [{lid: pen for lid, pen, _ in cand[0]}]
             back = [{}]
             for i in range(1, n):
                 cost.append({}); back.append({})
@@ -164,7 +184,15 @@ class RouteNode(Node):
                     choice.append(back[i][choice[-1]])
                 choice.reverse()
                 self.get_logger().info(f'경로점 매칭: 라우팅 총길이+벌점 {cost[-1][end]:.0f}m (후보 조합 최적)')
-                self.full_lanelets = self._expand_sequence(choice)
+                fl = self._expand_sequence(choice)
+                if fl and len(set(fl)) != len(fl):
+                    import collections as _c
+                    dups = [x for x, c in _c.Counter(fl).items() if c > 1]
+                    self.get_logger().warning(
+                        f'명시 세그먼트 경로에 순환 lanelet {dups} 발견 → set_route_points 로 폴백 '
+                        f'(mission_planner 가 loopless 경로를 계획하도록)')
+                    fl = None
+                self.full_lanelets = fl
             else:
                 self.get_logger().error('어느 후보 조합으로도 lanelet2 경로가 이어지지 않음 → 탐욕 매칭으로 시도')
         for i, (x, y) in enumerate(pts):
@@ -295,11 +323,14 @@ class RouteNode(Node):
             r = self.call(self.cli_clear, ClearRoute.Request())
             self.get_logger().info(f'  clear_route: success={r.status.success} code={r.status.code} {r.status.message}')
             time.sleep(1.0)
-        if getattr(self, 'full_lanelets', None) and self.cli_set_seg.service_is_ready():
+        # 경로를 먼저 계산(build_request 가 self.full_lanelets 를 설정) 후 방식 선택.
+        # 명시 세그먼트(set_route)를 우선한다 → route 가 ego 차선에서 시작하는 결정론적 경로.
+        self.full_lanelets = None
+        req = self.build_request()
+        if self.full_lanelets and self.cli_set_seg.service_is_ready():
             r = self.call(self.cli_set_seg, self.build_seg_request(), timeout=30.0)
-            self.get_logger().info(f'set_route(명시 세그먼트) 호출: lanelet {len(self.full_lanelets)}개')
+            self.get_logger().info(f'set_route(명시 세그먼트) 호출: lanelet {len(self.full_lanelets)}개, 시작 lanelet {self.full_lanelets[0]}')
         else:
-            req = self.build_request()
             self.get_logger().info(f'set_route_points 호출: waypoints {len(req.waypoints)}개')
             r = self.call(self.cli_set, req, timeout=30.0)
         st = r.status
