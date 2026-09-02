@@ -36,7 +36,7 @@ sleep 1
 
 echo "== Autoware + 브리지 기동 (rviz 없음, route=$ROUTE) =="
 cd "$ROOT"
-RVIZ=false ROUTE_CSV="$ROUTE" AUTO_ENGAGE=false ./start_autoware.sh mock > "$OUT/autoware.log" 2>&1 &
+RVIZ=false ROUTE_CSV="$ROUTE" AUTO_ENGAGE=false ./start_autonomous.sh mock > "$OUT/autoware.log" 2>&1 &
 AW_PID=$!
 echo "  노드 안정화 대기 90s"; sleep 90
 

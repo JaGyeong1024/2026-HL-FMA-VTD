@@ -8,7 +8,7 @@ export LD_LIBRARY_PATH="$HOME/acados/lib:${LD_LIBRARY_PATH:-}"
 pkill -9 -f "[-][-]ros-args" 2>/dev/null; pkill -f mock_vtd.py 2>/dev/null; pkill -f start_autoware 2>/dev/null; sleep 2
 python3 "$ROOT/mock_vtd.py" --tl 3 ${MOCK_ARGS:-} > "$OUT/mock.log" 2>&1 &
 sleep 1
-cd "$ROOT"; RVIZ=false AUTO_ENGAGE=false ROUTE_CSV="$ROOT/docs/대회정보/route_example.csv" ./start_autoware.sh mock > "$OUT/autoware.log" 2>&1 &
+cd "$ROOT"; RVIZ=false AUTO_ENGAGE=false ROUTE_CSV="$ROOT/docs/대회정보/route_example.csv" ./start_autonomous.sh mock > "$OUT/autoware.log" 2>&1 &
 AW=$!
 sleep 100
 E() { echo "### $1"; shift; timeout 12 "$@" 2>&1 | head -${N:-40}; }

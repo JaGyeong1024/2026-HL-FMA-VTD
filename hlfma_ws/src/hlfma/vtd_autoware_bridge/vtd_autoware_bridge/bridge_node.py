@@ -15,6 +15,7 @@ Autoware의 제어 출력을 9B 패킷으로 돌려보낸다. 토픽 이름은 a
   더미 인지     /perception/obstacle_segmentation/pointcloud (빈 점군), /perception/occupancy_grid_map/map (전부 free)
                 — motion/behavior_velocity_planner의 필수 구독(코드에 고정)을 채우기 위한 임시안 (개발계획_0902 §4-1)
   이벤트        /vtd/respawn (std_msgs/Empty) — 위치 점프 감지 시
+  원본 패킷     /vtd/raw_rx (1109B), /vtd/raw_tx (9B) — ros2 bag 기록용 (tools/record.sh)
 
 송신 CtrlPacket(9B @20Hz) ← /control/command/control_cmd, /control/command/turn_indicators_cmd
   워치독: 제어 명령이 watchdog_timeout 이상 끊기면 조향 유지 + failsafe_accel 로 감속
@@ -33,7 +34,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, UInt8MultiArray
 from geometry_msgs.msg import AccelWithCovarianceStamped, TransformStamped, Pose
 from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import PointCloud2, PointField
@@ -136,6 +137,9 @@ class VtdAutowareBridge(Node):
         self.pub_objects = mk(PredictedObjects, '/perception/object_recognition/objects', qos)
         self.pub_tl = mk(TrafficLightGroupArray, '/perception/traffic_light_recognition/traffic_signals', qos)
         self.pub_respawn = mk(Empty, '/vtd/respawn', qos)
+        # 원본 패킷 기록용 (ros2 bag 에 담기도록): 수신 DataPacket 1109B / 송신 CtrlPacket 9B
+        self.pub_raw_rx = mk(UInt8MultiArray, '/vtd/raw_rx', 10)
+        self.pub_raw_tx = mk(UInt8MultiArray, '/vtd/raw_tx', 10)
         self.pub_pc = self.pub_ogm = None
         if bool(g('publish_dummy_perception')):
             self.pub_pc = mk(PointCloud2, '/perception/obstacle_segmentation/pointcloud', qos)
@@ -220,6 +224,7 @@ class VtdAutowareBridge(Node):
             pkt = buf[(n - 1) * DATA_SIZE: n * DATA_SIZE]   # 밀리면 최신만
             buf = buf[n * DATA_SIZE:]
             try:
+                self.pub_raw_rx.publish(UInt8MultiArray(data=list(pkt)))
                 self.publish_state(unpack_data(pkt))
                 self.rx_count += 1
             except Exception as e:
@@ -561,8 +566,10 @@ class VtdAutowareBridge(Node):
                 self.get_logger().error(f'제어 명령 두절 {now - last:.2f}s → 페일세이프 감속 {self.failsafe_accel} m/s²')
             else:
                 self.get_logger().info('제어 명령 재개')
+        pkt = pack_ctrl(self.steer_sign * steer, accel, turn)
+        self.pub_raw_tx.publish(UInt8MultiArray(data=list(pkt)))
         try:
-            sock.sendall(pack_ctrl(self.steer_sign * steer, accel, turn))
+            sock.sendall(pkt)
         except Exception as e:
             self.get_logger().warning(f'제어 송신 실패({e!r}) — rx_loop이 재연결', throttle_duration_sec=2.0)
 

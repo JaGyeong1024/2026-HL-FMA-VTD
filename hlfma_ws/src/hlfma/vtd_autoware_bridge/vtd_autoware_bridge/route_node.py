@@ -26,7 +26,8 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Pose
 from std_msgs.msg import Empty
 from autoware_adapi_v1_msgs.msg import RouteState
-from autoware_adapi_v1_msgs.srv import SetRoutePoints, ClearRoute, ChangeOperationMode
+from autoware_adapi_v1_msgs.srv import SetRoute, SetRoutePoints, ClearRoute, ChangeOperationMode
+from autoware_adapi_v1_msgs.msg import RouteSegment, RoutePrimitive
 
 from .osm_map import OsmMap
 
@@ -99,9 +100,11 @@ class RouteNode(Node):
             self.create_subscription(Empty, '/vtd/respawn', self.on_respawn, 1)
         self.cli_clear = self.create_client(ClearRoute, '/api/routing/clear_route')
         self.cli_set = self.create_client(SetRoutePoints, '/api/routing/set_route_points')
+        self.cli_set_seg = self.create_client(SetRoute, '/api/routing/set_route')
         self.cli_engage = self.create_client(ChangeOperationMode, '/api/operation_mode/change_to_autonomous')
         self.done = False
         self.attempts = 0
+        self.full_lanelets = None
 
 
     def on_route_state(self, msg):
@@ -161,6 +164,7 @@ class RouteNode(Node):
                     choice.append(back[i][choice[-1]])
                 choice.reverse()
                 self.get_logger().info(f'경로점 매칭: 라우팅 총길이+벌점 {cost[-1][end]:.0f}m (후보 조합 최적)')
+                self.full_lanelets = self._expand_sequence(choice)
             else:
                 self.get_logger().error('어느 후보 조합으로도 lanelet2 경로가 이어지지 않음 → 탐욕 매칭으로 시도')
         for i, (x, y) in enumerate(pts):
@@ -188,13 +192,55 @@ class RouteNode(Node):
 
     def _route_len(self, a, b):
         """lanelet a → b 최단 경로 길이 [m] (lanelet2 routing). 경로 없으면 None."""
+        sp = self._shortest_ids(a, b)
+        if sp is None:
+            return None
+        return sum(lanelet2.geometry.length2d(self.lm.laneletLayer[i]) for i in sp)
+
+    def _shortest_ids(self, a, b):
+        """a→b 최단 경로 lanelet id 열 (a 포함, b 포함). 없으면 None."""
         try:
             r = self.rg.getRoute(self.lm.laneletLayer[a], self.lm.laneletLayer[b])
         except Exception:
             return None
         if r is None:
             return None
-        return sum(lanelet2.geometry.length2d(l) for l in r.shortestPath())
+        return [l.id for l in r.shortestPath()]
+
+    def _expand_sequence(self, choice):
+        """선택 lanelet 열(웨이포인트별) → 사이를 최단경로로 채운 전체 lanelet id 열 (중복 제거).
+        순환 경로도 그대로 펼쳐지므로 set_route(명시 세그먼트)로 넘기면 mission_planner 붕괴 없음."""
+        seq = [choice[0]]
+        for a, b in zip(choice, choice[1:]):
+            sp = self._shortest_ids(a, b)
+            if sp is None:
+                self.get_logger().warning(f'lanelet {a}→{b} 경로 없음 → set_route 불가, set_route_points 폴백')
+                return None
+            for lid in sp[1:]:
+                if lid != seq[-1]:
+                    seq.append(lid)
+        return seq
+
+    def build_seg_request(self):
+        """전체 lanelet 순서를 SetRoute 세그먼트로. goal = 마지막 점을 그 lanelet 중심선 goal_extend 앞
+        (단 마지막 세그먼트 lanelet 안). 순환 경로도 붕괴하지 않음."""
+        req = SetRoute.Request()
+        req.header.frame_id = 'map'
+        req.option.allow_goal_modification = False
+        for lid in self.full_lanelets:
+            seg = RouteSegment()
+            seg.preferred = RoutePrimitive(id=int(lid), type='lane')
+            req.segments.append(seg)
+        # goal: 마지막 CSV 점을 마지막 lanelet 중심선에 투영해 goal_extend 앞 (그 lanelet 안으로 클램프)
+        gx, gy = self.points[-1]
+        last = self.full_lanelets[-1]
+        d, s0, h = self.map.project(last, gx, gy)
+        L = self.map.lanelets[last].length
+        s_goal = min(s0 + self.goal_extend, max(0.0, L - 1.0))
+        px, py, ph = self.map._interp(self.map.lanelets[last], s_goal)
+        req.goal = self._pose(px, py, ph, last)
+        self.get_logger().info(f'  goal(세그먼트): lanelet {last} s={s_goal:.1f}/{L:.1f} ({px:.1f},{py:.1f})')
+        return req
 
     def _pose(self, x, y, yaw, lid=None):
         p = Pose()
@@ -216,8 +262,8 @@ class RouteNode(Node):
 
     def run(self):
         self.wait(lambda: self.ego is not None, 'ego 위치(/localization/kinematic_state)')
-        self.wait(lambda: self.cli_set.service_is_ready() and self.cli_clear.service_is_ready(),
-                  '라우팅 서비스(/api/routing/set_route_points)')
+        self.wait(lambda: (self.cli_set.service_is_ready() or self.cli_set_seg.service_is_ready()) and self.cli_clear.service_is_ready(),
+                  '라우팅 서비스(/api/routing/set_route)')
         self.wait(lambda: self.route_state is not None, '라우팅 상태(/api/routing/state)')
         while rclpy.ok():
             if not self.done:
@@ -249,9 +295,13 @@ class RouteNode(Node):
             r = self.call(self.cli_clear, ClearRoute.Request())
             self.get_logger().info(f'  clear_route: success={r.status.success} code={r.status.code} {r.status.message}')
             time.sleep(1.0)
-        req = self.build_request()
-        self.get_logger().info(f'set_route_points 호출: waypoints {len(req.waypoints)}개')
-        r = self.call(self.cli_set, req, timeout=30.0)
+        if getattr(self, 'full_lanelets', None) and self.cli_set_seg.service_is_ready():
+            r = self.call(self.cli_set_seg, self.build_seg_request(), timeout=30.0)
+            self.get_logger().info(f'set_route(명시 세그먼트) 호출: lanelet {len(self.full_lanelets)}개')
+        else:
+            req = self.build_request()
+            self.get_logger().info(f'set_route_points 호출: waypoints {len(req.waypoints)}개')
+            r = self.call(self.cli_set, req, timeout=30.0)
         st = r.status
         if not st.success:
             self.get_logger().error(f'경로 거부: code={st.code} message="{st.message}"')
