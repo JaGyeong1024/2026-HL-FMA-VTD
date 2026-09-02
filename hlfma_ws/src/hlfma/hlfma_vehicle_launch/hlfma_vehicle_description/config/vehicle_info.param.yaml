@@ -1,0 +1,14 @@
+# 아이오닉 6 (HyundaiIoniq6_23_Dyn) — 대회정보.md §4
+# 기준점 = 후륜축 중심(지면). DistFront 3.808 = wheel_base 2.944 + front_overhang 0.864
+/**:
+  ros__parameters:
+    wheel_radius: 0.354 # The radius of the wheel, primarily used for dead reckoning.
+    wheel_width: 0.235 # The lateral width of a wheel tire, primarily used for dead reckoning.
+    wheel_base: 2.944 # between front wheel center and rear wheel center
+    wheel_tread: 1.63 # between left wheel center and right wheel center
+    front_overhang: 0.864 # between front wheel center and vehicle front
+    rear_overhang: 1.04 # between rear wheel center and vehicle rear
+    left_overhang: 0.128 # between left wheel center and vehicle left
+    right_overhang: 0.128 # between right wheel center and vehicle right
+    vehicle_height: 1.507
+    max_steer_angle: 0.48 # [rad]

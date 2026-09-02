@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    stop_line:
+      stop_margin: 1.0  # HL FMA: 범퍼가 정지선 1m 전 정지 (규정: 2m 이내 정상, 초과 중대)
+      required_stop_duration_sec: 1.0
+      vehicle_stopped_duration_threshold: 0.0
+      hold_stop_margin_distance: 2.0

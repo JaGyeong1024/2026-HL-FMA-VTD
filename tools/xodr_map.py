@@ -70,6 +70,22 @@ class LaneSection:
 
 
 @dataclass
+class Obj:
+    """<road><objects><object> — 노면 마킹(정지선·횡단보도·화살표) 등 정적 오브젝트."""
+    name: str        # 예: Rm_StopLine_300cm_JPN_01.flt
+    s: float
+    t: float
+    hdg: float = 0.0
+    length: float = 0.0
+    width: float = 0.0
+    z_offset: float = 0.0
+
+    @property
+    def base(self):
+        return self.name.rsplit(".", 1)[0]
+
+
+@dataclass
 class Signal:
     id: int
     road_id: int
@@ -81,6 +97,7 @@ class Signal:
     y: float = 0.0
     orientation: str = "+"   # '+' = +s 주행 차량 대상(우측 차선), '-' = -s
     z_offset: float = 0.0
+    validity: list = field(default_factory=list)  # [(fromLane, toLane)] — 적용 차선 id 범위
 
 
 @dataclass
@@ -96,6 +113,8 @@ class Road:
     lane_offset: list = field(default_factory=list)  # (s, a,b,c,d) 절대 s
     sections: list = field(default_factory=list)
     signals: list = field(default_factory=list)
+    objects: list = field(default_factory=list)   # Obj — 노면 마킹 등
+    elevation: list = field(default_factory=list)  # (s, a,b,c,d) 절대 s — <elevationProfile><elevation>
 
     def lane_offset_at(self, s):
         rec = None
@@ -104,6 +123,19 @@ class Road:
                 rec = r
         if rec is None:
             return 0.0
+        x = s - rec[0]
+        return rec[1] + rec[2] * x + rec[3] * x * x + rec[4] * x ** 3
+
+    def z_at(self, s):
+        """elevationProfile 3차 다항식으로 station s의 지형 고도. 레코드가 없으면 0.0."""
+        if not self.elevation:
+            return 0.0
+        rec = self.elevation[0]
+        for r in self.elevation:
+            if r[0] <= s + 1e-9:
+                rec = r
+            else:
+                break
         x = s - rec[0]
         return rec[1] + rec[2] * x + rec[3] * x * x + rec[4] * x ** 3
 
@@ -167,6 +199,8 @@ class OpenDriveMap:
     def __init__(self, path):
         self.roads: dict[int, Road] = {}
         self.junctions: dict[int, list] = {}  # junction_id -> [(incoming, connecting, contact)]
+        self.controllers: dict[int, list] = {}   # controller_id -> [signal_id]  (한 등주의 신호등 묶음)
+        self.signals: dict[int, Signal] = {}     # signal_id -> Signal (전역 인덱스)
         self._parse(path)
 
     def _parse(self, path):
@@ -179,6 +213,10 @@ class OpenDriveMap:
                 conns.append((int(c.get("incomingRoad")), int(c.get("connectingRoad")),
                               c.get("contactPoint"), lane_links))
             self.junctions[int(jel.get("id"))] = conns
+
+        for c_el in root.findall("controller"):
+            self.controllers[int(c_el.get("id"))] = [
+                int(x.get("signalId")) for x in c_el.findall("control")]
 
         for rel in root.findall("road"):
             road = Road(id=int(rel.get("id")), length=float(rel.get("length")),
@@ -195,6 +233,12 @@ class OpenDriveMap:
             road.ref_x = np.concatenate([s[1] for s in segs])
             road.ref_y = np.concatenate([s[2] for s in segs])
             road.ref_hdg = np.unwrap(np.concatenate([s[3] for s in segs]))
+
+            elev_el = rel.find("elevationProfile")
+            if elev_el is not None:
+                for e in elev_el.findall("elevation"):
+                    road.elevation.append(tuple(float(e.get(k)) for k in "sabcd"))
+                road.elevation.sort(key=lambda r: r[0])
 
             lanes_el = rel.find("lanes")
             for off in lanes_el.findall("laneOffset"):
@@ -266,11 +310,24 @@ class OpenDriveMap:
                                  dynamic=s_el.get("dynamic") == "yes",
                                  type=s_el.get("type") or "",
                                  orientation=s_el.get("orientation") or "+",
-                                 z_offset=float(s_el.get("zOffset") or 0.0))
+                                 z_offset=float(s_el.get("zOffset") or 0.0),
+                                 validity=[(int(v.get("fromLane")), int(v.get("toLane")))
+                                           for v in s_el.findall("validity")])
                     x, y, h = road.ref_at(sig.s)
                     sig.x = x - sig.t * np.sin(h)   # t>0 = 왼쪽
                     sig.y = y + sig.t * np.cos(h)
                     road.signals.append(sig)
+                    self.signals[sig.id] = sig
+
+            obj_el = rel.find("objects")
+            if obj_el is not None:
+                for o_el in obj_el.findall("object"):
+                    road.objects.append(Obj(
+                        name=o_el.get("name") or "", s=float(o_el.get("s")),
+                        t=float(o_el.get("t")), hdg=float(o_el.get("hdg") or 0.0),
+                        length=float(o_el.get("length") or 0.0),
+                        width=float(o_el.get("width") or 0.0),
+                        z_offset=float(o_el.get("zOffset") or 0.0)))
 
             self.roads[road.id] = road
 

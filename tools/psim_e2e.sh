@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # psim 헤드리스 E2E: 기동 → initialpose → goal → trajectory 발행 확인
 # 좌표: demo_example_822m.csv 1→2번점 (LivingLab, local=VTD world)
-OUT=/tmp/claude-1000/-home-a-autoware/ddb88ad1-97a2-474f-bb75-105c5c850c7d/scratchpad
+OUT="$HOME/hlfma/logs/psim"
+mkdir -p "$OUT"
 source /opt/ros/jazzy/setup.bash
-source "$HOME/autoware/install/setup.bash"
+source "$HOME/2026-HL-FMA-VTD/hlfma_ws/install/setup.bash"
 export LD_LIBRARY_PATH="$HOME/acados/lib:${LD_LIBRARY_PATH:-}"
 export ROS_DOMAIN_ID=43
 

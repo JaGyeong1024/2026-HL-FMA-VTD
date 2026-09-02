@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # psim 헤드리스 스모크: 기동 → 120초 후 노드/토픽 스냅샷 → 종료
-OUT=/tmp/claude-1000/-home-a-autoware/ddb88ad1-97a2-474f-bb75-105c5c850c7d/scratchpad
+OUT="$HOME/hlfma/logs/psim"
+mkdir -p "$OUT"
 source /opt/ros/jazzy/setup.bash
-source "$HOME/autoware/install/setup.bash"
+source "$HOME/2026-HL-FMA-VTD/hlfma_ws/install/setup.bash"
 export LD_LIBRARY_PATH="$HOME/acados/lib:${LD_LIBRARY_PATH:-}"
 export ROS_DOMAIN_ID=43
 
