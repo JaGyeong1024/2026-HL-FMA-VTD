@@ -63,12 +63,23 @@ class RouteNode(Node):
         dp('auto_engage', False)
         dp('reinject_on_respawn', False)  # 리스폰 이벤트 시 경로 재주입 (실측 후 결정)
         dp('use_waypoints', True)      # 중간 짝점을 waypoints로 (false면 goal만)
+        # False(기본)=set_route_points: mission_planner 가 차선변경을 이웃 묶인 multi-primitive 세그먼트로 만들어야
+        #   behavior_path 의 lane_change 모듈이 발동한다(단일 primitive set_route 는 모듈이 침묵 → 차선변경 불가).
+        # True=set_route(명시 세그먼트): 결정론적 start 차선이나 차선변경이 안 됨(setLaneletsFromRouteMsg 가 이웃 미확장).
+        dp('prefer_segments', False)
+        dp('lc_target_m', 45.0)        # 차선변경 여유 목표길이[m] — 이보다 짧은 lanelet 에서의 변경에 벌점
+        dp('lc_len_penalty_k', 3.0)    # 목표 대비 부족 길이 1m 당 벌점[m]
+        dp('lc_fixed_penalty', 5.0)    # 차선변경 1회당 고정 벌점[m] (불필요한 변경 억제)
         g = lambda k: self.get_parameter(k).value
         self.csv_path = g('route_csv')
         self.goal_extend = float(g('goal_extend_m'))
         self.lane_search = float(g('lane_search_m'))
         self.auto_engage = bool(g('auto_engage'))
         self.use_waypoints = bool(g('use_waypoints'))
+        self.prefer_segments = bool(g('prefer_segments'))
+        self.lc_target = float(g('lc_target_m'))
+        self.lc_k = float(g('lc_len_penalty_k'))
+        self.lc_fixed = float(g('lc_fixed_penalty'))
         if not self.csv_path:
             raise RuntimeError('route_csv 파라미터가 비어 있음')
         self.map = OsmMap(g('map_osm'), self.get_logger())
@@ -204,6 +215,8 @@ class RouteNode(Node):
                     if fl is None:
                         self.get_logger().warning('loopless 명시경로 실패 → set_route_points 폴백')
                 self.full_lanelets = fl
+                if fl:
+                    self._log_lane_changes(fl)
             else:
                 self.get_logger().error('어느 후보 조합으로도 lanelet2 경로가 이어지지 않음 → 탐욕 매칭으로 시도')
         for i, (x, y) in enumerate(pts):
@@ -247,8 +260,10 @@ class RouteNode(Node):
         return [l.id for l in r.shortestPath()]
 
     def _shortest_avoiding(self, a, b, blocked):
-        """a→b 최단(길이) 경로 id열. 이미 지난 lanelet(blocked) 재진입 금지(b 제외).
-        following + 차로변경(left/right)로 Dijkstra. 없으면 None. → loopless 보장."""
+        """a→b 최단(가중) 경로 id열. 이미 지난 lanelet(blocked) 재진입 금지(b 제외).
+        following(직진연결)=벌점0. 차로변경(left/right)은 출발 lanelet 이 짧을수록 벌점
+        (lc_target 미만 부족분 × lc_k + lc_fixed) → 짧은 분기 lanelet 대신 긴 본선 구간에서
+        변경하도록 유도(behavior_path lane_change 여유 확보). 없으면 None. → loopless 보장."""
         lay = self.lm.laneletLayer
         if a == b:
             return [a]
@@ -263,18 +278,32 @@ class RouteNode(Node):
             if d > dist.get(u, 1e18):
                 continue
             uo = lay[u]
-            nbrs = list(self.rg.following(uo))
+            u_len = float(lanelet2.geometry.length2d(uo))
+            edges = [(nb, 0.0) for nb in self.rg.following(uo)]
             for side in (self.rg.left(uo), self.rg.right(uo)):
                 if side is not None:
-                    nbrs.append(side)
-            for nb in nbrs:
+                    lc_pen = self.lc_fixed + self.lc_k * max(0.0, self.lc_target - u_len)
+                    edges.append((side, lc_pen))
+            for nb, extra in edges:
                 v = nb.id
                 if v in blocked and v != b:
                     continue
-                nd = d + float(lanelet2.geometry.length2d(lay[v]))
+                nd = d + float(lanelet2.geometry.length2d(lay[v])) + extra
                 if nd < dist.get(v, 1e18):
                     dist[v] = nd; prev[v] = u; heapq.heappush(pq, (nd, v))
         return None
+
+    def _log_lane_changes(self, seq):
+        """경로의 차선변경 지점과 그 지점 lanelet 길이를 로그 (여유 부족 경고)."""
+        for i in range(len(seq) - 1):
+            u, v = seq[i], seq[i + 1]
+            uo = self.lm.laneletLayer[u]
+            if v in [f.id for f in self.rg.following(uo)]:
+                continue
+            side = '좌' if (self.rg.left(uo) and self.rg.left(uo).id == v) else '우'
+            ul = float(lanelet2.geometry.length2d(uo))
+            warn = ' ⚠여유부족(<20m)' if ul < 20.0 else ''
+            self.get_logger().info(f'  차선변경: lanelet {u}(길이 {ul:.1f}m) →{side} {v}{warn}')
 
     def _expand_sequence(self, choice):
         """웨이포인트 열 → loopless 단일 최단경로 id열. 각 구간은 이미 지난 lanelet 재진입 없이 최단.
@@ -370,7 +399,7 @@ class RouteNode(Node):
         # 명시 세그먼트(set_route)를 우선한다 → route 가 ego 차선에서 시작하는 결정론적 경로.
         self.full_lanelets = None
         req = self.build_request()
-        if self.full_lanelets and self.cli_set_seg.service_is_ready():
+        if self.prefer_segments and self.full_lanelets and self.cli_set_seg.service_is_ready():
             r = self.call(self.cli_set_seg, self.build_seg_request(), timeout=30.0)
             self.get_logger().info(f'set_route(명시 세그먼트) 호출: lanelet {len(self.full_lanelets)}개, 시작 lanelet {self.full_lanelets[0]}')
         else:
