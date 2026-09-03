@@ -19,7 +19,8 @@ import numpy as np
 _HERE = Path(__file__).parent
 _LOCAL_XODR = _HERE / "HL_FMA_VTD_LivingLab.xodr"
 XODR = str(_LOCAL_XODR) if _LOCAL_XODR.exists() else "/home/a/HL_FMA/실습파일/HL_FMA_VTD_LivingLab.xodr"
-OSM = str(_HERE / "out/livinglab_lanelet2_native.osm")
+_MAP_OSM = _HERE.parent / "map/lanelet2_map.osm"   # 제어기 PC 실배치 맵 (Autoware가 로드하는 것)
+OSM = str(_MAP_OSM) if _MAP_OSM.exists() else str(_HERE / "out/livinglab_lanelet2_native.osm")
 
 # 익스포터 감사에서 나온 xodr 원본 불연속 지점 (대회정보.md §13)
 DEFECT_ZONES = [  # (x, y, 크기m, 설명)
