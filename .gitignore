@@ -19,3 +19,6 @@ hlfma_ws/log/
 
 # 런타임 로그
 autoware.log
+
+# 주행 기록 (record.sh 출력: bag·pcap·로그)
+test/

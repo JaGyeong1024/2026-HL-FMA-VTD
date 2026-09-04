@@ -86,8 +86,25 @@ trap cleanup EXIT INT TERM
 pkill -KILL -f "vtd_autoware_bridge|vtd_route_node" 2>/dev/null
 
 mkdir -p "$HOME/hlfma/logs"
-BRIDGE_LOG="$HOME/hlfma/logs/bridge_$(date +%m%d_%H%M%S).log"
+RUN_TS="$(date +%m%d_%H%M%S)"
+BRIDGE_LOG="$HOME/hlfma/logs/bridge_${RUN_TS}.log"
+AW_LOG="$HOME/hlfma/logs/autoware_${RUN_TS}.log"
+# 노드별 ROS 로그(launch.log, 각 노드 stderr)를 실행 단위 디렉터리에 모음 → record.sh 가 통째로 복사
+export ROS_LOG_DIR="$HOME/hlfma/logs/ros_${RUN_TS}"
+mkdir -p "$ROS_LOG_DIR"
 ln -sfn "$BRIDGE_LOG" "$HOME/hlfma/logs/bridge_latest.log"
+ln -sfn "$AW_LOG" "$HOME/hlfma/logs/autoware_latest.log"
+# 실행 정보 매니페스트: record.sh 가 읽어 로그 위치·VTD 호스트를 안다
+cat > "$HOME/hlfma/logs/run_latest.env" <<EOF
+RUN_TS=$RUN_TS
+VTD_HOST=$VTD_HOST
+MODE=$MODE
+ROUTE_CSV=$ROUTE_CSV
+BRIDGE_LOG=$BRIDGE_LOG
+AW_LOG=$AW_LOG
+ROS_LOG_DIR=$ROS_LOG_DIR
+GIT_REV=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null)
+EOF
 ros2 launch vtd_autoware_bridge bridge.launch.xml \
   vtd_host:="$VTD_HOST" \
   route_csv:="$ROUTE_CSV" \
@@ -108,6 +125,7 @@ ros2 launch autoware_launch autoware.launch.xml \
   system_run_mode:=planning_simulation \
   launch_system_monitor:=false \
   launch_dummy_diag_publisher:=true \
-  is_simulation:=true &
+  is_simulation:=true > >(tee -i "$AW_LOG") 2>&1 &
 AW_PID=$!
+echo "[autoware] log=$AW_LOG  ros_log_dir=$ROS_LOG_DIR"
 wait "$AW_PID"
