@@ -15,7 +15,7 @@ cd ~/2026-HL-FMA-VTD && ./start_autonomous.sh
 #    rviz 는 터미널2: ./rviz.sh — ego 위치, 경로(초록), 다음 신호등 확인. 브리지 로그: tail -f ~/hlfma/logs/bridge_latest.log
 
 # 2) 기록 (선택, 터미널 2)
-./record.sh 사전테스트1
+./record.sh 사전테스트1        # → test/<시각>_사전테스트1/ (VTD 이더넷 pcap + 네트워크 상태 + 로그)
 
 # 3) 출발 (운영측 Start 후)  — 터미널 3
 ./start_hlfma.sh
