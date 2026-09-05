@@ -10,11 +10,11 @@
       # "current_lane"           : use only current lane. this module doesn't use adjacent lane to avoid object.
       # "same_direction_lane"    : this module uses same direction lane to avoid object if need.
       # "opposite_direction_lane": this module uses both same direction and opposite direction lane.
-      use_lane_type: "opposite_direction_lane"
+      use_lane_type: "same_direction_lane"              # HL FMA: 같은 방향 차로까지 허용 (반대차로는 금지 = 중앙선 침범 -6 방어)
       # drivable area setting
-      use_intersection_areas: true
-      use_hatched_road_markings: true
-      use_freespace_areas: true
+      use_intersection_areas: false     # HL FMA: 교차로 여유공간 이탈 금지
+      use_hatched_road_markings: false  # HL FMA: 사선지대 침범 금지
+      use_freespace_areas: false        # HL FMA: 자유공간 이탈 금지
 
       # avoidance is performed for the object type with true
       target_object:
