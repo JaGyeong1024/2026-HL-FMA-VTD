@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 시작: 경로 SET 확인 후 자율주행(AUTONOMOUS) 전환. 운영측 Start 후 실행.
+# 출발: 경로 SET 확인 → 자율주행 가능 대기 → AUTONOMOUS 전환. start_autonomous.sh 가 자동 호출(ENGAGE 기본 true), 단독 실행도 가능.
+# 대기 상한: SET 120s(콜드부트 여유), 자율주행 가능 60s
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-43}"
 source /opt/ros/jazzy/setup.bash
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,18 +19,18 @@ n.create_subscription(OperationModeState,'/api/operation_mode/state',lambda m: s
 def spin(sec):
     t=time.time()
     while rclpy.ok() and time.time()-t<sec: rclpy.spin_once(n,timeout_sec=0.1)
-# 경로 SET 대기 (최대 60s). 2=SET, 3=ARRIVED
+# 경로 SET 대기 (최대 120s). 2=SET, 3=ARRIVED
 print('[start_hlfma] 경로 SET 대기...')
 t0=time.time()
-while rclpy.ok() and time.time()-t0<60:
+while rclpy.ok() and time.time()-t0<120:
     spin(0.5)
     if st['route']==2: break
     if int(time.time()-t0)%5==0: print(f"  routing state={st['route']} avail={st['avail']} (2=SET)")
 if st['route']!=2:
     print(f"[start_hlfma] 경로가 SET(2) 이 아님: state={st['route']}. bridge 로그 확인.", file=sys.stderr); sys.exit(1)
-# 자율주행 가능 대기 (최대 30s)
+# 자율주행 가능 대기 (최대 60s)
 t0=time.time()
-while rclpy.ok() and not st['avail'] and time.time()-t0<30: spin(0.5)
+while rclpy.ok() and not st['avail'] and time.time()-t0<60: spin(0.5)
 print(f"[start_hlfma] routing=SET, is_autonomous_mode_available={st['avail']} → engage")
 cli=n.create_client(ChangeOperationMode,'/api/operation_mode/change_to_autonomous')
 cli.wait_for_service(timeout_sec=10.0)
