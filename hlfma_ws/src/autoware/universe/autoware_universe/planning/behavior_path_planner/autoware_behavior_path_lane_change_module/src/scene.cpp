@@ -1272,8 +1272,10 @@ bool NormalLaneChange::get_path_using_path_shifter(
       return lc_diff > lane_change_parameters_->trajectory.th_lane_changing_length_diff;
     };
 
+  std::string rejection_reason = "No prepare samples";
   for (const auto & prep_metric : prepare_metrics) {
     const auto debug_print = [&](const std::string & s) {
+      rejection_reason = s;
       RCLCPP_DEBUG(
         logger_, "%s | prep_time: %.5f | lon_acc: %.5f | prep_len: %.5f", s.c_str(),
         prep_metric.duration, prep_metric.actual_lon_accel, prep_metric.length);
@@ -1310,6 +1312,14 @@ bool NormalLaneChange::get_path_using_path_shifter(
     debug_metrics.max_prepare_length = common_data_ptr_->transient_data.dist_to_terminal_start;
     const auto lane_changing_metrics = get_lane_changing_metrics(
       prepare_segment, prep_metric, shift_length, dist_to_next_regulatory_element, debug_metrics);
+    if (lane_changing_metrics.empty()) {
+      rejection_reason = "No shift sample fits: available_length=" +
+        std::to_string(debug_metrics.max_lane_changing_length) +
+        "m prepare_length=" + std::to_string(prep_metric.length) +
+        "m shift=" + std::to_string(shift_length) +
+        "m/s velocity=" + std::to_string(prep_metric.velocity);
+    }
+
 
     // set_prepare_velocity must only be called after computing lane change metrics, as lane change
     // metrics rely on the prepare segment's original velocity as max_path_velocity.
@@ -1325,6 +1335,7 @@ bool NormalLaneChange::get_path_using_path_shifter(
       debug_metrics.lc_metrics.emplace_back(lc_metric, -1);
 
       const auto debug_print_lat = [&](const std::string & s) {
+        rejection_reason = s;
         RCLCPP_DEBUG(
           logger_, "%s | lc_time: %.5f | lon_acc: %.5f | lat_acc: %.5f | lc_len: %.5f", s.c_str(),
           lc_metric.duration, lc_metric.actual_lon_accel, lc_metric.lat_accel, lc_metric.length);
@@ -1361,6 +1372,13 @@ bool NormalLaneChange::get_path_using_path_shifter(
     }
   }
 
+  if (getModuleType() == LaneChangeModuleType::EXTERNAL_REQUEST) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, clock_, 2000,
+      "DETOUR reject direction=%d prepare_samples=%zu candidate_paths=%zu regulatory_distance=%.2f: %s",
+      static_cast<int>(getDirection()), prepare_metrics.size(), candidate_paths.size(),
+      dist_to_next_regulatory_element, rejection_reason.c_str());
+  }
   RCLCPP_DEBUG(logger_, "No safety path found.");
   return false;
 }
