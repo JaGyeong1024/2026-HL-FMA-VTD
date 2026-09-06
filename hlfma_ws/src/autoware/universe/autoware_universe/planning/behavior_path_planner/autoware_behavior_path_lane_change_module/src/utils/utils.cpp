@@ -135,6 +135,13 @@ lanelet::ConstLanelets get_target_neighbor_lanes(
   const RouteHandler & route_handler, const lanelet::ConstLanelets & current_lanes,
   const LaneChangeModuleType & type)
 {
+  // External requests may detour away from the preferred lane before reaching it.
+  // Their target lane is still selected through the routing graph, and the normal
+  // lane-change path validity and collision checks remain in force.
+  if (type == LaneChangeModuleType::EXTERNAL_REQUEST) {
+    return current_lanes;
+  }
+
   lanelet::ConstLanelets neighbor_lanes;
 
   for (const auto & current_lane : current_lanes) {
