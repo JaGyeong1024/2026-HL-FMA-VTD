@@ -26,10 +26,10 @@ launch:
       default: "true"
   - arg:
       name: launch_external_request_lane_change_right_module
-      default: "false"
+      default: "true"   # blocked_route_detour가 RTC 승인하는 정지 차량군 우회 후보
   - arg:
       name: launch_external_request_lane_change_left_module
-      default: "false"
+      default: "true"   # blocked_route_detour가 RTC 승인하는 정지 차량군 우회 후보
   - arg:
       name: launch_goal_planner_module
       default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
