@@ -1,0 +1,25 @@
+autoware_system_design_format: 0.3.0
+
+name: DetectorA.module
+
+instances:
+  - name: node_detector
+    entity: DetectorA.node
+  - name: node_filter
+    entity: FilterA.node
+
+subscribers:
+  - name: pointcloud
+  - name: vector_map
+publishers:
+  - name: objects
+
+connections:
+  - - subscriber.pointcloud
+    - node_detector.subscriber.pointcloud
+  - - node_detector.publisher.objects
+    - node_filter.subscriber.objects
+  - - subscriber.vector_map
+    - node_filter.subscriber.vector_map
+  - - node_filter.publisher.*
+    - publisher.*

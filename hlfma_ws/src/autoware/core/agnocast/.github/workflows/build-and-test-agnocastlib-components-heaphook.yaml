@@ -1,0 +1,305 @@
+name: build-and-test-agnocastlib-components-heaphook
+
+on:
+  pull_request:
+    types:
+      - labeled
+  push:
+    branches:
+      - main  # For caching. https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.75.0"
+
+jobs:
+  build-and-test-matrix:
+    if: ${{ github.event_name == 'push' || github.event.label.name == 'run-build-test' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ros_distro: humble
+            os: ubuntu-22.04
+          - ros_distro: jazzy
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    env:
+      ROS_DISTRO: ${{ matrix.ros_distro }}
+
+    steps:
+    - name: Set PR fetch depth
+      if: github.event_name == 'pull_request'
+      run: echo "PR_FETCH_DEPTH=$(( ${{ github.event.pull_request.commits }} + 1 ))" >> "${GITHUB_ENV}"
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: ${{ github.event_name == 'pull_request' && env.PR_FETCH_DEPTH || 1 }}
+
+    - name: Check for .cpp or .hpp file changes
+      if: github.event_name == 'pull_request'
+      id: check_diff
+      run: |
+        set -euo pipefail
+        CHANGED_FILES="$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }})"
+
+        # Output changed files for reuse in later steps
+        echo "changed_files<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$CHANGED_FILES" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+        if echo "$CHANGED_FILES" | grep -qE '(agnocastlib|agnocast_components|agnocast_ioctl_wrapper|agnocast_cie_thread_configurator)/.*\.(cpp|hpp)$'; then
+          echo "cpp_changed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "cpp_changed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        if echo "$CHANGED_FILES" | grep -qE '^agnocast_heaphook/|test_agnocast_heaphook\.cpp$'; then
+          echo "heaphook_changed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "heaphook_changed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        if echo "$CHANGED_FILES" | grep -qE '^src/agnocast_cie_thread_configurator/rust/.*\.(rs|toml|lock)$'; then
+          echo "cie_rust_changed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "cie_rust_changed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Setup ROS 2 environment
+      if: github.event_name == 'push' || (steps.check_diff.outputs.cpp_changed == 'true' || steps.check_diff.outputs.heaphook_changed == 'true')
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends software-properties-common curl gcovr ccache libunwind-dev
+
+        sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends ros-${{ env.ROS_DISTRO }}-desktop python3-colcon-common-extensions ros-${{ env.ROS_DISTRO }}-ament-cmake python3-colcon-mixin ros-${{ env.ROS_DISTRO }}-ament-package
+
+    - name: Cache rosdep
+      if: github.event_name == 'push' || (steps.check_diff.outputs.cpp_changed == 'true' || steps.check_diff.outputs.heaphook_changed == 'true')
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.ros/rosdep
+        key: ${{ runner.os }}-rosdep-${{ env.ROS_DISTRO }}-${{ hashFiles('**/package.xml') }}-v1
+        restore-keys: |
+          ${{ runner.os }}-rosdep-${{ env.ROS_DISTRO }}-
+
+    - name: Install dependencies
+      if: github.event_name == 'push' || (steps.check_diff.outputs.cpp_changed == 'true' || steps.check_diff.outputs.heaphook_changed == 'true')
+      run: |
+        source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+        sudo apt-get install -y --no-install-recommends python3-rosdep
+        sudo rosdep init
+        rosdep update
+        rosdep install -y --from-paths src --ignore-src --rosdistro $ROS_DISTRO --skip-keys glog
+
+    - name: Cache ccache
+      if: github.event_name == 'push' || (steps.check_diff.outputs.cpp_changed == 'true' || steps.check_diff.outputs.heaphook_changed == 'true')
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: ${{ runner.os }}-${{ env.ROS_DISTRO }}-ccache-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-${{ env.ROS_DISTRO }}-ccache-${{ github.ref }}-
+          ${{ runner.os }}-${{ env.ROS_DISTRO }}-ccache-refs/heads/main-
+          ${{ runner.os }}-${{ env.ROS_DISTRO }}-ccache-
+
+    - name: Configure ccache
+      if: github.event_name == 'push' || (steps.check_diff.outputs.cpp_changed == 'true' || steps.check_diff.outputs.heaphook_changed == 'true')
+      run: |
+        mkdir -p ~/.ccache
+        ccache --version
+        ccache --max-size=1G
+        ccache --zero-stats
+
+    # Symlink ROS Python packages to system path so CMake's execute_process can find them.
+    # Why this is needed:
+    #   - Humble: CMake's execute_process() somehow inherits PYTHONPATH correctly
+    #   - Jazzy: CMake's execute_process() does NOT inherit PYTHONPATH, so Python
+    #     subprocess fails to import ament_package
+    #   - Root cause: CMake invokes /usr/bin/python3 directly without passing
+    #     environment variables. Why Humble works despite this is unclear.
+    - name: Setup ROS Python packages for system Python
+      if: github.event_name == 'push' || (steps.check_diff.outputs.cpp_changed == 'true' || steps.check_diff.outputs.heaphook_changed == 'true')
+      run: |
+        # Get the ROS Python site-packages path
+        ROS_PYTHON_PATH=$(python3 -c "import sys; print(f'/opt/ros/${{ env.ROS_DISTRO }}/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages')")
+        # Get the system site-packages path
+        SYSTEM_PYTHON_PATH=$(python3 -c "import site; print(site.getsitepackages()[0])")
+        echo "ROS Python path: $ROS_PYTHON_PATH"
+        echo "System Python path: $SYSTEM_PYTHON_PATH"
+        # Symlink ROS Python packages to system path so CMake's execute_process can find them
+        sudo ln -sf "$ROS_PYTHON_PATH/ament_package" "$SYSTEM_PYTHON_PATH/ament_package"
+        # Verify ament_package is now importable without PYTHONPATH
+        python3 -c "import ament_package; print('ament_package found at:', ament_package.__file__)"
+
+    - name: Build src
+      if: github.event_name == 'push' || (steps.check_diff.outputs.cpp_changed == 'true' || steps.check_diff.outputs.heaphook_changed == 'true')
+      env:
+        CCACHE_COMPRESS: "true"
+        CCACHE_COMPRESSLEVEL: "6"
+      run: |
+        source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+        # Use sequential build with merge-install to ensure proper dependency resolution
+        colcon build --parallel-workers 1 --merge-install --cmake-args \
+          -DCOVERAGE=ON \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        ccache --show-stats
+
+    # NOTE: clang-tidy is skipped on Jazzy (Ubuntu 24.04) because it uses clang-tidy 18,
+    # which is significantly stricter than clang-tidy 14 on Humble (Ubuntu 22.04).
+    # Specifically, clang-tidy 18 has more aggressive checks for:
+    #   - misc-include-cleaner: flags transitive includes as errors
+    #   - misc-const-correctness: flags RAII types like std::lock_guard
+    #   - modernize-pass-by-value: stricter about pass-by-value patterns
+    # These produce many false positives with ROS/rclcpp code.
+    # Until we can align the checks across versions, we only run clang-tidy on Humble.
+    - name: Run clang-tidy for agnocastlib and agnocast_components
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.cpp_changed == 'true' && env.ROS_DISTRO == 'humble'
+      run: |
+        set -euo pipefail
+        export FILES=($(echo "${{ steps.check_diff.outputs.changed_files }}" | grep -E '^src/(agnocastlib|agnocast_components)/.*\.(cpp|hpp)$' | grep -v '/test/' || true))
+        if [ ${#FILES[@]} -gt 0 ]; then
+          run-clang-tidy -j $(nproc) -p build/ "${FILES[@]}"
+        else
+          echo "No agnocastlib/agnocast_components C++ files changed, skipping clang-tidy"
+        fi
+
+    - name: Test for agnocastlib and agnocast_components
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.cpp_changed == 'true'
+      id: test
+      run: |
+        source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+        source install/setup.bash
+        colcon test --merge-install --event-handlers console_direct+ --return-code-on-test-failure --ctest-args -LE "requires_kernel_module|requires_heaphook"
+
+    - name: Generate coverage report
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.cpp_changed == 'true'
+      run: |
+        # Jazzy (Ubuntu 24.04, GCC 13) needs --gcov-ignore-parse-errors=negative_hits.warn
+        # as a workaround for GCC Bug 68080 where gcov produces negative branch counts
+        # in template-heavy C++ code (e.g., "branch 10 taken -1"). This doesn't occur on
+        # Humble (Ubuntu 22.04, GCC 11), and older gcovr doesn't support this flag syntax.
+        GCOVR_EXTRA_ARGS=""
+        if [ "${{ env.ROS_DISTRO }}" = "jazzy" ]; then
+          GCOVR_EXTRA_ARGS="--gcov-ignore-parse-errors=negative_hits.warn"
+        fi
+        gcovr -r . --exclude ".*/test/.*" --exclude ".*/_deps/.*" $GCOVR_EXTRA_ARGS --txt > coverage.txt
+        echo "${{ github.event.pull_request.number }}" > pr_number.txt
+
+    - name: Upload coverage report
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.cpp_changed == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report-${{ matrix.ros_distro }}
+        path: |
+          coverage.txt
+          pr_number.txt
+
+    # ===== agnocast_heaphook =====
+
+    - name: Cache Rust (cargo + target + rustup)
+      if: github.event_name == 'push' || (steps.check_diff.outputs.heaphook_changed == 'true' || steps.check_diff.outputs.cie_rust_changed == 'true')
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+          agnocast_heaphook/target
+        key: ${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('agnocast_heaphook/Cargo.toml', 'src/agnocast_cie_thread_configurator/rust/Cargo.toml') }}-v1
+        restore-keys: |
+          ${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+
+    - name: Setup Rust environment
+      if: github.event_name == 'push' || (steps.check_diff.outputs.heaphook_changed == 'true' || steps.check_diff.outputs.cie_rust_changed == 'true')
+      run: |
+        rustup set profile minimal
+        rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --no-self-update
+        rustup default ${{ env.RUST_TOOLCHAIN }}
+        rustup component add clippy rustfmt --toolchain ${{ env.RUST_TOOLCHAIN }}
+
+    - name: Generate vendor directory
+      if: github.event_name == 'push' || (steps.check_diff.outputs.heaphook_changed == 'true')
+      run: |
+        cd agnocast_heaphook
+        mkdir -p .cargo
+        cargo vendor > .cargo/config.toml
+
+    - name: Run rustfmt on agnocast_heaphook
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.heaphook_changed == 'true'
+      run: |
+        cd agnocast_heaphook
+        cargo fmt && git diff --exit-code
+
+    - name: Run clippy on agnocast_heaphook
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.heaphook_changed == 'true'
+      run: |
+        cd agnocast_heaphook
+        cargo clippy -- --deny warnings
+
+    - name: Build agnocast_heaphook
+      if: github.event_name == 'push' || (steps.check_diff.outputs.heaphook_changed == 'true')
+      run: |
+        cd agnocast_heaphook
+        cargo build --release
+        cd ..
+        cp agnocast_heaphook/target/release/libagnocast_heaphook.so install/lib/
+
+    - name: Unit test for agnocast_heaphook
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.heaphook_changed == 'true'
+      run: |
+        cd agnocast_heaphook
+        cargo test
+
+    - name: Test for agnocast_heaphook
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.heaphook_changed == 'true'
+      run: |
+        source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+        source install/setup.bash
+        colcon test --merge-install --event-handlers console_direct+ --return-code-on-test-failure --ctest-args -R "test_integration_agnocast_heaphook"
+
+    # ===== agnocast_cie_thread_configurator (Rust crate) =====
+
+    - name: Run rustfmt on agnocast_cie_thread_configurator (Rust)
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.cie_rust_changed == 'true'
+      run: |
+        cd src/agnocast_cie_thread_configurator/rust
+        cargo fmt && git diff --exit-code
+
+    - name: Run clippy on agnocast_cie_thread_configurator (Rust)
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.cie_rust_changed == 'true'
+      run: |
+        cd src/agnocast_cie_thread_configurator/rust
+        cargo clippy --all-targets -- --deny warnings
+
+    - name: Unit and integration tests for agnocast_cie_thread_configurator (Rust)
+      if: github.event_name == 'pull_request' && steps.check_diff.outputs.cie_rust_changed == 'true'
+      run: |
+        cd src/agnocast_cie_thread_configurator/rust
+        cargo test
+
+  # Summary job that provides a single status check for branch protection rules.
+  # Matrix jobs report status as "job-name (matrix-value)", but branch protection
+  # requires an exact job name. This job uses the original name so existing branch
+  # protection rules continue to work without manual changes.
+  build-and-test-agnocastlib-heaphook:
+    if: ${{ always() && (github.event_name == 'push' || github.event.label.name == 'run-build-test') }}
+    needs: build-and-test-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix job results
+        run: |
+          if [ "${{ needs.build-and-test-matrix.result }}" = "success" ] || [ "${{ needs.build-and-test-matrix.result }}" = "skipped" ]; then
+            echo "All matrix jobs passed or were skipped"
+            exit 0
+          else
+            echo "One or more matrix jobs failed: ${{ needs.build-and-test-matrix.result }}"
+            exit 1
+          fi

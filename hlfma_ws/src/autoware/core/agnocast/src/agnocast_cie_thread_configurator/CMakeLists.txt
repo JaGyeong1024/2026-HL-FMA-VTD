@@ -1,0 +1,92 @@
+cmake_minimum_required(VERSION 3.14)
+project(agnocast_cie_thread_configurator)
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+
+find_package(agnocast_cie_config_msgs REQUIRED)
+find_package(yaml-cpp REQUIRED)
+
+add_library(agnocast_thread_configurator SHARED
+  src/util.cpp
+  src/non_ros_thread_ipc.cpp
+  src/thread_config.cpp
+)
+ament_target_dependencies(agnocast_thread_configurator rclcpp agnocast_cie_config_msgs)
+target_link_libraries(agnocast_thread_configurator yaml-cpp)
+
+add_executable(
+  thread_configurator_node
+  src/main.cpp
+  src/thread_configurator_node.cpp
+  src/prerun_node.cpp
+)
+ament_target_dependencies(thread_configurator_node rclcpp agnocast_cie_config_msgs)
+target_link_libraries(thread_configurator_node yaml-cpp agnocast_thread_configurator)
+
+target_include_directories(thread_configurator_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+add_executable(
+  prerun_node
+  src/prerun_node_main.cpp
+  src/prerun_node.cpp
+)
+ament_target_dependencies(prerun_node rclcpp agnocast_cie_config_msgs)
+target_link_libraries(prerun_node yaml-cpp agnocast_thread_configurator)
+
+target_include_directories(prerun_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_include_directories(agnocast_thread_configurator PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+install(TARGETS agnocast_thread_configurator
+  EXPORT export_${PROJECT_NAME}
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
+  INCLUDES DESTINATION include
+)
+
+install(
+  DIRECTORY include/
+  DESTINATION include
+)
+
+install(TARGETS thread_configurator_node prerun_node DESTINATION lib/${PROJECT_NAME})
+
+install(
+  DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
+)
+
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_include_directories(include)
+ament_export_dependencies(agnocast_cie_config_msgs yaml-cpp rclcpp)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_${PROJECT_NAME}
+    test/test_non_ros_thread_ipc.cpp
+  )
+  target_link_libraries(test_${PROJECT_NAME} agnocast_thread_configurator)
+
+  ament_add_gtest(test_reapply_config
+    test/test_reapply_config.cpp
+  )
+  target_link_libraries(test_reapply_config agnocast_thread_configurator yaml-cpp)
+  target_include_directories(test_reapply_config PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+endif()
+
+ament_package()

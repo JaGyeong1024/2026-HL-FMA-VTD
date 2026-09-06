@@ -1,0 +1,90 @@
+# Pre-commit configuration for autoware_system_designer
+# Unified linting configuration that handles:
+# - YAML linting (for all *.yaml and *.yml files)
+# - Markdown linting (for all *.md files)
+# - Prettier formatting (for all supported files)
+# - System design format linting (custom linter for *.node.yaml, *.module.yaml, *.system.yaml, *.parameter_set.yaml)
+#
+# Dependencies are automatically installed by pre-commit in isolated environments
+
+repos:
+  # Common linting
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-xml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+
+  # YAML linting - automatically installs yamllint
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+        name: YAML Lint
+        args: [-c, .yamllint.yaml]
+        files: \.ya?ml$
+        exclude: \.(node|module|system|parameter_set)\.yaml$|\.param\.yaml$
+
+  # Markdown linting - automatically installs markdownlint-cli
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.47.0
+    hooks:
+      - id: markdownlint
+        name: Markdown Lint
+        args: [-c, .markdownlint.yaml, --fix]
+        files: \.md$
+
+  - repo: https://github.com/pycqa/isort
+    rev: 7.0.0
+    hooks:
+      - id: isort
+        args: [--profile=black, --line-length=120]
+
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 26.1.0
+    hooks:
+      - id: black
+        args: [--line-length=120]
+
+  # Prettier - opinionated code formatter
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        args: [--no-error-on-unmatched-pattern]
+        exclude: \.param\.yaml$
+
+  # System design format linting (local hook)
+  - repo: local
+    hooks:
+      - id: lint-system-design-format
+        name: lint system design format
+        description: Lint Autoware System Design Format YAML files
+        entry: python3 autoware_system_designer/autoware_system_designer/linter/run_lint.py
+        language: system
+        files: \.(node|module|system|parameter_set)\.yaml$
+        pass_filenames: true
+        require_serial: false
+
+      - id: check-version-sync
+        name: check version sync
+        description: Ensure version in pyproject.toml and package.xml are identical
+        entry: python3 tools/check-version-sync.py
+        language: system
+        files: (pyproject\.toml|package\.xml)$
+        pass_filenames: false
+
+      - id: build-example-systems
+        name: build example systems
+        description: Generate manifests and run deployment_process.py for vehicle_x.system
+        entry: bash tools/build-example-systems.sh
+        language: system
+        always_run: true
+        pass_filenames: false
+        require_serial: true

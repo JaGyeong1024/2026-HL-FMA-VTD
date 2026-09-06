@@ -1,0 +1,446 @@
+#include <agnocast/agnocast.hpp>
+#include <agnocast/agnocast_callback_isolated_executor.hpp>
+#include <agnocast/agnocast_single_threaded_executor.hpp>
+#include <agnocast/cie_client_utils.hpp>
+#include <rclcpp/rclcpp.hpp>
+
+namespace agnocast
+{
+
+CallbackIsolatedAgnocastExecutor::CallbackIsolatedAgnocastExecutor(
+  const rclcpp::ExecutorOptions & options, int next_exec_timeout_ms,
+  int monitor_polling_interval_ms)
+: rclcpp::Executor(options),
+  next_exec_timeout_ms_(next_exec_timeout_ms),
+  monitor_polling_interval_ms_(monitor_polling_interval_ms)
+{
+}
+
+void CallbackIsolatedAgnocastExecutor::spin()
+{
+  if (spinning.exchange(true)) {
+    RCLCPP_ERROR(logger, "spin() called while already spinning");
+    if (agnocast_fd != -1) {
+      close(agnocast_fd);
+    }
+    exit(EXIT_FAILURE);
+  }
+
+  RCPPUTILS_SCOPE_EXIT(this->spinning.store(false););
+
+  std::vector<std::pair<
+    rclcpp::CallbackGroup::SharedPtr, rclcpp::node_interfaces::NodeBaseInterface::SharedPtr>>
+    groups_and_nodes;
+
+  {
+    std::lock_guard<std::mutex> guard{mutex_};
+
+    for (const auto & weak_group_to_node : weak_groups_to_nodes_) {
+      auto group = weak_group_to_node.first.lock();
+      if (!group) {
+        continue;
+      }
+
+      auto node = weak_group_to_node.second.lock();
+      if (!node) {
+        continue;
+      }
+
+      groups_and_nodes.emplace_back(group, node);
+    }
+
+    for (const auto & weak_node : weak_nodes_) {
+      auto node = weak_node.lock();
+      if (!node) {
+        continue;
+      }
+
+      node->for_each_callback_group(
+        [&groups_and_nodes, node](const rclcpp::CallbackGroup::SharedPtr & group) {
+          if (group && group->automatically_add_to_executor_with_node()) {
+            groups_and_nodes.emplace_back(group, node);
+          }
+        });
+    }
+  }  // guard mutex_
+
+  std::mutex client_publisher_mutex;
+  auto client_publisher = agnocast::create_rclcpp_client_publisher();
+
+  // Note: spawn_child_executor must be called while holding child_resources_mutex_.
+  auto spawn_child_executor =
+    [this, &client_publisher, &client_publisher_mutex](
+      const rclcpp::CallbackGroup::SharedPtr & group,
+      const rclcpp::node_interfaces::NodeBaseInterface::SharedPtr & node) {
+      std::shared_ptr<rclcpp::Executor> executor;
+      auto agnocast_topics = agnocast::get_agnocast_topics_by_group(group);
+      auto callback_group_id = agnocast::create_callback_group_id(group, node, agnocast_topics);
+
+      if (agnocast_topics.empty()) {
+        executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+        std::static_pointer_cast<rclcpp::executors::SingleThreadedExecutor>(executor)
+          ->add_callback_group(group, node);
+      } else {
+        executor = std::make_shared<SingleThreadedAgnocastExecutor>(
+          rclcpp::ExecutorOptions{}, next_exec_timeout_ms_);
+        std::static_pointer_cast<SingleThreadedAgnocastExecutor>(executor)
+          ->dedicate_to_callback_group(group, node);
+      }
+
+      child_callback_groups_.push_back(group);
+      weak_child_executors_.push_back(executor);
+
+      child_threads_.emplace_back([executor, callback_group_id = std::move(callback_group_id),
+                                   &client_publisher, &client_publisher_mutex]() {
+        auto tid = static_cast<pid_t>(syscall(SYS_gettid));
+
+        {
+          std::lock_guard<std::mutex> lock{client_publisher_mutex};
+          agnocast::publish_callback_group_info(client_publisher, tid, callback_group_id);
+        }
+
+        executor->spin();
+      });
+    };
+
+  {
+    std::lock_guard<std::mutex> guard{child_resources_mutex_};
+    if (!spinning.load()) {
+      return;
+    }
+    for (auto & [group, node] : groups_and_nodes) {
+      spawn_child_executor(group, node);
+    }
+  }  // guard child_resources_mutex_
+
+  // Monitoring loop: periodically scan for new callback groups from nodes
+  while (spinning.load() && rclcpp::ok()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(monitor_polling_interval_ms_));
+
+    if (!spinning.load() || !rclcpp::ok()) {
+      break;
+    }
+
+    std::vector<std::pair<
+      rclcpp::CallbackGroup::SharedPtr, rclcpp::node_interfaces::NodeBaseInterface::SharedPtr>>
+      new_groups;
+
+    {
+      std::lock_guard<std::mutex> guard{mutex_};
+      for (const auto & weak_node : weak_nodes_) {
+        auto node = weak_node.lock();
+        if (!node) {
+          continue;
+        }
+
+        node->for_each_callback_group(
+          [&new_groups, &node](const rclcpp::CallbackGroup::SharedPtr & group) {
+            if (
+              group && group->automatically_add_to_executor_with_node() &&
+              !group->get_associated_with_executor_atomic().load()) {
+              new_groups.emplace_back(group, node);
+            }
+          });
+      }
+    }
+
+    if (new_groups.empty()) {
+      continue;
+    }
+
+    std::lock_guard<std::mutex> guard{child_resources_mutex_};
+    if (!spinning.load() || !rclcpp::ok()) {
+      break;
+    }
+    for (auto & [group, node] : new_groups) {
+      if (group->get_associated_with_executor_atomic().load()) {
+        continue;
+      }
+      spawn_child_executor(group, node);
+    }
+  }
+
+  // Join all child threads after monitoring loop exits.
+  // Cancel child executors and move threads out under the lock, then join OUTSIDE the lock.
+  // A child thread's callback may call cancel() which acquires child_resources_mutex_,
+  // so holding it during thread.join() would deadlock.
+  std::vector<std::thread> threads_to_join;
+  {
+    std::lock_guard<std::mutex> guard{child_resources_mutex_};
+    for (auto & weak_child_executor : weak_child_executors_) {
+      if (auto child_executor = weak_child_executor.lock()) {
+        child_executor->cancel();
+      }
+    }
+    threads_to_join = std::move(child_threads_);
+    child_threads_.clear();
+    weak_child_executors_.clear();
+    child_callback_groups_.clear();
+  }
+  for (auto & thread : threads_to_join) {
+    if (thread.joinable()) {
+      thread.join();
+    }
+  }
+}
+
+void CallbackIsolatedAgnocastExecutor::add_callback_group(
+  rclcpp::CallbackGroup::SharedPtr group_ptr,
+  rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr, bool notify)
+{
+  (void)notify;
+
+  std::weak_ptr<rclcpp::CallbackGroup> weak_group_ptr = group_ptr;
+  std::weak_ptr<rclcpp::node_interfaces::NodeBaseInterface> weak_node_ptr = node_ptr;
+
+  std::lock_guard<std::mutex> guard{mutex_};
+
+  // Confirm that group_ptr does not refer to any of the callback groups held by nodes in
+  // weak_nodes_.
+  for (const auto & weak_node : weak_nodes_) {
+    auto n = weak_node.lock();
+
+    if (!n) {
+      continue;
+    }
+
+    if (n->callback_group_in_node(group_ptr)) {
+      RCLCPP_ERROR(
+        logger, "Callback group already exists in node: %s", n->get_fully_qualified_name());
+      if (agnocast_fd != -1) {
+        close(agnocast_fd);
+      }
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  auto insert_info = weak_groups_to_nodes_.insert(std::make_pair(weak_group_ptr, weak_node_ptr));
+
+  if (!insert_info.second) {
+    RCLCPP_ERROR(logger, "Callback group already exists in the executor");
+    if (agnocast_fd != -1) {
+      close(agnocast_fd);
+    }
+    exit(EXIT_FAILURE);
+  }
+}
+
+std::vector<rclcpp::CallbackGroup::WeakPtr>
+CallbackIsolatedAgnocastExecutor::get_all_callback_groups()
+{
+  std::lock_guard<std::mutex> guard{mutex_};
+  std::vector<rclcpp::CallbackGroup::WeakPtr> groups;
+
+  auto manually_added_groups = get_manually_added_callback_groups_internal();
+  auto automatically_added_groups = get_automatically_added_callback_groups_from_nodes_internal();
+
+  groups.reserve(manually_added_groups.size() + automatically_added_groups.size());
+  groups.insert(groups.end(), manually_added_groups.begin(), manually_added_groups.end());
+  groups.insert(groups.end(), automatically_added_groups.begin(), automatically_added_groups.end());
+
+  return groups;
+}
+
+std::vector<rclcpp::CallbackGroup::WeakPtr>
+CallbackIsolatedAgnocastExecutor::get_manually_added_callback_groups()
+{
+  std::lock_guard<std::mutex> guard{mutex_};
+  return get_manually_added_callback_groups_internal();
+}
+
+std::vector<rclcpp::CallbackGroup::WeakPtr>
+CallbackIsolatedAgnocastExecutor::get_manually_added_callback_groups_internal() const
+{
+  std::vector<rclcpp::CallbackGroup::WeakPtr> groups;
+
+  for (const auto & weak_group_to_node : weak_groups_to_nodes_) {
+    auto group = weak_group_to_node.first.lock();
+    if (group) {
+      groups.push_back(group);
+    }
+  }
+
+  return groups;
+}
+
+std::vector<rclcpp::CallbackGroup::WeakPtr>
+CallbackIsolatedAgnocastExecutor::get_automatically_added_callback_groups_from_nodes()
+{
+  std::lock_guard<std::mutex> guard{mutex_};
+  return get_automatically_added_callback_groups_from_nodes_internal();
+}
+
+std::vector<rclcpp::CallbackGroup::WeakPtr>
+CallbackIsolatedAgnocastExecutor::get_automatically_added_callback_groups_from_nodes_internal()
+  const
+{
+  std::vector<rclcpp::CallbackGroup::WeakPtr> groups;
+
+  for (const auto & weak_node : weak_nodes_) {
+    auto node = weak_node.lock();
+
+    if (!node) {
+      continue;
+    }
+
+    node->for_each_callback_group([&groups](const rclcpp::CallbackGroup::SharedPtr & group) {
+      if (group && group->automatically_add_to_executor_with_node()) {
+        groups.push_back(group);
+      }
+    });
+  }
+
+  return groups;
+}
+
+void CallbackIsolatedAgnocastExecutor::remove_callback_group(
+  rclcpp::CallbackGroup::SharedPtr group_ptr, bool notify)
+{
+  (void)notify;
+
+  std::lock_guard<std::mutex> guard{mutex_};
+
+  auto it = weak_groups_to_nodes_.find(group_ptr);
+
+  if (it != weak_groups_to_nodes_.end()) {
+    weak_groups_to_nodes_.erase(it);
+  } else {
+    RCLCPP_ERROR(logger, "Callback group not found in the executor");
+    if (agnocast_fd != -1) {
+      close(agnocast_fd);
+    }
+    exit(EXIT_FAILURE);
+  }
+}
+
+void CallbackIsolatedAgnocastExecutor::add_node(
+  rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr, bool notify)
+{
+  (void)notify;
+
+  std::lock_guard<std::mutex> guard{mutex_};
+
+  // Confirm that any callback group in weak_groups_to_nodes_ does not refer to any of the callback
+  // groups held by node_ptr.
+  for (const auto & weak_group_to_node : weak_groups_to_nodes_) {
+    auto group = weak_group_to_node.first.lock();
+
+    if (!group) {
+      continue;
+    }
+
+    if (node_ptr->callback_group_in_node(group)) {
+      RCLCPP_ERROR(
+        logger, "One of the callback groups in node %s already exists in the executor.",
+        node_ptr->get_fully_qualified_name());
+      close(agnocast_fd);
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  std::weak_ptr<rclcpp::node_interfaces::NodeBaseInterface> weak_node_ptr = node_ptr;
+
+  auto insert_info = weak_nodes_.insert(weak_node_ptr);
+  if (!insert_info.second) {
+    RCLCPP_ERROR(
+      logger, "Node already exists in the executor: %s", node_ptr->get_fully_qualified_name());
+    if (agnocast_fd != -1) {
+      close(agnocast_fd);
+    }
+    exit(EXIT_FAILURE);
+  }
+}
+
+void CallbackIsolatedAgnocastExecutor::add_node(rclcpp::Node::SharedPtr node_ptr, bool notify)
+{
+  (void)notify;
+  add_node(node_ptr->get_node_base_interface(), notify);
+}
+
+void CallbackIsolatedAgnocastExecutor::remove_node(
+  rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr, bool notify)
+{
+  (void)notify;
+
+  std::weak_ptr<rclcpp::node_interfaces::NodeBaseInterface> weak_node_ptr = node_ptr;
+  std::lock_guard<std::mutex> guard{mutex_};
+
+  auto it = weak_nodes_.find(weak_node_ptr);
+
+  if (it != weak_nodes_.end()) {
+    weak_nodes_.erase(it);
+  } else {
+    RCLCPP_ERROR(
+      logger, "Node not found in the executor: %s", node_ptr->get_fully_qualified_name());
+    if (agnocast_fd != -1) {
+      close(agnocast_fd);
+    }
+    exit(EXIT_FAILURE);
+  }
+}
+
+void CallbackIsolatedAgnocastExecutor::remove_node(rclcpp::Node::SharedPtr node_ptr, bool notify)
+{
+  remove_node(node_ptr->get_node_base_interface(), notify);
+}
+
+void CallbackIsolatedAgnocastExecutor::cancel()
+{
+  spinning.store(false);
+  std::lock_guard<std::mutex> guard{child_resources_mutex_};
+  for (auto & weak_child_executor : weak_child_executors_) {
+    if (auto child_executor = weak_child_executor.lock()) {
+      child_executor->cancel();
+    }
+  }
+}
+
+void CallbackIsolatedAgnocastExecutor::stop_callback_group(
+  const rclcpp::CallbackGroup::SharedPtr & group_ptr)
+{
+  if (!group_ptr) {
+    return;
+  }
+
+  std::thread thread_to_join;
+  bool found = false;
+
+  {
+    std::lock_guard<std::mutex> guard{child_resources_mutex_};
+    if (
+      child_callback_groups_.size() != weak_child_executors_.size() ||
+      child_callback_groups_.size() != child_threads_.size()) {
+      RCLCPP_ERROR(
+        logger, "Child executor vectors are misaligned. Skipping stop_callback_group().");
+      return;
+    }
+    for (size_t i = 0; i < child_callback_groups_.size(); ++i) {
+      auto grp = child_callback_groups_[i].lock();
+      if (grp && grp == group_ptr) {
+        if (auto executor = weak_child_executors_[i].lock()) {
+          executor->cancel();
+        }
+        thread_to_join = std::move(child_threads_[i]);
+        auto idx = static_cast<std::ptrdiff_t>(i);
+        child_callback_groups_.erase(child_callback_groups_.begin() + idx);
+        weak_child_executors_.erase(weak_child_executors_.begin() + idx);
+        child_threads_.erase(child_threads_.begin() + idx);
+        found = true;
+        break;
+      }
+    }
+  }
+
+  if (found && thread_to_join.joinable()) {
+    if (thread_to_join.get_id() == std::this_thread::get_id()) {
+      RCLCPP_ERROR(
+        logger,
+        "stop_callback_group() called from its own child thread. Detaching to avoid self-join UB.");
+      thread_to_join.detach();
+    } else {
+      thread_to_join.join();
+    }
+  }
+}
+
+}  // namespace agnocast

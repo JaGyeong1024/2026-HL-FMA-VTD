@@ -1,0 +1,33 @@
+name: build-and-test-daily
+
+on:
+  schedule:
+    - cron: 0 0 * * *
+  workflow_dispatch:
+
+jobs:
+  bnt:
+    strategy:
+      fail-fast: false
+      matrix:
+        rosdistro: [humble, jazzy]
+        include:
+          - rosdistro: humble
+            container: ghcr.io/autowarefoundation/autoware:core-devel-humble
+          - rosdistro: jazzy
+            container: ghcr.io/autowarefoundation/autoware:core-devel-jazzy
+
+    uses: ./.github/workflows/build-and-test-reusable.yaml
+
+    with:
+      ros_distro: ${{ matrix.rosdistro }}
+      container: ${{ matrix.container }}
+      pull-ccache: true
+      push-ccache: false
+      cache-key-element: daily-build
+      codecov-flag: daily-${{ matrix.rosdistro }}
+      concurrency-group: build-and-test-daily-${{ matrix.rosdistro }}-${{ github.ref }}-${{ github.run_id }}
+      runner: "['ubuntu-latest']"
+
+    secrets:
+      codecov-token: ${{ secrets.CODECOV_TOKEN }}

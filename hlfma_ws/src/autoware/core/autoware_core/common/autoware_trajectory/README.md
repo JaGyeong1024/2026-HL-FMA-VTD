@@ -1,0 +1,584 @@
+# Autoware Trajectory
+
+This package provides classes to manage/manipulate Trajectory.
+
+## Overview
+
+### Interpolators
+
+The interpolator class interpolates given `bases` and `values`. Following interpolators are implemented.
+
+- Linear
+- AkimaSpline
+- CubicSpline
+- NearestNeighbor
+- Stairstep
+
+![interpolators](./images/overview/interpolators.drawio.svg)
+[View in Drawio]({{ drawio("/common/autoware_trajectory/images/overview/interpolators.drawio.svg") }})
+
+The builder internally executes interpolation and return the result in the form of `expected<T, E>`. If successful, it contains the interpolator object.
+
+```cpp title="./examples/example_readme.cpp:53:68"
+--8<--
+common/autoware_trajectory/examples/example_readme.cpp:53:68
+--8<--
+```
+
+Otherwise it contains the error object representing the failure reason. In the below snippet, cubic spline interpolation fails because the number of input points is 3, which is below the `minimum_required_points() = 4` of `CubicSpline`.
+
+```cpp title="./examples/example_readme.cpp:109:119"
+--8<--
+common/autoware_trajectory/examples/example_readme.cpp:109:119
+--8<--
+```
+
+In such cases the result `expected` object contains `InterpolationFailure` type with an error message like **"base size 3 is less than minimum required 4"**.
+
+For `Linear`, `CubicSpline`, `AkimaSpline`, and `SphericalLinear`, consecutive input points whose base difference is smaller than the interpolator epsilon are automatically removed as duplicates before interpolation. The default spatial builders use `k_epsilon_distance`, while temporal time-base handling uses `k_epsilon_time`. If the cleaned number of points falls below `minimum_required_points()`, the build fails and falls back to the next candidate interpolator when `build_with_fallback` is used.
+
+### Trajectory class
+
+The _Trajectory_ class provides mathematical continuous representation and object oriented interface for discrete array of following point types
+
+- [x] `geometry_msgs::Point`
+- [x] `geometry_msgs::Pose`
+- [x] `autoware_planning_msgs::PathPoint`
+- [x] `autoware_planning_msgs::PathPointWithLaneId`
+- [x] `autoware_planning_msgs::TrajectoryPoint`
+
+by interpolating the given _underlying_ points. Once built, arbitrary point on the curve is continuously parametrized by a single `s` coordinate.
+
+```cpp title="./examples/example_readme.cpp:549:561"
+--8<--
+common/autoware_trajectory/examples/example_readme.cpp:549:561
+--8<--
+```
+
+![overview_trajectory](./images/overview/trajectory.drawio.svg)
+[View in Drawio]({{ drawio("/common/autoware_trajectory/images/overview/trajectory.drawio.svg") }})
+
+## Nomenclature
+
+This section introduces strict definition of several words used in this package to clarify the description of API and help the developers understand and grasp the geometric meaning of algorithms.
+
+| Word                 | Meaning                                                                                                                                                                                                                                                                                                                                                                          | Illustration                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `curve`              | `curve` is an oriented bounded curve denoted as `(x(s), y(s), z(s))` with additional properties, parameterized by `s` (`s = 0` at the start).                                                                                                                                                                                                                                    | ![curve](./images/nomenclature/curve.drawio.svg)<br>[View in Drawio]({{ drawio("/common/autoware_trajectory/images/nomenclature/curve.drawio.svg") }})<br>There are 5 `underlying` points<br>$\mathrm{P0} = (0, 0, 0)$<br>$\mathrm{P1} = (1/ \sqrt{2}, 1/ \sqrt{2}, 0)$<br>$\mathrm{P2} = (1/ \sqrt{2}, 1+1/ \sqrt{2}, 0)$<br>$\mathrm{P3} = (2/ \sqrt{2}, 1+2/ \sqrt{2}, 0)$<br>$\mathrm{P4} = (2/ \sqrt{2} + 1/ \sqrt{6}, 1+2/ \sqrt{2} + 1 / \sqrt{3}, 1 / \sqrt{2})$<br>and the `arc length` between each interval is $1, 2, 1, 1$ respectively, so $\mathrm{start} = 0$ and $\mathrm{end} = 5$. |
+| `underlying`         | `underlying` points of a curve refers to the list of 3D points from which the curve was interpolated.                                                                                                                                                                                                                                                                            |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `arc length`[m]      | `arc length` denotes the approximate **3D** length of of a curve and is computed based on the discrete `underlying` points.                                                                                                                                                                                                                                                      |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `s`[m]               | `s` denotes the **3D** `arc length` coordinate starting from the base point (mostly the start point) of the curve and a point is identified by `trajectory(s)`.<br>Due to this definition, the actual _curve length_ and `arc length` have subtle difference as illustrated.                                                                                                     | ![approximation](./images/nomenclature/approximation.drawio.svg)<br>[View in Drawio]({{ drawio("/common/autoware_trajectory/images/nomenclature/approximation.drawio.svg") }})<br>The point for $s = 0.5$ is the purple dot, but the _curve length_ from $\mathrm{P0}$ to this point does not equal to $0.5$.<br>The exact _curve length_ is $\int \sqrt{(\frac{dx}{dt})^2 + (\frac{dy}{dt})^2 + (\frac{dz}{dt})^2} dt$, which cannot be obtained in an analytical closed form.                                                                                                                      |
+| `curvature`          | `curvature` is computed **using only X-Y 2D coordinate**. This is based on the normal and natural assumption that _roads are flat_. Mathematically, it asserts that [Gaussian curvature](https://en.wikipedia.org/wiki/Gaussian_curvature) of road is uniformly 0.<br>The sign of curvature is positive if the center of turning circle is on the left side, otherwise negative. | ![curvature](./images/nomenclature/curvature.drawio.svg)<br>[View in Drawio]({{ drawio("/common/autoware_trajectory/images/nomenclature/curvature.drawio.svg") }})                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `k_epsilon_distance` | Distance epsilon used for spatial duplicate handling and geometric `almost-same` checks.                                                                                                                                                                                                                                                                                         |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `k_epsilon_time`     | Time epsilon used for temporal duplicate handling in time-parameterized utilities.                                                                                                                                                                                                                                                                                               |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `almost-same`        | The pair of two points $P_{1}$ and $P_{2}$, the pair of two base values $s_{1}$ and $s_{2}$, or the pair of two quaternions are called `almost-same` if their distance, difference, or represented rotation difference are less than the corresponding epsilon for that quantity.                                                                                                |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+
+## API
+
+### Interpolators
+
+| Class            | Method/Function                                 | Description                                                                                    |
+| ---------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Common Functions | `minimum_required_points()`                     | return the number of points required for each concrete interpolator                            |
+|                  | `compute(double s) -> T`                        | compute the interpolated value at given base $s$. $s$ is clamped to the underlying base range. |
+|                  | `compute(vector<double> s) -> vector<T>`        | compute the interpolated values at for each base values in $s$.                                |
+|                  | `compute_first_derivative(double s) -> double`  | compute the first derivative of at given base $s$. $s$ is clamped.                             |
+|                  | `compute_second_derivative(double s) -> double` | compute the second derivative of at given base $s$. $s$ is clamped.                            |
+
+`AkimaSpline` requires at least **5** points to interpolate.
+
+```cpp title="./examples/example_readme.cpp:142:152"
+--8<--
+common/autoware_trajectory/examples/example_readme.cpp:142:152
+--8<--
+```
+
+![akima_spline](./images/akima_spline.drawio.svg)
+[View in Drawio]({{ drawio("/common/autoware_trajectory/images/akima_spline.drawio.svg") }})
+
+`CubicSpline` requires at least **4** points to interpolate.
+
+```cpp title="./examples/example_readme.cpp:192:201"
+--8<--
+common/autoware_trajectory/examples/example_readme.cpp:192:201
+--8<--
+```
+
+![cubic_spline](./images/cubic_spline.drawio.svg)
+[View in Drawio]({{ drawio("/common/autoware_trajectory/images/cubic_spline.drawio.svg") }})
+
+`Linear` requires at least **2** points to interpolate.
+
+```cpp title="./examples/example_readme.cpp:242:250"
+--8<--
+common/autoware_trajectory/examples/example_readme.cpp:242:250
+--8<--
+```
+
+![linear](./images/linear.drawio.svg)
+[View in Drawio]({{ drawio("/common/autoware_trajectory/images/linear.drawio.svg") }})
+
+`StairStep` requires at least **2** points to interpolate.
+
+```cpp title="./examples/example_readme.cpp:291:300"
+--8<--
+common/autoware_trajectory/examples/example_readme.cpp:291:300
+--8<--
+```
+
+![stairstep](./images/stairstep.drawio.svg)
+[View in Drawio]({{ drawio("/common/autoware_trajectory/images/stairstep.drawio.svg") }})
+
+#### <span style="font-size: 1.2em;">Example of custom Interpolator usage</span>
+
+You can also specify interpolation method to `Builder{}` before calling `.build(points)`
+
+```cpp
+using autoware::experimental::trajectory::interpolator::CubicSpline;
+
+std::optional<Trajectory<autoware_planning_msgs::msg::PathPoint>> trajectory =
+  Trajectory<autoware_planning_msgs::msg::PathPoint>::Builder{}
+  .set_xy_interpolator<CubicSpline>()  // Set interpolator for x-y plane
+  .build(points);
+```
+
+### Trajectory class
+
+Several `Trajectory<T>` are defined in the following inheritance hierarchy according to the sub object relationships.
+
+![hierarchy](./images/nomenclature/trajectory_hierarchy.drawio.svg)
+[View in Drawio]({{ drawio("/common/autoware_trajectory/images/nomenclature/trajectory_hierarchy.drawio.svg") }})
+
+Each derived class in the diagram inherits the methods of all of its descending subclasses. For example, all of the classes have the methods like `length()`, `curvature()` in common.
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/point.hpp>`</span>
+
+| Class                                                                  | Method                                    | Description                                                                                                                                        | Illustration                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <br><ul><li>`Trajectory<geometry_msgs::msg::Point>::Builder`</li></ul> | `Builder()`                               | set default interpolator setting as follows.<br><ul><li>`x, y`: Cubic</li><li>`z`: Linear</li></ul>                                                |                                                                                                                                                                                                                                          |
+|                                                                        | `set_xy_interpolator<InterpolatorType>()` | set custom interpolator for `x, y`.                                                                                                                |                                                                                                                                                                                                                                          |
+|                                                                        | `set_z_interpolator<InterpolatorType>()`  | set custom interpolator for `z`.                                                                                                                   |                                                                                                                                                                                                                                          |
+|                                                                        | `build(const vector<Point> &)`            | return `expected<Trajectory<Point>, InterpolationFailure>` object.                                                                                 |                                                                                                                                                                                                                                          |
+| <ul><li>`Trajectory<Point>`</li></ul>                                  | `base_arange(const double step)`          | return vector of `s` values starting from `start`, with the interval of `step`, including `end`. Thus the return value has at least the size of 2. |                                                                                                                                                                                                                                          |
+|                                                                        | `length()`                                | return the total `arc length` of the trajectory.                                                                                                   | ![curve](./images/nomenclature/curve.drawio.svg)<br>[View in Drawio]({{ drawio("/common/autoware_trajectory/images/nomenclature/curve.drawio.svg") }})<br>`length()` is $5.0$ because it computes the sum of the length of dotted lines. |
+|                                                                        | `azimuth(const double s)`                 | return the tangent angle at given `s` coordinate using `std::atan2`.                                                                               | ![azimuth_angle](./images/overview/trajectory.drawio.svg)<br>[View in Drawio]({{ drawio("/common/autoware_trajectory/images/overview/trajectory.drawio.svg") }})                                                                         |
+|                                                                        | `curvature(const double s)`               | return the signed `curvature` at given `s` coordinate following $\sqrt{\dot{x}^2 + \dot{y}^2}^3 / (\dot{x}\ddot{y} - \dot{y}\ddot{x})$.            | See above                                                                                                                                                                                                                                |
+|                                                                        | `elevation(const double s)`               | return the elevation angle at given `s` coordinate.                                                                                                |                                                                                                                                                                                                                                          |
+|                                                                        | `get_underlying_base()`                   | return the vector of `s` values of current `underlying` points.                                                                                    |                                                                                                                                                                                                                                          |
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/pose.hpp>`</span>
+
+| Class                                                                 | Method                                                  | Description                                                                                                                                                                                           | Illustration                                                                                                                                                                                                                                               |
+| --------------------------------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <br><ul><li>`Trajectory<geometry_msgs::msg::Pose>::Builder`</li></ul> | `Builder()`                                             | set default interpolator setting in addition to that of `Trajectory<Point>::Builder` as follows.<br><ul><li>`orientation`: SphericalLinear</li></ul>                                                  |                                                                                                                                                                                                                                                            |
+|                                                                       | `set_orientation_interpolator<InterpolatorType>()`      | set custom interpolator for `orientation`.                                                                                                                                                            |                                                                                                                                                                                                                                                            |
+|                                                                       | `build(const vector<Pose> &)`                           | return `expected<Trajectory<Pose>, InterpolationFailure>` object.                                                                                                                                     |                                                                                                                                                                                                                                                            |
+| <ul><li>`Trajectory<Pose>`</li></ul>                                  | derives all of the above methods of `Trajectory<Point>` |                                                                                                                                                                                                       |                                                                                                                                                                                                                                                            |
+|                                                                       | `align_orientation_with_trajectory_direction()`         | update the underlying points so that their orientations match the `azimuth()` of interpolated `curve`. This is useful when the user gave only the position of `Pose` and created `Trajectory` object. | ![align_orientation_with_trajectory_direction](./images/utils/align_orientation_with_trajectory_direction.drawio.svg)<br>[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/align_orientation_with_trajectory_direction.drawio.svg") }}) |
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/path_point.hpp>`</span>
+
+| Class                                                                               | Method                                                           | Description                                                                                                                                                                                                                                 | Illustration |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| <br><ul><li>`Trajectory<autoware_planning_msgs::msg::PathPoint>::Builder`</li></ul> | `Builder()`                                                      | set default interpolator setting in addition to that of `Trajectory<Pose>::Builder` as follows.<br><ul><li>`longitudinal_velocity_mps`: StairStep</li><li>`lateral_velocity_mps`: StairStep</li><li>`heading_rate_rps`: StairStep</li></ul> |              |
+|                                                                                     | `set_longitudinal_velocity_mps_interpolator<InterpolatorType>()` | set custom interpolator for `longitudinal_velocity_mps`.                                                                                                                                                                                    |              |
+|                                                                                     | `set_lateral_velocity_mps_interpolator<InterpolatorType>()`      | set custom interpolator for `lateral_velocity_mps`.                                                                                                                                                                                         |              |
+|                                                                                     | `set_heading_rate_rps_interpolator<InterpolatorType>()`          | set custom interpolator for `heading_rate_rps`.                                                                                                                                                                                             |              |
+|                                                                                     | `build(const vector<PathPoint> &)`                               | return `expected<Trajectory<PathPoint>, InterpolationFailure>` object.                                                                                                                                                                      |              |
+| <ul><li>`Trajectory<PathPoint>`</li></ul>                                           | derives all of the above methods of `Trajectory<Pose>`           |                                                                                                                                                                                                                                             |              |
+|                                                                                     | `longitudinal_velocity_mps()`                                    | return reference to `longitudinal_velocity_mps`                                                                                                                                                                                             |              |
+|                                                                                     | `lateral_velocity_mps()`                                         | return reference to `lateral_velocity_mps`                                                                                                                                                                                                  |              |
+|                                                                                     | `heading_rate_rps_mps()`                                         | return reference to `heading_rate_rps`                                                                                                                                                                                                      |              |
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/path_point_with_lane_id.hpp>`</span>
+
+| Class                                                                                                  | Method                                                      | Description                                                                                                                                     | Illustration |
+| ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| <br><ul><li>`Trajectory<autoware_internal_planning_msgs::msg::PathPointWithLaneId>::Builder`</li></ul> | `Builder()`                                                 | set default interpolator setting in addition to that of `Trajectory<PathPoint>::Builder` as follows.<br><ul><li>`lane_ids`: StairStep</li></ul> |              |
+|                                                                                                        | `set_lane_ids_interpolator<InterpolatorType>()`             | set custom interpolator for `lane_ids`.                                                                                                         |              |
+|                                                                                                        | `build(const vector<PathPointWithLaneId> &)`                | return `expected<Trajectory<PathPointWithLaneId>, InterpolationFailure>` object.                                                                |              |
+| <ul><li>`Trajectory<PathPointWithLaneId>`</li></ul>                                                    | derives all of the above methods of `Trajectory<PathPoint>` |                                                                                                                                                 |              |
+|                                                                                                        | `lane_ids()`                                                | return reference to `lane_ids`                                                                                                                  |              |
+
+#### <span style="font-size: 1.2em;">Trajectory Example Usage</span>
+
+##### <span style="font-size: 1.2em;">crop/shorten Trajectory</span>
+
+```cpp
+trajectory->crop(1.0, 2.0);
+```
+
+##### <span style="font-size: 1.2em;">Insert and set velocity profile</span>
+
+Set 3.0[m] ~ 5.0[m] part of velocity to 0.0
+
+```cpp
+trajectory->longitudinal_velocity_mps(3.0, 5.0) = 0.0;
+```
+
+##### <span style="font-size: 1.2em;">Restore points</span>
+
+```cpp
+std::vector<autoware_planning_msgs::msg::PathPoint> points = trajectory->restore();
+```
+
+### TemporalTrajectory class
+
+`TemporalTrajectory` wraps a spatial `Trajectory<TrajectoryPoint>` with an additional **time-to-distance mapping**, allowing the trajectory to be queried by either **time** (`t`) or **arc length** (`s`).
+
+| Class / Method                               | Description                                                                                                                                                                                                                          |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `TemporalTrajectory::build(points)`          | Build from a `TrajectoryPoint` array sorted by `time_from_start`.                                                                                                                                                                    |
+| `compute_from_time(t)`                       | Compute the interpolated point at absolute time `t` [s].                                                                                                                                                                             |
+| `compute_from_distance(s)`                   | Compute the interpolated point at arc length `s` [m].                                                                                                                                                                                |
+| `time_to_distance(t)`                        | Convert time to absolute distance [m].                                                                                                                                                                                               |
+| `distance_to_time(s, return_end_time=false)` | Convert absolute distance to time [s]. <br> **Note:** If the vehicle is stopped at distance `s`, the default returns the **first** stop time to avoid ambiguity. Setting `return_end_time=true` returns the time when the stop ends. |
+| `length()`                                   | Return the spatial trajectory length [m].                                                                                                                                                                                            |
+| `duration()`                                 | Return the covered duration [s].                                                                                                                                                                                                     |
+| `start_time()` / `end_time()`                | Return the absolute time bounds [s].                                                                                                                                                                                                 |
+| `restore()`                                  | Restore the underlying `TrajectoryPoint` array at the time bases.                                                                                                                                                                    |
+| `spatial_trajectory()`                       | Return a const reference to the internal spatial trajectory.                                                                                                                                                                         |
+| `TemporalTrajectory::Builder`                | Fluent builder that delegates spatial interpolation to `Trajectory<TrajectoryPoint>::Builder` and manages the time-to-distance interpolator.                                                                                         |
+
+```cpp title="./examples/example_temporal_trajectory.cpp:55:67"
+--8<--
+common/autoware_trajectory/examples/example_temporal_trajectory.cpp:55:67
+--8<--
+```
+
+### Utility functions
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/shift.hpp>`</span>
+
+| Header / Function                                                                                                                     | Description                                                                                                                                                                                                                                      | Detail                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<autoware/trajectory/utils/shift.hpp>`                                                                                               |                                                                                                                                                                                                                                                  | ![shift](./images/utils/shift/shift.drawio.svg)<br>[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/shift/shift.drawio.svg") }})<br>This is the case where $a_{\mathrm{max}}^{\mathrm{lat}} > a_{\mathrm{lim}}^{\mathrm{lat}}$ because newly 4 points are inserted in the shift interval.                                 |
+| <ul><li>`struct ShiftedTrajectory`</li></ul>                                                                                          | contains<br><ul><li>`trajectory: Trajectory`</li><li>`shift_start_s: double`</li><li>`shift_end_s: double`</li></ul>                                                                                                                             | Returns the shifted trajectory as well the `s` values indicating where the shift starts and completes on the new shifted trajectory.<br>![shift_interval](./images/utils/shift/shift_interval.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/shift/shift_interval.drawio.svg") }})                           |
+| <ul><li>`struct ShiftInterval`</li></ul>                                                                                              | contains<br><ul><li>`start: double`</li><li>`end: double`</li><li>`lateral_offset: double`</li></ul>                                                                                                                                             | <ul><li>`start < end` is required.</li><li>If `lateral_offset` is positive, the path is shifted on the right side, otherwise on the left side.</li></ul><br>![shift_left_right](./images/utils/shift/shift_left_right.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/shift/shift_left_right.drawio.svg") }}) |
+| <ul><li>`struct ShiftParameters`</li></ul>                                                                                            | contains<br><ul><li>`velocity: double`</li><li>`lateral_acc_limit: double`</li><li>`longitudinal_acc: double`</li></ul>                                                                                                                          | <ul><li>`velocity` needs to be positive.</li></ul>                                                                                                                                                                                                                                                                                            |
+| <ul><li>`shift(const &Trajectory, const &ShiftInterval, const &ShiftParameters) -> expected<ShiftedTrajectory, ShiftError>`</li></ul> | Following [formulation](./README.md#derivation-of-shift), return a shifted `Trajectory` object if the parameters are feasible, otherwise return `Error` object indicating error reason(i.e. $T_j$ becomes negative, $j$ becomes negative, etc.). | For derivation, see [formulation](./README.md#derivation-of-shift).<br>The example code for this plot is found [example](./README.md#example-usage-of-shift-trajectory)                                                                                                                                                                       |
+
+##### <span style="font-size: 1.2em;">Example Usage of `shift` Trajectory</span>
+
+```cpp title="./examples/example_shift.cpp:97:117"
+--8<--
+common/autoware_trajectory/examples/example_shift.cpp:97:117
+--8<--
+```
+
+![shift](./images/utils/shift/shift_num_points.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/shift/shift_num_points.drawio.svg") }})
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/pretty_build.hpp>`</span>
+
+| Function                         | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Detail                                                                                                                                                                   |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| <ul><li>`pretty_build`</li></ul> | A convenient wrapper for constructing a Trajectory class with the default interpolator setting, or with Akima spline for x/y when `use_akima = true`.<br>The interface is kept simple for typical Autoware Planning/Control usage, while the actual point-count and degenerate-point handling is delegated to `Trajectory::build`.<br>All of the properties are interpolated by the default interpolator settings.<br>You may need to call `align_orientation_with_trajectory_direction` if you did not give desired orientation. | ![pretty_trajectory](./images/utils/pretty_trajectory.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/pretty_trajectory.drawio.svg") }}) |
+
+##### <span style="font-size: 1.2em;">Example Usage of `pretty_build`</span>
+
+`pretty_build` is a convenient wrapper tailored for most Autoware Planning/Control components. It delegates the detailed fallback behavior to `Trajectory::build` instead of explicitly augmenting the input points.
+
+```cpp title="./examples/example_pretty_build.cpp:93:97"
+--8<--
+common/autoware_trajectory/examples/example_pretty_build.cpp:93:97
+--8<--
+```
+
+`pretty_build_temporal` provides the same convenience for `TemporalTrajectory`.
+
+```cpp title="./examples/example_temporal_crop.cpp:58:61"
+--8<--
+common/autoware_trajectory/examples/example_temporal_crop.cpp:58:61
+--8<--
+```
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/add_offset.hpp>`</span>
+
+| Function                       | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| <ul><li>`add_offset`</li></ul> | Compute a new trajectory by translating each underlying point by a fixed offset expressed in the vehicle frame.<br>Vehicle-frame axes are defined as `+x`: forward, `+y`: left, `+z`: up.<br>For pose-based types, the offset is rotated into the global frame using the point's full orientation, so roll, pitch, and yaw are all respected.<br>Only the position is shifted; orientation and other point properties are preserved.<br>Also available for `TemporalTrajectory`. | For `Trajectory<geometry_msgs::msg::Point>`, roll is unavailable, so the function synthesizes orientation from the trajectory `azimuth()` and `elevation()` with zero roll.<br>As a result, lateral offset can affect global `z` on a rolled trajectory, and longitudinal offset can affect global `z` on a pitched trajectory.<br><br>![add_offset](./images/utils/add_offset.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/add_offset.drawio.svg") }}) |
+
+##### <span style="font-size: 1.2em;">Example Usage of `add_offset`</span>
+
+`add_offset` is useful when the reference trajectory is defined at `base_link`, but another point on the vehicle body is needed, such as the front axle, rear axle, vehicle edges.
+
+```cpp title="./examples/example_add_offset.cpp:107:115"
+--8<--
+common/autoware_trajectory/examples/example_add_offset.cpp:107:115
+--8<--
+```
+
+See also: [`example_add_offset.cpp`](./examples/example_add_offset.cpp)
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/crop.hpp>`</span>
+
+In addition to the spatial `crop(trajectory, start, end)` free function, the header provides temporal variants that return a new cropped trajectory without mutating the input.
+
+| Function                                            | Description                                           |
+| --------------------------------------------------- | ----------------------------------------------------- |
+| `crop_time(trajectory, start_time, duration)`       | Crop a `TemporalTrajectory` to a time window [s].     |
+| `crop_distance(trajectory, start_distance, length)` | Crop a `TemporalTrajectory` to a distance window [m]. |
+
+```cpp title="./examples/example_temporal_crop.cpp:117:121"
+--8<--
+common/autoware_trajectory/examples/example_temporal_crop.cpp:117:121
+--8<--
+```
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/set_stopline.hpp>`</span>
+
+| Function                                                 | Description                                                                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `set_stopline(trajectory, arc_length)`                   | Insert a stopline at the given arc length by setting the velocity profile to zero around the stop point.                  |
+| `insert_stop_duration(trajectory, arc_length, duration)` | Same as above, but additionally extend the schedule so that the vehicle remains stopped for the specified `duration` [s]. |
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/set_time_offset.hpp>`</span>
+
+| Function                              | Description                                                              |
+| ------------------------------------- | ------------------------------------------------------------------------ |
+| `set_time_offset(trajectory, offset)` | Shift the absolute time bases of a `TemporalTrajectory` by `offset` [s]. |
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/find_intervals.hpp>`</span>
+
+| Function                                          | Description                                                                                                                                                                                                    |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `find_intervals(trajectory, constraint)`          | Find contiguous arc-length intervals on a spatial `Trajectory` where `constraint(point)` or `constraint(s)` is true. Returns `vector<Interval>`.                                                               |
+| `find_intervals(temporal_trajectory, constraint)` | Find contiguous time intervals on a `TemporalTrajectory` where `constraint(point)` or `constraint(t)` is true. Returns `vector<TemporalInterval>` (each entry contains both `TimeDistancePair` start and end). |
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/max.hpp>`</span>
+
+| Function                                                                        | Description                                                                                                                                                                 |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `max(trajectory, evaluator)`                                                    | Find the underlying arc length `s` where `evaluator(point)` or `evaluator(s)` is maximized on a spatial `Trajectory`. Returns `MaxResult<double, ValueType>`.               |
+| `max<MaxSearchMethod::FixedInterval>(trajectory, evaluator, interval)`          | Find the arc length `s` where `evaluator(point)` or `evaluator(s)` is maximized by searching with a fixed arc-length interval.                                              |
+| `max(temporal_trajectory, evaluator)`                                           | Find the underlying time-distance pair where `evaluator(point)` or `evaluator(t)` is maximized on a `TemporalTrajectory`. Returns `MaxResult<TimeDistancePair, ValueType>`. |
+| `max<MaxSearchMethod::FixedInterval>(temporal_trajectory, evaluator, interval)` | Find the time-distance pair where `evaluator(point)` or `evaluator(t)` is maximized by searching with a fixed time interval.                                                |
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/reference_path.hpp>`</span>
+
+| Function                                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Detail                                                                                                                                                                |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <ul><li>`build_reference_path`</li></ul> | A convenient function that generates Trajectory class from given Lanelets and specified length before/after given position.<br>Input `lanelet_sequence` must be consecutive.<br>If `lanelet_sequence` have self-intersection ego position gets ambiguous, so both `current_lanelet` and `current_pose` need to be given.<br>`forward/backward_length` is measured in terms of lane coordinate from `current_pose`. Thus, if and only if the Lanelets contained waypoint, the output trajectory length does not equal to `forward_length + backward_length`. | ![build_reference_path](./images/utils/reference_path.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/reference_path.drawio.svg") }}) |
+
+##### <span style="font-size: 1.2em;">Example Usage of `build_reference_path`</span>
+
+Generate reference path from Lanelets
+
+```cpp title="./examples/example_reference_path.cpp:74:80"
+--8<--
+common/autoware_trajectory/examples/example_reference_path.cpp:74:80
+--8<--
+```
+
+![reference_path](./images/utils/reference_path_dense_centerline.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/reference_path_dense_centerline.drawio.svg") }})
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/find_nearest.hpp>`</span>
+
+| Function                                     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Detail                                                                                                                                                          |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <ul><li>`find_first_nearest_index`</li></ul> | A utility function that locates the arc-length coordinate `s` on a continuous trajectory closest to a given pose.<br> Input is any continuous trajectory type.<br>If no sample lies within `max_dist` (Euclidean) and `max_yaw` (heading) limits, returns `std::nullopt`.<br>Otherwise, It searches for the best point on the bases first, and then performs a ternary search to precisely locate the nearest `s` in a continuous manner at \~1e-4 m precision level.<br>If two samples are equally close in distance, the one with the smaller yaw deviation (within `max_yaw`) is chosen. | ![find_nearest_index](./images/utils/find_nearest.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/find_nearest.drawio.svg") }}) |
+
+##### <span style="font-size: 1.2em;">Example Usage of `find_nearest`</span>
+
+These are the usage examples of self-intersecting trajectory (Bow Trajectory and Vertical Loop Trajectory), and Edge case Lollipop Trajectory.
+
+```cpp title="./examples/example_self_intersecting.cpp:350:355"
+--8<--
+common/autoware_trajectory/examples/example_self_intersecting.cpp:350:355
+--8<--
+```
+
+If the query point is `geometry_msgs::msg::Point` (not `geometry_msgs::msg::Pose`), `find_nearest_index` will be used instead.
+
+```cpp
+auto s_nearest = find_nearest_index(traj, query);
+```
+
+![bow_trajectory](./images/utils/find_precise_index_bow_trajectory.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/find_precise_index_bow_trajectory.drawio.svg") }})
+![vertical_loop_trajectory](./images/utils/find_precise_index_vertical_loop_trajectory.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/find_precise_index_vertical_loop_trajectory.drawio.svg") }})
+![lollipop_trajectory](./images/utils/find_precise_index_lollipop_trajectory.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/find_precise_index_lollipop_trajectory.drawio.svg") }})
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/lateral_metrics.hpp>`</span>
+
+| Function                                     | Description                                                                                                                                                                                                                        | Detail                                                                                                                                                                                       |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <ul><li>`compute_lateral_distance`</li></ul> | A utility function that computes the normal distance between a given `target point` and the tangent line of the pose at specified arc-length `s` on the trajectory. The result will always be positive. <br> See below cell figure |                                                                                                                                                                                              |
+| <ul><li>`is_left_side`</li></ul>             | A utility function that determines whether a given `target point` lies on the **left side** of the trajectory's tangent direction at the specified arc-length `s`.                                                                 | ![lateral_metrics](./images/utils/lateral_distance_computation.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/lateral_distance_computation.drawio.svg") }}) |
+
+##### <span style="font-size: 1.2em;">Example Usage of `lateral_metrics`</span>
+
+Calculate lateral distance from Parabolic Trajectory to given point and check the side of the point from the trajectory.
+
+```cpp title="./examples/example_lateral_metrics.cpp:144:155"
+--8<--
+common/autoware_trajectory/examples/example_lateral_metrics.cpp:144:155
+--8<--
+```
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/footprint.hpp>`</span>
+
+| Function                                  | Description                                                                                                                                                                                             | Detail                                                                                                                                                                               |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| <ul><li>`build_path_polygon`</li></ul>    | A utility function that creates the polygon along the trajectory with designated width from specified start arc-length `start_s` to end arc-length `end_s`.                                             | ![build_path_polygon](./images/utils/build_path_polygon.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/build_path_polygon.drawio.svg") }})          |
+| <ul><li>`build_path_footprints`</li></ul> | A utility function that creates a trace of footprints (`vector<Polygon2d>`) along the trajectory with the size of input footprint from specified start arc-length `start_s` to end arc-length `end_s` . | ![build_path_footprints](./images/utils/build_path_footprints.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/build_path_footprints.drawio.svg") }}) |
+
+##### <span style="font-size: 1.2em;">Example Usage of `footprint`</span>
+
+Build Path Polygon and Path Footprints of the trajectory from designated arc-length `s` (in this case, from start to end point).
+
+Set the point interval and width manually.
+
+```cpp title="./examples/example_footprint.cpp:157:158"
+--8<--
+common/autoware_trajectory/examples/example_footprint.cpp:157:158
+--8<--
+```
+
+Use base footprint to draw trajectory footprints.
+
+```cpp title="./examples/example_footprint.cpp:187:188"
+--8<--
+common/autoware_trajectory/examples/example_footprint.cpp:187:188
+--8<--
+```
+
+#### <span style="font-size: 1.2em;">`<autoware/trajectory/utils/crossed.hpp>`</span>
+
+| Function                                                     | Description                                                                                                                                                                                                           | Detail                                                                                                                                                                      |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <ul><li>`crossed_with_constraint`</li></ul>                  | A utility function that finds intersections between a trajectory and a linestring where the given constraint is satisfied. The constraint may accept either a trajectory point or arc length `s`.                     |                                                                                                                                                                             |
+| <ul><li>`crossed`</li></ul>                                  | A utility function that finds intersections between a trajectory and a linestring regardless of constraint. <br> **Post-condition** <ul><li> The output is sorted in ascending order along the trajectory. </ul></li> | ![crossed_linestring](./images/utils/crossed_linestring.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/crossed_linestring.drawio.svg") }}) |
+| <ul><li>`crossed(temporal_trajectory, linestring)`</li></ul> | A utility function that finds intersections between a `TemporalTrajectory` and a linestring. Returns `vector<TimeDistancePair>`.                                                                                      |                                                                                                                                                                             |
+| <ul><li>`crossed_with_polygon`</li></ul>                     | A utility function that finds intersections between a trajectory and a polygon. <br> **Post-condition** <ul><li> The output is sorted in ascending order along the trajectory. </ul></li>                             | ![crossed_polygon](./images/utils/crossed_polygon.drawio.svg)[View in Drawio]({{ drawio("/common/autoware_trajectory/images/utils/crossed_polygon.drawio.svg") }})          |
+
+##### <span style="font-size: 1.2em;">Example Usage of `crossed`</span>
+
+```cpp title="./examples/example_crossed.cpp:184:185"
+--8<--
+common/autoware_trajectory/examples/example_crossed.cpp:184:185
+--8<--
+```
+
+```cpp title="./examples/example_crossed.cpp:223:227"
+--8<--
+common/autoware_trajectory/examples/example_crossed.cpp:223:227
+--8<--
+```
+
+### Appendix
+
+#### <span style="font-size: 1.2em;">Derivation of `shift`</span>
+
+`shift` function laterally offsets given curve by $l(s)$ in normal direction at each point following the lateral time-jerk profile as shown bellow.
+
+![jerk_profile](./images/utils/shift/path_shifter.png)
+
+Starting from the initial longitudinal velocity of $v_{0}^{\mathrm{lon}}$ and longitudinal acceleration of $a^{\mathrm{lon}}$, at each time $t_{1}, \cdots, t_{7}$, the lateral offset $l_{i}$ at the corresponding longitudinal position $s_{i}$(with the longitudinal velocity $v_{i}$) is expressed as follows.
+
+$$
+\begin{align}
+& t_{1}: & s_{1} &= v^{\rm lon}_0 T_j + \frac{1}{2} a^{\rm lon} T_j^2, & v_{1} &= v^{\rm lon}_0 + a^{\rm lon} T_j, & l_{1} &= \frac{1}{6}jT_j^3 \\
+& t_{2}: & s_{2} &= v^{\rm lon}_1 T_a + \frac{1}{2} a^{\rm lon} T_a^2, & v_{2} &= v^{\rm lon}_1 + a^{\rm lon} T_a, & l_{2} &= \frac{1}{6}j T_j^3 + \frac{1}{2} j T_a T_j^2 + \frac{1}{2} j T_a^2 T_j \\
+& t_{3}: & s_{3} &= v^{\rm lon}_2 T_j + \frac{1}{2} a^{\rm lon} T_j^2, & v_{3} &= v^{\rm lon}_2 + a^{\rm lon} T_j, & l_{3} &= j  T_j^3 + \frac{3}{2} j T_a T_j^2 + \frac{1}{2} j T_a^2 T_j \\
+& t_{4}: & s_{4} &= v^{\rm lon}_3 T_v + \frac{1}{2} a^{\rm lon} T_v^2, & v_{4} &= v^{\rm lon}_3 + a^{\rm lon} T_v, & l_{4} &= j T_j^3 + \frac{3}{2} j T_a T_j^2 + \frac{1}{2} j T_a^2 T_j + j(T_a + T_j)T_j T_v \\
+& t_{5}: & s_{5} &= v^{\rm lon}_4 T_j + \frac{1}{2} a^{\rm lon} T_j^2, & v_{5} &= v^{\rm lon}_4 + a^{\rm lon} T_j, & l_{5} &= \frac{11}{6} j T_j^3 + \frac{5}{2} j T_a T_j^2 + \frac{1}{2} j T_a^2 T_j + j(T_a + T_j)T_j T_v \\
+& t_{6}: & s_{6} &= v^{\rm lon}_5 T_a + \frac{1}{2} a^{\rm lon} T_a^2, & v_{6} &= v^{\rm lon}_5 + a^{\rm lon} T_a, & l_{6} &= \frac{11}{6} j T_j^3 + 3 j T_a T_j^2 + j T_a^2 T_j + j(T_a + T_j)T_j T_v \\
+& t_{7}: & s_{7} &= v^{\rm lon}_6 T_j + \frac{1}{2} a^{\rm lon} T_j^2, & v_{7} &= v^{\rm lon}_6 + a^{\rm lon} T_j, & l_{7} &= 2 j T_j^3 + 3 j T_a T_j^2 + j T_a^2 T_j + j(T_a + T_j)T_j T_v
+\end{align}
+$$
+
+Given following inputs,
+
+- desired longitudinal distance $L_{\mathrm{lon}}$
+- desired lateral shift distance $L$
+- longitudinal initial velocity $v_{\mathrm{lon}}$
+- longitudinal acceleration $a_{\mathrm{lon}}$
+- lateral acceleration limit $a_{\mathrm{lim}}^{\mathrm{lat}}$
+
+`shift` internally computes
+
+- total time of shift $T_{\mathrm{total}}$
+- maximum lateral acceleration $a_{\mathrm{max}}^{\mathrm{lat}}$ during the shift
+- constant/zero jerk time $T_{\mathrm{j}}, T_{\mathrm{a}}$ respectively
+- required jerk $j$
+
+as following
+
+$$
+\begin{align}
+T_{\mathrm{total}} &= \text{(time to travel $L_{\mathrm{lon}}$ from $v_{\mathrm{lon}}$ under $a_{\mathrm{lon}}$)} \\
+a_{\rm max}^{\rm lat}  &= \frac{8L}{T_{\rm total}^2} \\
+T_j&=\frac{T_{\rm total}}{2} - \frac{2L}{a_{\rm lim}^{\rm lat} T_{\rm total}}\\
+T_a&=\frac{4L}{a_{\rm lim}^{\rm lat} T_{\rm total}} - \frac{T_{\rm total}}{2}\\
+j&=\frac{2a_{\rm lim} ^{\mathrm{lat} 2}T_{\rm total}}{a_{\rm lim}^{\rm lat} T_{\rm total}^2-4L}
+\end{align}
+$$
+
+to obtain $(s_{i}, l_{i})$ respectively. Note that $l_{7} == L$.
+
+If $a_{\mathrm{max}}^{\mathrm{lat}} > a_{\mathrm{lim}}^{\mathrm{lat}}$, then $l_{i}$ is simply
+
+$$
+\begin{align}
+t &= \frac{T_{\mathrm{total}}}{4} \\
+s_{1} &= v_{\mathrm{lon}}t + \frac{1}{2} a_{\mathrm{lon}}t^2, & l_{1} &= \frac{L}{12} \\
+s_{2} &= s_{1} + 2 (v_{0} + a_{\mathrm{lon}}t)t + 2a_{\mathrm{lon}}t^2, & l_{2} &= \frac{11L}{12} \\
+s_{3} &= L_{\mathrm{lon}}, & l_{3} &= L
+\end{align}
+$$
+
+#### Handling of duplicate points
+
+This package handles duplicate or almost-duplicate input points at two stages: when the trajectory bases are built from the raw points, and when each interpolator is constructed.
+
+##### 1. Base sanitisation in `Trajectory<Point>::build`
+
+`Trajectory<Point>::build` (and the derived builders that reuse it) converts the input point array into arc-length bases. Consecutive points whose 3D Euclidean distance is zero would produce identical bases, which breaks the strict monotonicity expected by later interpolation steps. To avoid this, the build step clamps every segment length to at least machine epsilon:
+
+```cpp
+const auto dist = std::max<double>(
+  autoware_utils_geometry::calc_distance3d(points.at(i), points.at(i - 1)),
+  std::numeric_limits<double>::epsilon());
+bases_.emplace_back(bases_.back() + dist);
+```
+
+This sanitisation preserves every input point; it only nudges the generated base coordinate enough to keep the base vector strictly increasing. The actual zero-division avoidance and stronger duplicate filtering are handled later by each interpolator's own `build_impl`.
+
+`TimeDistanceMapping::build` applies the same idea to time bases as well. In the current implementation it also clamps each time increment to at least `std::numeric_limits<double>::epsilon()` before handing the bases to the interpolator.
+
+##### 2. Duplicate removal inside interpolator `build_impl`
+
+Most scalar interpolators (`Linear`, `CubicSpline`, `AkimaSpline`, and `SphericalLinear`) additionally remove true duplicates before they interpolate, as such duplicates can lead to numerical instability (e.g., division by very small intervals or ill-conditioned systems). Their `build_impl` functions call:
+
+```cpp
+auto [cleaned_bases, cleaned_values] =
+  ::autoware::experimental::trajectory::detail::remove_duplicate_points(bases, values, epsilon_);
+```
+
+`remove_duplicate_points` scans the bases from front to back and drops any point whose base difference from the last kept point is not larger than the interpolator's configured epsilon. The first point of a duplicate run is retained, the rest are discarded.
+
+For the current default settings:
+
+- spatial trajectory builders use `k_epsilon_distance`
+- the internal time-to-distance `Linear` interpolator of `TemporalTrajectory` uses `k_epsilon_time`
+
+##### 3. Interpolators that do not deduplicate
+
+`LaneIdsInterpolator` and `Stairstep` do **not** invoke `remove_duplicate_points`; they operate on the bases exactly as provided by the trajectory build step. The base sanitisation described in stage 1 is therefore the only duplicate protection for these interpolators.
+
+The `is_almost_same` helpers use quantity-specific thresholds:
+
+- point / pose / path-point / trajectory-point position comparisons use `k_epsilon_distance`
+- quaternion rotation comparison uses `k_epsilon_angle`
+- temporal equality checks that are implemented explicitly in temporal utilities use `k_epsilon_time`
+
+##### Summary of thresholds
+
+| Stage                                | Threshold                                | Meaning                                                    |
+| ------------------------------------ | ---------------------------------------- | ---------------------------------------------------------- |
+| Spatial trajectory base construction | `std::numeric_limits<double>::epsilon()` | Minimum base increment to keep arc-length bases increasing |
+| Temporal time base construction      | `std::numeric_limits<double>::epsilon()` | Minimum base increment to keep time bases increasing       |
+| Spatial interpolator deduplication   | `k_epsilon_distance`                     | Spatial bases closer than this are treated as duplicates   |
+| Temporal interpolator deduplication  | `k_epsilon_time`                         | Time bases closer than this are treated as duplicates      |
+| Geometric `is_almost_same` checks    | `k_epsilon_distance`                     | Position-based equality threshold                          |
+| Quaternion `is_almost_same` checks   | `k_epsilon_angle`                        | Rotation-equivalence threshold                             |

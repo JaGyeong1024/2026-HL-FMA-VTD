@@ -1,0 +1,32 @@
+// Copyright 2025 TIER IV, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+import "sync_tooling_msgs/port_id.proto";
+import "sync_tooling_msgs/warning.proto";
+import "sync_tooling_msgs/error.proto";
+
+// A log message from a PTP4L instance that expresses a warning or an error on a given port.
+message Ptp4lPortStatusMessage {
+  // The ID of the affected port
+  PortId port_id = 1;
+  // The severity of the message
+  oneof severity {
+    // The warning message
+    Warning warning = 2;
+    // The error message
+    Error error = 3;
+  } 
+}

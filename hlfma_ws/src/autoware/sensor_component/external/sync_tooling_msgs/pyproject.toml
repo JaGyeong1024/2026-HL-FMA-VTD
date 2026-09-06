@@ -1,0 +1,35 @@
+[project]
+name = "sync-tooling-msgs"
+version = "0.2.10"
+description = "Protobuf definitions for sync tooling."
+authors = [{ name = "Max SCHMELLER", email = "max.schmeller@tier4.jp" }]
+requires-python = ">=3.10"
+dependencies = ["protobuf>=6.33.5,<7", "mypy-protobuf>=3.6.0", "bidict>=0.23.1"]
+
+[dependency-groups]
+dev = [
+    "hatch-protobuf>=0.2.0.post1",
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["hatchling", "protobuf==6.33.5"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sync_tooling_msgs"]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py", "*_test.py", "*_examples.py"]
+addopts = ["--import-mode=importlib"]
+
+[tool.hatch.build.hooks.protobuf]
+dependencies = ["hatch-protobuf", "mypy-protobuf"]
+proto_paths = ["proto"]
+output_path = "src"
+generate_grpc = false
+generate_pyi = false                               # handled by mypy-protobuf below
+
+[[tool.hatch.build.hooks.protobuf.generators]]
+name = "mypy"
+outputs = ["{proto_path}/{proto_name}_pb2.pyi"]

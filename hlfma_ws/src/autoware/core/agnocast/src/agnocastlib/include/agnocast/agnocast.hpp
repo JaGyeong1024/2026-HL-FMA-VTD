@@ -1,0 +1,300 @@
+#pragma once
+
+#include "agnocast/agnocast_callback_info.hpp"
+#include "agnocast/agnocast_callback_isolated_executor.hpp"
+#include "agnocast/agnocast_client.hpp"
+#include "agnocast/agnocast_multi_threaded_executor.hpp"
+#include "agnocast/agnocast_public_api.hpp"
+#include "agnocast/agnocast_publisher.hpp"
+#include "agnocast/agnocast_service.hpp"
+#include "agnocast/agnocast_single_threaded_executor.hpp"
+#include "agnocast/agnocast_subscription.hpp"
+#include "agnocast/agnocast_tracepoint_wrapper.h"
+#include "agnocast/bridge/agnocast_bridge_node.hpp"
+#include "agnocast/bridge/performance/agnocast_performance_bridge_plugin_api.hpp"
+#include "agnocast/message_filters/pass_through.hpp"
+#include "agnocast/message_filters/subscriber.hpp"
+#include "agnocast/message_filters/sync_policies/approximate_time.hpp"
+#include "agnocast/message_filters/sync_policies/exact_time.hpp"
+#include "agnocast/message_filters/synchronizer.hpp"
+#include "agnocast/node/agnocast_context.hpp"
+#include "agnocast/node/agnocast_node.hpp"
+#include "agnocast/node/agnocast_only_callback_isolated_executor.hpp"
+#include "agnocast/node/agnocast_only_executor.hpp"
+#include "agnocast/node/agnocast_only_multi_threaded_executor.hpp"
+#include "agnocast/node/agnocast_only_single_threaded_executor.hpp"
+#include "rclcpp/rclcpp.hpp"
+
+#include <fcntl.h>
+#include <mqueue.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <type_traits>
+
+namespace agnocast
+{
+
+// Type trait to extract the pointed-to node type from raw pointers and smart pointers.
+template <typename T, typename = void>
+struct node_pointer_traits
+{
+  using type = std::remove_pointer_t<T>;
+};
+
+template <typename T>
+struct node_pointer_traits<T, std::void_t<typename T::element_type>>
+{
+  using type = typename T::element_type;
+};
+
+struct initialize_agnocast_result
+{
+  void * mempool_ptr;
+  uint64_t mempool_size;
+};
+
+extern "C" struct initialize_agnocast_result initialize_agnocast(
+  const unsigned char * heaphook_version_ptr, const size_t heaphook_version_str_len);
+
+/// @brief Create an Agnocast publisher (Stage 1 free function, QoS overload).
+/// @tparam MessageT ROS message type.
+/// @tparam NodeT Node type (rclcpp::Node or agnocast::Node).
+/// @param node Pointer to the node.
+/// @param topic_name Topic name.
+/// @param qos Quality of service profile.
+/// @param options Publisher options.
+/// @return Shared pointer to the created publisher.
+AGNOCAST_PUBLIC
+template <typename MessageT, typename NodeT>
+typename Publisher<MessageT>::SharedPtr create_publisher(
+  NodeT * node, const std::string & topic_name, const rclcpp::QoS & qos,
+  const PublisherOptions & options = PublisherOptions{})
+{
+  static_assert(
+    std::is_base_of_v<rclcpp::Node, NodeT> || std::is_base_of_v<agnocast::Node, NodeT>,
+    "NodeT must be rclcpp::Node or agnocast::Node (or derived from them)");
+  return std::make_shared<BasicPublisher<MessageT, AgnocastToRosPubsubRequestPolicy>>(
+    node, topic_name, qos, options);
+}
+
+/// @brief Create an Agnocast publisher (Stage 1 free function, history-depth overload).
+/// @tparam MessageT ROS message type.
+/// @tparam NodeT Node type (rclcpp::Node or agnocast::Node).
+/// @param node Pointer to the node.
+/// @param topic_name Topic name.
+/// @param qos_history_depth History depth for the QoS profile.
+/// @param options Publisher options.
+/// @return Shared pointer to the created publisher.
+AGNOCAST_PUBLIC
+template <typename MessageT, typename NodeT>
+typename Publisher<MessageT>::SharedPtr create_publisher(
+  NodeT * node, const std::string & topic_name, const size_t qos_history_depth,
+  const PublisherOptions & options = PublisherOptions{})
+{
+  static_assert(
+    std::is_base_of_v<rclcpp::Node, NodeT> || std::is_base_of_v<agnocast::Node, NodeT>,
+    "NodeT must be rclcpp::Node or agnocast::Node (or derived from them)");
+  return std::make_shared<BasicPublisher<MessageT, AgnocastToRosPubsubRequestPolicy>>(
+    node, topic_name, rclcpp::QoS(rclcpp::KeepLast(qos_history_depth)), options);
+}
+
+/// @brief Create an Agnocast subscription (Stage 1 free function, QoS overload).
+/// @tparam MessageT ROS message type.
+/// @tparam NodeT Node type (rclcpp::Node or agnocast::Node).
+/// @tparam Func Callback callable with `void(agnocast::ipc_shared_ptr<const MessageT>&&)`.
+/// @param node Pointer to the node.
+/// @param topic_name Topic name.
+/// @param qos Quality of service profile.
+/// @param callback Callback invoked on each received message.
+/// @param options Subscription options.
+/// @return Shared pointer to the created subscription.
+AGNOCAST_PUBLIC
+template <typename MessageT, typename NodeT, typename Func>
+typename Subscription<MessageT>::SharedPtr create_subscription(
+  NodeT * node, const std::string & topic_name, const rclcpp::QoS & qos, Func && callback,
+  agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions{})
+{
+  static_assert(
+    std::is_base_of_v<rclcpp::Node, NodeT> || std::is_base_of_v<agnocast::Node, NodeT>,
+    "NodeT must be rclcpp::Node or agnocast::Node (or derived from them)");
+  return std::make_shared<BasicSubscription<MessageT, RosToAgnocastPubsubRequestPolicy>>(
+    node, topic_name, qos, std::forward<Func>(callback), options);
+}
+
+/// @brief Create an Agnocast subscription (Stage 1 free function, history-depth overload).
+/// @tparam MessageT ROS message type.
+/// @tparam NodeT Node type (rclcpp::Node or agnocast::Node).
+/// @tparam Func Callback callable with `void(agnocast::ipc_shared_ptr<const MessageT>&&)`.
+/// @param node Pointer to the node.
+/// @param topic_name Topic name.
+/// @param qos_history_depth History depth for the QoS profile.
+/// @param callback Callback invoked on each received message.
+/// @param options Subscription options.
+/// @return Shared pointer to the created subscription.
+AGNOCAST_PUBLIC
+template <typename MessageT, typename NodeT, typename Func>
+typename Subscription<MessageT>::SharedPtr create_subscription(
+  NodeT * node, const std::string & topic_name, const size_t qos_history_depth, Func && callback,
+  agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions{})
+{
+  static_assert(
+    std::is_base_of_v<rclcpp::Node, NodeT> || std::is_base_of_v<agnocast::Node, NodeT>,
+    "NodeT must be rclcpp::Node or agnocast::Node (or derived from them)");
+  return std::make_shared<BasicSubscription<MessageT, RosToAgnocastPubsubRequestPolicy>>(
+    node, topic_name, rclcpp::QoS(rclcpp::KeepLast(qos_history_depth)),
+    std::forward<Func>(callback), options);
+}
+
+/// @brief Create an Agnocast polling subscription (Stage 1 free function, history-depth overload).
+/// @tparam MessageT ROS message type.
+/// @tparam NodeT Node type (rclcpp::Node or agnocast::Node).
+/// @param node Pointer to the node.
+/// @param topic_name Topic name.
+/// @param qos_history_depth History depth for the QoS profile.
+/// @return Shared pointer to the created polling subscription.
+AGNOCAST_PUBLIC
+template <typename MessageT, typename NodeT>
+typename PollingSubscriber<MessageT>::SharedPtr create_subscription(
+  NodeT * node, const std::string & topic_name, const size_t qos_history_depth)
+{
+  static_assert(
+    std::is_base_of_v<rclcpp::Node, NodeT> || std::is_base_of_v<agnocast::Node, NodeT>,
+    "NodeT must be rclcpp::Node or agnocast::Node (or derived from them)");
+  return std::make_shared<BasicPollingSubscriber<MessageT, RosToAgnocastPubsubRequestPolicy>>(
+    node, topic_name, rclcpp::QoS(rclcpp::KeepLast(qos_history_depth)));
+}
+
+/// @brief Create an Agnocast polling subscription (Stage 1 free function, QoS overload).
+/// @tparam MessageT ROS message type.
+/// @tparam NodeT Node type (rclcpp::Node or agnocast::Node).
+/// @param node Pointer to the node.
+/// @param topic_name Topic name.
+/// @param qos Quality of service profile.
+/// @return Shared pointer to the created polling subscription.
+AGNOCAST_PUBLIC
+template <typename MessageT, typename NodeT>
+typename PollingSubscriber<MessageT>::SharedPtr create_subscription(
+  NodeT * node, const std::string & topic_name, const rclcpp::QoS & qos)
+{
+  static_assert(
+    std::is_base_of_v<rclcpp::Node, NodeT> || std::is_base_of_v<agnocast::Node, NodeT>,
+    "NodeT must be rclcpp::Node or agnocast::Node (or derived from them)");
+  return std::make_shared<BasicPollingSubscriber<MessageT, RosToAgnocastPubsubRequestPolicy>>(
+    node, topic_name, qos);
+}
+
+/// @brief Create an Agnocast service client (Stage 1 free function).
+/// @tparam ServiceT ROS service type.
+/// @tparam NodeT Node type (rclcpp::Node or agnocast::Node).
+/// @param node Pointer to the node.
+/// @param service_name Service name.
+/// @param qos Quality of service profile. Defaults to `rclcpp::ServicesQoS()`.
+/// @param group Callback group. Defaults to `nullptr` (default callback group).
+/// @return Shared pointer to the created client.
+AGNOCAST_PUBLIC
+template <typename ServiceT, typename NodeT>
+typename Client<ServiceT>::SharedPtr create_client(
+  NodeT * node, const std::string & service_name, const rclcpp::QoS & qos = rclcpp::ServicesQoS(),
+  rclcpp::CallbackGroup::SharedPtr group = nullptr)
+{
+  static_assert(
+    std::is_base_of_v<rclcpp::Node, NodeT> || std::is_base_of_v<agnocast::Node, NodeT>,
+    "NodeT must be rclcpp::Node or agnocast::Node (or derived from them)");
+  return std::make_shared<Client<ServiceT>>(node, service_name, qos, group);
+}
+
+/// @brief Create an Agnocast service server (Stage 1 free function).
+/// @tparam ServiceT ROS service type.
+/// @tparam NodeT Node type (rclcpp::Node or agnocast::Node).
+/// @tparam Func Callable that takes `ipc_shared_ptr<ServiceT::Request>` and
+/// `ipc_shared_ptr<ServiceT::Response>` (const&, &&, or by-value) (return value ignored).
+/// @param node Pointer to the node.
+/// @param service_name Service name.
+/// @param callback Callback invoked on each request.
+/// @param qos Quality of service profile. Defaults to `rclcpp::ServicesQoS()`.
+/// @param group Callback group. Defaults to `nullptr` (default callback group).
+/// @return Shared pointer to the created service.
+AGNOCAST_PUBLIC
+template <typename ServiceT, typename NodeT, typename Func>
+typename Service<ServiceT>::SharedPtr create_service(
+  NodeT * node, const std::string & service_name, Func && callback,
+  const rclcpp::QoS & qos = rclcpp::ServicesQoS(), rclcpp::CallbackGroup::SharedPtr group = nullptr)
+{
+  static_assert(
+    std::is_base_of_v<rclcpp::Node, NodeT> || std::is_base_of_v<agnocast::Node, NodeT>,
+    "NodeT must be rclcpp::Node or agnocast::Node (or derived from them)");
+  return std::make_shared<Service<ServiceT>>(
+    node, service_name, std::forward<Func>(callback), qos, group);
+}
+
+/**
+ * @brief Create a timer with a given clock.
+ *
+ * This free function mirrors the rclcpp::create_timer() API for portability.
+ *
+ * \param[in] node Node providing get_node_base_interface() for the default callback group.
+ * \param[in] clock Clock to drive the timer.
+ * \param[in] period Time interval between triggers of the callback.
+ * \param[in] callback User-defined callback function.
+ * \param[in] group Callback group to execute this timer's callback in.
+ * \param[in] autostart Whether to start the timer immediately (not yet supported; always true).
+ * \return Shared pointer to the created timer.
+ */
+AGNOCAST_PUBLIC
+template <typename NodeT, typename CallbackT>
+TimerBase::SharedPtr create_timer(
+  NodeT node, rclcpp::Clock::SharedPtr clock, rclcpp::Duration period, CallbackT && callback,
+  rclcpp::CallbackGroup::SharedPtr group = nullptr, bool autostart = true)
+{
+  using NodePtrT = typename node_pointer_traits<std::decay_t<NodeT>>::type;
+  static_assert(
+    std::is_base_of_v<rclcpp::Node, NodePtrT> || std::is_base_of_v<agnocast::Node, NodePtrT>,
+    "NodeT must be rclcpp::Node or agnocast::Node (or derived from them)");
+  static_assert(
+    std::is_invocable_v<CallbackT, TimerBase &> || std::is_invocable_v<CallbackT>,
+    "Callback must be callable with void() or void(TimerBase&)");
+
+  if (!autostart) {
+    RCLCPP_WARN(
+      node->get_logger(),
+      "autostart=false is not yet supported in agnocast. Timer will autostart.");
+  }
+
+  if (!group) {
+    group = node->get_node_base_interface()->get_default_callback_group();
+  }
+
+  const uint32_t timer_id = allocate_timer_id();
+  const auto period_ns = period.to_chrono<std::chrono::nanoseconds>();
+
+  const void * callback_addr = static_cast<const void *>(&callback);
+  const char * callback_symbol = tracetools::get_symbol(callback);
+
+  auto timer = std::make_shared<GenericTimer<CallbackT>>(
+    timer_id, period_ns, clock, std::forward<CallbackT>(callback));
+
+  register_timer_info(timer_id, timer, period_ns, group, clock);
+
+  const void * node_handle;
+  if constexpr (std::is_base_of_v<rclcpp::Node, NodePtrT>) {
+    node_handle = static_cast<const void *>(
+      node->get_node_base_interface()->get_shared_rcl_node_handle().get());
+  } else {
+    node_handle = static_cast<const void *>(node->get_node_base_interface().get());
+  }
+
+  TRACEPOINT(
+    agnocast_timer_init, static_cast<const void *>(timer.get()), node_handle, callback_addr,
+    static_cast<const void *>(group.get()), callback_symbol, period_ns.count());
+
+  return timer;
+}
+
+}  // namespace agnocast

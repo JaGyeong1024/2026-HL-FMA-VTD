@@ -1,0 +1,453 @@
+#include "agnocast/bridge/agnocast_bridge_utils.hpp"
+
+#include "agnocast/agnocast.hpp"
+
+#include <rclcpp/rclcpp.hpp>
+
+#include <dlfcn.h>
+
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cstdarg>
+#include <cstdio>
+#include <filesystem>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <variant>
+
+namespace agnocast
+{
+
+BridgeMode get_bridge_mode()
+{
+  const char * env_val = std::getenv("AGNOCAST_BRIDGE_MODE");
+  if (env_val == nullptr) {
+    return BridgeMode::Standard;
+  }
+
+  std::string val = env_val;
+  std::transform(val.begin(), val.end(), val.begin(), ::tolower);
+
+  if (val == "0" || val == "off") {
+    return BridgeMode::Off;
+  }
+  if (val == "1" || val == "standard") {
+    return BridgeMode::Standard;
+  }
+  if (val == "2" || val == "performance") {
+    return BridgeMode::Performance;
+  }
+
+  RCLCPP_WARN(logger, "Unknown AGNOCAST_BRIDGE_MODE: %s. Fallback to STANDARD.", env_val);
+  return BridgeMode::Standard;
+}
+
+rclcpp::QoS get_subscriber_qos(const std::string & topic_name, topic_local_id_t subscriber_id)
+{
+  struct ioctl_get_subscriber_qos_args get_subscriber_qos_args = {};
+  get_subscriber_qos_args.topic_name = {topic_name.c_str(), topic_name.size()};
+  get_subscriber_qos_args.subscriber_id = subscriber_id;
+
+  if (ioctl(agnocast_fd, AGNOCAST_GET_SUBSCRIBER_QOS_CMD, &get_subscriber_qos_args) < 0) {
+    // This exception is intended to be caught by the factory function that instantiates the bridge.
+    throw std::runtime_error("Failed to fetch subscriber QoS from agnocast kernel module");
+  }
+  return rclcpp::QoS(get_subscriber_qos_args.ret_depth)
+    .durability(
+      get_subscriber_qos_args.ret_is_transient_local ? rclcpp::DurabilityPolicy::TransientLocal
+                                                     : rclcpp::DurabilityPolicy::Volatile)
+    .reliability(
+      get_subscriber_qos_args.ret_is_reliable ? rclcpp::ReliabilityPolicy::Reliable
+                                              : rclcpp::ReliabilityPolicy::BestEffort);
+}
+
+rclcpp::QoS get_publisher_qos(const std::string & topic_name, topic_local_id_t publisher_id)
+{
+  struct ioctl_get_publisher_qos_args get_publisher_qos_args = {};
+  get_publisher_qos_args.topic_name = {topic_name.c_str(), topic_name.size()};
+  get_publisher_qos_args.publisher_id = publisher_id;
+
+  if (ioctl(agnocast_fd, AGNOCAST_GET_PUBLISHER_QOS_CMD, &get_publisher_qos_args) < 0) {
+    // This exception is intended to be caught by the factory function that instantiates the bridge.
+    throw std::runtime_error("Failed to fetch publisher QoS from agnocast kernel module");
+  }
+
+  return rclcpp::QoS(get_publisher_qos_args.ret_depth)
+    .durability(
+      get_publisher_qos_args.ret_is_transient_local ? rclcpp::DurabilityPolicy::TransientLocal
+                                                    : rclcpp::DurabilityPolicy::Volatile);
+}
+
+SubscriberCountResult get_agnocast_subscriber_count(const std::string & topic_name)
+{
+  union ioctl_get_subscriber_num_args args = {};
+  args.topic_name = {topic_name.c_str(), topic_name.size()};
+  if (ioctl(agnocast_fd, AGNOCAST_GET_SUBSCRIBER_NUM_CMD, &args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_GET_SUBSCRIBER_NUM_CMD failed: %s", strerror(errno));
+    return {-1, false};
+  }
+
+  int total_subs =
+    static_cast<int>(args.ret_other_process_subscriber_num + args.ret_same_process_subscriber_num);
+  if (args.ret_a2r_bridge_exist && total_subs > 0) {
+    total_subs--;
+  }
+
+  return {total_subs, args.ret_a2r_bridge_exist};
+}
+
+PublisherCountResult get_agnocast_publisher_count(const std::string & topic_name)
+{
+  union ioctl_get_publisher_num_args args = {};
+  args.topic_name = {topic_name.c_str(), topic_name.size()};
+  if (ioctl(agnocast_fd, AGNOCAST_GET_PUBLISHER_NUM_CMD, &args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_GET_PUBLISHER_NUM_CMD failed: %s", strerror(errno));
+    return {-1, false};
+  }
+
+  int total_pubs = static_cast<int>(args.ret_publisher_num);
+  if (args.ret_r2a_bridge_exist && total_pubs > 0) {
+    total_pubs--;
+  }
+
+  return {total_pubs, args.ret_r2a_bridge_exist};
+}
+
+bool update_ros2_subscriber_num(const rclcpp::Node * node, const std::string & topic_name)
+{
+  if (node == nullptr) {
+    return false;
+  }
+
+  size_t ros2_count = node->count_subscribers(topic_name);
+
+  struct ioctl_set_ros2_subscriber_num_args args = {};
+  args.topic_name = {topic_name.c_str(), topic_name.size()};
+  args.ros2_subscriber_num = static_cast<uint32_t>(ros2_count);
+
+  if (ioctl(agnocast_fd, AGNOCAST_SET_ROS2_SUBSCRIBER_NUM_CMD, &args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_SET_ROS2_SUBSCRIBER_NUM_CMD failed: %s", strerror(errno));
+    return false;
+  }
+  return true;
+}
+
+bool update_ros2_publisher_num(const rclcpp::Node * node, const std::string & topic_name)
+{
+  if (node == nullptr) {
+    return false;
+  }
+
+  size_t ros2_count = node->count_publishers(topic_name);
+
+  struct ioctl_set_ros2_publisher_num_args args = {};
+  args.topic_name = {topic_name.c_str(), topic_name.size()};
+  args.ros2_publisher_num = static_cast<uint32_t>(ros2_count);
+
+  if (ioctl(agnocast_fd, AGNOCAST_SET_ROS2_PUBLISHER_NUM_CMD, &args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_SET_ROS2_PUBLISHER_NUM_CMD failed: %s", strerror(errno));
+    return false;
+  }
+  return true;
+}
+
+bool has_external_ros2_publisher(const rclcpp::Node * node, const std::string & topic_name)
+{
+  if (node == nullptr) {
+    return false;
+  }
+
+  const std::string self_name = node->get_name();
+  const std::string self_ns = node->get_namespace();
+  const auto publishers = node->get_publishers_info_by_topic(topic_name);
+
+  return std::any_of(
+    publishers.begin(), publishers.end(), [&self_name, &self_ns](const auto & info) {
+      return info.node_name() != self_name || info.node_namespace() != self_ns;
+    });
+}
+
+bool has_external_ros2_subscriber(const rclcpp::Node * node, const std::string & topic_name)
+{
+  if (node == nullptr) {
+    return false;
+  }
+
+  const std::string self_name = node->get_name();
+  const std::string self_ns = node->get_namespace();
+  const auto subscribers = node->get_subscriptions_info_by_topic(topic_name);
+
+  return std::any_of(
+    subscribers.begin(), subscribers.end(), [&self_name, &self_ns](const auto & info) {
+      return info.node_name() != self_name || info.node_namespace() != self_ns;
+    });
+}
+
+rclcpp::QoS get_service_qos(const std::string & service_name)
+{
+  const std::string request_topic_name = create_service_request_topic_name(service_name);
+
+  auto topic_info_buffer = std::make_unique<std::array<topic_info_ret, 1>>();
+  ioctl_topic_info_args topic_info_args = {};
+  topic_info_args.topic_name = {request_topic_name.c_str(), request_topic_name.size()};
+  topic_info_args.topic_info_ret_buffer_addr =
+    reinterpret_cast<uint64_t>(topic_info_buffer->data());
+  topic_info_args.topic_info_ret_buffer_size = 1;
+
+  if (ioctl(agnocast_fd, AGNOCAST_GET_TOPIC_SUBSCRIBER_INFO_CMD, &topic_info_args) < 0) {
+    if (errno == ENOBUFS) {
+      throw std::runtime_error("Multiple target agnocast services found");
+    }
+    throw std::runtime_error(
+      "Failed to fetch target service information from agnocast kernel module");
+  }
+
+  if (topic_info_args.ret_topic_info_ret_num <= 0) {
+    throw std::runtime_error("No target agnocast service found");
+  }
+
+  const topic_info_ret & info = (*topic_info_buffer)[0];
+
+  // We know the durability policy is set to Volatile because this is a service.
+  rclcpp::QoS qos = rclcpp::QoS(info.qos_depth)
+                      .durability(rclcpp::DurabilityPolicy::Volatile)
+                      .reliability(
+                        info.qos_is_reliable ? rclcpp::ReliabilityPolicy::Reliable
+                                             : rclcpp::ReliabilityPolicy::BestEffort);
+  return qos;
+}
+
+bool is_agnocast_service_alive(const std::string & service_name, std::string & reason)
+{
+  // TODO(bdm-k): Add a dedicated service-liveness ioctl so we can validate target service state
+  // directly without using get_service_qos() as a probe.
+  try {
+    (void)get_service_qos(service_name);
+    return true;
+  } catch (const std::exception & e) {
+    reason = e.what();
+    return false;
+  } catch (...) {
+    reason = "Unknown error";
+    return false;
+  }
+}
+
+BridgeRequestMsgBuilder::BridgeRequestMsgBuilder(Mode mode, const rclcpp::Logger & logger)
+: logger_(logger), failed_(false)
+{
+  if (mode == Mode::Standard) {
+    msg_ = MqMsgBridge{};
+  } else {
+    msg_ = MqMsgPerformanceBridge{};
+  }
+}
+
+// NOLINTBEGIN(cert-dcl50-cpp, cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+// hicpp-no-array-decay)
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::fail(const char * format, ...)
+{
+  va_list args;
+  va_start(args, format);
+  int n = vsnprintf(nullptr, 0, format, args);
+  va_end(args);
+
+  if (n < 0) {
+    failed_ = true;
+    reason_ = "Failed to format error message";
+    return *this;
+  }
+
+  std::string buf(n + 1, '\0');
+  va_start(args, format);
+  vsnprintf(buf.data(), n + 1, format, args);
+  va_end(args);
+  // Drop the trailing null terminator.
+  buf.resize(n);
+
+  failed_ = true;
+  reason_ = std::move(buf);
+  return *this;
+}
+
+int BridgeRequestMsgBuilder::checked_snprintf(
+  const std::string & member, char * buffer, size_t size, const char * format, ...)
+{
+  if (failed_) return -1;
+
+  va_list args;
+  va_start(args, format);
+  int n = vsnprintf(buffer, size, format, args);
+  va_end(args);
+
+  if (n < 0) {
+    fail("snprintf() for '%s' returned a negative value", member.c_str());
+  } else if (static_cast<size_t>(n) >= size) {
+    fail(
+      "snprintf() for '%s' failed; length must be %zu characters or fewer", member.c_str(),
+      size - 1);
+  }
+
+  return n;
+}
+// NOLINTEND(cert-dcl50-cpp, cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+// hicpp-no-array-decay)
+
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::set_direction(BridgeDirection direction)
+{
+  std::visit([direction](auto && msg) { msg.direction = direction; }, msg_);
+  return *this;
+}
+
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::set_is_service(bool is_service)
+{
+  std::visit([is_service](auto && msg) { msg.is_service = is_service; }, msg_);
+  return *this;
+}
+
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::set_factory(uintptr_t fn_r2a, uintptr_t fn_a2r)
+{
+  if (!std::holds_alternative<MqMsgBridge>(msg_)) {
+    return fail("'factory' is only for standard bridges");
+  }
+  auto & standard_msg = std::get<MqMsgBridge>(msg_);
+
+  Dl_info info = {};
+  if (dladdr(reinterpret_cast<void *>(fn_r2a), &info) == 0 || info.dli_fname == nullptr) {
+    return fail("dladdr failed or filename NULL");
+  }
+
+  std::error_code ec;
+  auto self_path = std::filesystem::read_symlink("/proc/self/exe", ec);
+
+  bool is_self_executable = false;
+  if (ec) {
+    RCLCPP_WARN(logger_, "Failed to read symlink '/proc/self/exe': %s", ec.message().c_str());
+  } else {
+    std::filesystem::path factory_lib_path(info.dli_fname);
+    if (std::filesystem::equivalent(factory_lib_path, self_path, ec)) {
+      is_self_executable = true;
+    } else if (ec) {
+      RCLCPP_WARN(
+        logger_, "Filesystem check error for '%s' vs '%s': %s", info.dli_fname, self_path.c_str(),
+        ec.message().c_str());
+    }
+  }
+
+  checked_snprintf(
+    "shared_lib_path", static_cast<char *>(standard_msg.factory.shared_lib_path),
+    SHARED_LIB_PATH_BUFFER_SIZE, "%s", info.dli_fname);
+  standard_msg.factory.in_main_executable = is_self_executable;
+
+  auto base_addr = reinterpret_cast<uintptr_t>(info.dli_fbase);
+  standard_msg.factory.fn_offset_r2a = fn_r2a - base_addr;
+  standard_msg.factory.fn_offset_a2r = fn_a2r - base_addr;
+
+  return *this;
+}
+
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::set_message_type(const char * message_type)
+{
+  std::visit(
+    [this, message_type](auto && msg) {
+      if constexpr (std::is_same_v<std::decay_t<decltype(msg)>, MqMsgPerformanceBridge>) {
+        this->checked_snprintf(
+          "message_type", static_cast<char *>(msg.pubsub_target.message_type),
+          MESSAGE_TYPE_BUFFER_SIZE, "%s", message_type);
+      } else {
+        this->fail("'message_type' is only for performance bridges");
+      }
+    },
+    msg_);
+  return *this;
+}
+
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::set_topic_name(const char * topic_name)
+{
+  std::visit(
+    [this, topic_name](auto && msg) {
+      this->checked_snprintf(
+        "topic_name", static_cast<char *>(msg.pubsub_target.topic_name), TOPIC_NAME_BUFFER_SIZE,
+        "%s", topic_name);
+    },
+    msg_);
+  return *this;
+}
+
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::set_pubsub_target_id(topic_local_id_t target_id)
+{
+  std::visit([target_id](auto && msg) { msg.pubsub_target.target_id = target_id; }, msg_);
+  return *this;
+}
+
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::set_service_type(const char * service_type)
+{
+  std::visit(
+    [this, service_type](auto && msg) {
+      if constexpr (std::is_same_v<std::decay_t<decltype(msg)>, MqMsgPerformanceBridge>) {
+        this->checked_snprintf(
+          "service_type", static_cast<char *>(msg.srv_target.service_type),
+          SERVICE_TYPE_BUFFER_SIZE, "%s", service_type);
+      } else {
+        this->fail("'service_type' is only for performance service bridges");
+      }
+    },
+    msg_);
+  return *this;
+}
+
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::set_service_name(const char * service_name)
+{
+  std::visit(
+    [this, service_name](auto && msg) {
+      this->checked_snprintf(
+        "service_name", static_cast<char *>(msg.srv_target.service_name), SERVICE_NAME_BUFFER_SIZE,
+        "%s", service_name);
+    },
+    msg_);
+  return *this;
+}
+
+BridgeRequestMsgBuilder & BridgeRequestMsgBuilder::set_shadow_node_identity(
+  const std::optional<std::pair<std::string, std::string>> & shadow_node_identity)
+{
+  std::visit(
+    [this, &shadow_node_identity](auto && msg) {
+      msg.srv_target.create_shadow_node = shadow_node_identity.has_value();
+
+      const char * shadow_node_namespace =
+        shadow_node_identity.has_value() ? shadow_node_identity->first.c_str() : "";
+      const char * shadow_node_name =
+        shadow_node_identity.has_value() ? shadow_node_identity->second.c_str() : "";
+
+      this->checked_snprintf(
+        "shadow_node_namespace", static_cast<char *>(msg.srv_target.shadow_node_namespace),
+        NODE_NAME_BUFFER_SIZE, "%s", shadow_node_namespace);
+      this->checked_snprintf(
+        "shadow_node_name", static_cast<char *>(msg.srv_target.shadow_node_name),
+        NODE_NAME_BUFFER_SIZE, "%s", shadow_node_name);
+    },
+    msg_);
+  return *this;
+}
+
+std::pair<MqMsgBridge, std::string> BridgeRequestMsgBuilder::build_standard_message()
+{
+  assert(std::holds_alternative<MqMsgBridge>(msg_));
+
+  auto & msg = std::get<MqMsgBridge>(msg_);
+  return {msg, failed_ ? std::move(reason_) : std::string{}};
+}
+
+std::pair<MqMsgPerformanceBridge, std::string> BridgeRequestMsgBuilder::build_performance_message()
+{
+  assert(std::holds_alternative<MqMsgPerformanceBridge>(msg_));
+
+  auto & msg = std::get<MqMsgPerformanceBridge>(msg_);
+  return {msg, failed_ ? std::move(reason_) : std::string{}};
+}
+
+}  // namespace agnocast

@@ -1,0 +1,188 @@
+// Copyright 2022 TIER IV, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef AUTOWARE__OBJECT_RECOGNITION_UTILS__TRANSFORM_HPP_
+#define AUTOWARE__OBJECT_RECOGNITION_UTILS__TRANSFORM_HPP_
+
+#include <pcl_ros/transforms.hpp>
+#include <rclcpp/duration.hpp>
+#include <rclcpp/logging.hpp>
+#include <rclcpp/time.hpp>
+#include <tf2/exceptions.hpp>
+#include <tf2_eigen/tf2_eigen.hpp>
+
+#include <geometry_msgs/msg/transform.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/point_field.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
+#include <boost/optional.hpp>
+
+#include <string>
+
+namespace autoware::object_recognition_utils
+{
+namespace detail
+{
+template <class BufferT>
+[[maybe_unused]] boost::optional<geometry_msgs::msg::Transform> getTransform(
+  const BufferT & tf_buffer, const std::string & source_frame_id,
+  const std::string & target_frame_id, const rclcpp::Time & time)
+{
+  try {
+    geometry_msgs::msg::TransformStamped self_transform_stamped;
+    self_transform_stamped = tf_buffer.lookupTransform(
+      target_frame_id, source_frame_id, time, rclcpp::Duration::from_seconds(0.5));
+    return self_transform_stamped.transform;
+  } catch (tf2::TransformException & ex) {
+    RCLCPP_WARN_STREAM(rclcpp::get_logger("object_recognition_utils"), ex.what());
+    return boost::none;
+  }
+}
+
+template <class BufferT>
+[[maybe_unused]] boost::optional<Eigen::Matrix4f> getTransformMatrix(
+  const std::string & in_target_frame, const std_msgs::msg::Header & in_cloud_header,
+  const BufferT & tf_buffer)
+{
+  try {
+    geometry_msgs::msg::TransformStamped transform_stamped;
+    transform_stamped = tf_buffer.lookupTransform(
+      in_target_frame, in_cloud_header.frame_id, in_cloud_header.stamp,
+      rclcpp::Duration::from_seconds(1.0));
+    Eigen::Matrix4f mat = tf2::transformToEigen(transform_stamped.transform).matrix().cast<float>();
+    return mat;
+  } catch (tf2::TransformException & e) {
+    RCLCPP_WARN_STREAM(rclcpp::get_logger("detail::getTransformMatrix"), e.what());
+    return boost::none;
+  }
+}
+
+/// \brief Apply a resolved frame transform to every object in \p input_msg, writing the
+///        result into \p output_msg.
+/// \details Pure math: composes the per-object pose with \p tf_target2objects_world and rotates
+///          the pose covariance by the same transform. No TF buffer lookup happens here, so it is
+///          unit-testable with a hand-built transform.
+template <class T>
+void applyTransformToObjects(
+  const T & input_msg, const std::string & target_frame_id,
+  const tf2::Transform & tf_target2objects_world, T & output_msg)
+{
+  output_msg = input_msg;
+  output_msg.header.frame_id = target_frame_id;
+  for (auto & object : output_msg.objects) {
+    tf2::Transform tf_objects_world2objects;
+    auto & pose_with_cov = object.kinematics.pose_with_covariance;
+    tf2::fromMsg(pose_with_cov.pose, tf_objects_world2objects);
+    tf2::Transform tf_target2objects = tf_target2objects_world * tf_objects_world2objects;
+    // transform pose, frame difference and object pose
+    tf2::toMsg(tf_target2objects, pose_with_cov.pose);
+    // transform covariance, only the frame difference
+    pose_with_cov.covariance =
+      tf2::transformCovariance(pose_with_cov.covariance, tf_target2objects_world);
+  }
+}
+
+/// \brief Apply resolved frame transforms to every feature object in \p input_msg, writing the
+///        result into \p output_msg.
+/// \details Pure math: composes the per-object pose with \p tf_target2objects_world and transforms
+///          each cluster point cloud by \p tf_matrix. No TF buffer lookup happens here, so it is
+///          unit-testable with a hand-built transform.
+template <class T>
+void applyTransformToFeatureObjects(
+  const T & input_msg, const std::string & target_frame_id,
+  const tf2::Transform & tf_target2objects_world, const Eigen::Matrix4f & tf_matrix, T & output_msg)
+{
+  output_msg = input_msg;
+  output_msg.header.frame_id = target_frame_id;
+  for (auto & feature_object : output_msg.feature_objects) {
+    tf2::Transform tf_objects_world2objects;
+    // transform object
+    tf2::fromMsg(
+      feature_object.object.kinematics.pose_with_covariance.pose, tf_objects_world2objects);
+    tf2::Transform tf_target2objects = tf_target2objects_world * tf_objects_world2objects;
+    tf2::toMsg(tf_target2objects, feature_object.object.kinematics.pose_with_covariance.pose);
+
+    // transform cluster
+    sensor_msgs::msg::PointCloud2 transformed_cluster;
+    pcl_ros::transformPointCloud(tf_matrix, feature_object.feature.cluster, transformed_cluster);
+    transformed_cluster.header.frame_id = target_frame_id;
+    feature_object.feature.cluster = transformed_cluster;
+  }
+}
+}  // namespace detail
+
+template <class T, class BufferT>
+bool transformObjects(
+  const T & input_msg, const std::string & target_frame_id, const BufferT & tf_buffer,
+  T & output_msg)
+{
+  output_msg = input_msg;
+
+  // transform to world coordinate
+  if (input_msg.header.frame_id != target_frame_id) {
+    // Set the target frame on the output up front, so a failed lookup still reports the requested
+    // frame on the (otherwise unused) output message, matching the original behavior.
+    output_msg.header.frame_id = target_frame_id;
+    tf2::Transform tf_target2objects_world;
+    {
+      const auto ros_target2objects_world = detail::getTransform(
+        tf_buffer, input_msg.header.frame_id, target_frame_id, input_msg.header.stamp);
+      if (!ros_target2objects_world) {
+        return false;
+      }
+      tf2::fromMsg(*ros_target2objects_world, tf_target2objects_world);
+    }
+    // Pass output_msg (already a copy of input_msg) as the helper input to avoid a second deep
+    // copy. The transform is applied in-place per object, so input == output aliasing is safe.
+    detail::applyTransformToObjects(
+      output_msg, target_frame_id, tf_target2objects_world, output_msg);
+  }
+  return true;
+}
+template <class T, class BufferT>
+bool transformObjectsWithFeature(
+  const T & input_msg, const std::string & target_frame_id, const BufferT & tf_buffer,
+  T & output_msg)
+{
+  output_msg = input_msg;
+  if (input_msg.header.frame_id != target_frame_id) {
+    // Set the target frame on the output up front, so a failed lookup still reports the requested
+    // frame on the (otherwise unused) output message, matching the original behavior.
+    output_msg.header.frame_id = target_frame_id;
+    tf2::Transform tf_target2objects_world;
+    const auto ros_target2objects_world = detail::getTransform(
+      tf_buffer, input_msg.header.frame_id, target_frame_id, input_msg.header.stamp);
+    if (!ros_target2objects_world) {
+      return false;
+    }
+    tf2::fromMsg(*ros_target2objects_world, tf_target2objects_world);
+    const auto tf_matrix = detail::getTransformMatrix(target_frame_id, input_msg.header, tf_buffer);
+    if (!tf_matrix) {
+      RCLCPP_WARN(
+        rclcpp::get_logger("object_recognition_utils:"), "failed to get transformed matrix");
+      return false;
+    }
+    // Pass output_msg (already a copy of input_msg) as the helper input to avoid a second deep
+    // copy of the (potentially large) feature point clouds. The transform is applied in-place per
+    // feature object, so input == output aliasing is safe.
+    detail::applyTransformToFeatureObjects(
+      output_msg, target_frame_id, tf_target2objects_world, *tf_matrix, output_msg);
+  }
+  return true;
+}
+}  // namespace autoware::object_recognition_utils
+
+#endif  // AUTOWARE__OBJECT_RECOGNITION_UTILS__TRANSFORM_HPP_

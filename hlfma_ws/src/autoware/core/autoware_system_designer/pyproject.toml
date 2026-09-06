@@ -1,0 +1,27 @@
+# This pyproject.toml is a wrapper for the linter.
+# The main project configuration is located in autoware_system_designer/pyproject.toml.
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoware_system_designer"
+version = "0.4.1"
+dynamic = ["dependencies"]
+requires-python = ">=3.8"
+
+[project.scripts]
+autoware-system-designer-lint = "autoware_system_designer.linter.run_lint:main"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["autoware_system_designer/requirements.txt"]}
+
+[tool.setuptools.packages.find]
+where = ["autoware_system_designer"]
+include = ["autoware_system_designer*"]
+
+[tool.setuptools.package-data]
+autoware_system_designer = [
+    "schema/**/*.json",
+]

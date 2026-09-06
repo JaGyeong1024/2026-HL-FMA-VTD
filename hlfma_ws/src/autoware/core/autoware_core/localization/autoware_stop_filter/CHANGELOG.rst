@@ -1,0 +1,106 @@
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Changelog for package autoware_stop_filter
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+1.1.0 (2025-05-01)
+------------------
+
+1.9.0 (2026-06-24)
+------------------
+* Merge remote-tracking branch 'origin/main' into tmp/bot/bump_version_base
+* feat(stop_filter): apply `agnocast_wrapper::Node` to `stop_filter` (`#1195 <https://github.com/autowarefoundation/autoware_core/issues/1195>`_)
+  * apply agnocast_wrapper::Node
+  * style(pre-commit): autofix
+  * fix cpplint
+  ---------
+  Co-authored-by: pre-commit-ci[bot] <66853113+pre-commit-ci[bot]@users.noreply.github.com>
+* refactor(stop_filter): unify core logic to message conversion (`#1188 <https://github.com/autowarefoundation/autoware_core/issues/1188>`_)
+  * refactor(stop_filter): unify StopFilter to message-to-message conversion
+  Move StopFilterProcessor from stop_filter_node into stop_filter and rename it
+  to StopFilter, deleting the old pure-logic StopFilter class and the Vector3D /
+  FilterResult structs. The core logic class now converts ROS2 messages directly
+  to ROS2 messages, matching the AccelEstimator pattern in autoware_twist2accel.
+  Unit tests in test_stop_filter.cpp now exercise the message-based StopFilter,
+  while test_stop_filter_node.cpp keeps only the node-level integration test.
+  * test(stop_filter): enable StopFilterNode stop-detection integration test
+  Remove the DISABLED\_ prefix so the node-level pub/sub integration test runs.
+  ---------
+  Co-authored-by: Takahisa.Ishikawa <takahisa.ishikawa@tier4.jp>
+  Co-authored-by: Junya Sasaki <j2sasaki1990@gmail.com>
+* Contributors: Koichi Imai, Takahisa Ishikawa, github-actions
+
+1.8.0 (2026-05-01)
+------------------
+* Merge remote-tracking branch 'origin/main' into tmp/bot/bump_version_base
+* refactor(autoware_core): add USE_SCOPED_HEADER_INSTALL_DIR to localization packages (`#984 <https://github.com/mitsudome-r/autoware_core/issues/984>`_)
+  Co-authored-by: github-actions <github-actions@github.com>
+  Co-authored-by: Junya Sasaki <j2sasaki1990@gmail.com>
+* feat(autoware_stop_filter): adopt cie (`#963 <https://github.com/mitsudome-r/autoware_core/issues/963>`_)
+* Contributors: Tetsuhiro Kawaguchi, Vishal Chauhan, github-actions
+
+1.7.0 (2026-02-14)
+------------------
+
+1.6.0 (2025-12-30)
+------------------
+
+1.5.0 (2025-11-16)
+------------------
+* Merge remote-tracking branch 'origin/main' into humble
+* feat: replace `ament_auto_package` to `autoware_ament_auto_package` (`#700 <https://github.com/autowarefoundation/autoware_core/issues/700>`_)
+  * replace ament_auto_package to autoware_ament_auto_package
+  * style(pre-commit): autofix
+  ---------
+  Co-authored-by: pre-commit-ci[bot] <66853113+pre-commit-ci[bot]@users.noreply.github.com>
+* chore: update maintainer (`#637 <https://github.com/autowarefoundation/autoware_core/issues/637>`_)
+  * chore: update maintainer
+  remove Takeshi Ishita
+  * chore: update maintainer
+  remove Kento Yabuuchi
+  * chore: update maintainer
+  remove Shintaro Sakoda
+  * chore: update maintainer
+  remove Ryu Yamamoto
+  ---------
+* chore: bump version (1.4.0) and update changelog (`#608 <https://github.com/autowarefoundation/autoware_core/issues/608>`_)
+* Contributors: Mete Fatih Cırıt, Motz, Yutaka Kondo, mitsudome-r
+
+1.4.0 (2025-08-11)
+------------------
+* Merge remote-tracking branch 'origin/main' into humble
+* feat(stop_filter): add unit tests to stop filter node (`#573 <https://github.com/autowarefoundation/autoware_core/issues/573>`_)
+  * refactor(stop_filter): rename file name
+  * refactor(stop_filter): rename class
+  * feat(stop_filter): add integration test
+  * style(stop_filter): add unit tests to stop filter
+  * style(pre-commit): autofix
+  * chore(stop_filter): update copyright
+  * chore(stop_filter): move include files
+  * style(pre-commit): autofix
+  * fix(stop_filter): update test configuration to use ament_add_ros_isolated_gtest
+  * chore(stop_filter): fix linter error
+  * chore(stop_filter): fix linter error
+  * chore(stop_filter): update copyright
+  * chore(stop_filter): add author to package.xml
+  ---------
+  Co-authored-by: Takahisa.Ishikawa <takahisa.ishikawa@tier4.jp>
+  Co-authored-by: pre-commit-ci[bot] <66853113+pre-commit-ci[bot]@users.noreply.github.com>
+  Co-authored-by: Junya Sasaki <j2sasaki1990@gmail.com>
+* chore: bump version to 1.3.0 (`#554 <https://github.com/autowarefoundation/autoware_core/issues/554>`_)
+* Contributors: Ryohsuke Mitsudome, Takahisa Ishikawa
+
+1.3.0 (2025-06-23)
+------------------
+* fix: to be consistent version in all package.xml(s)
+* fix: tf2 uses hpp headers in rolling (and is backported) (`#483 <https://github.com/autowarefoundation/autoware_core/issues/483>`_)
+  * tf2 uses hpp headers in rolling (and is backported)
+  * fixup! tf2 uses hpp headers in rolling (and is backported)
+  ---------
+* chore: bump up version to 1.1.0 (`#462 <https://github.com/autowarefoundation/autoware_core/issues/462>`_) (`#464 <https://github.com/autowarefoundation/autoware_core/issues/464>`_)
+* Contributors: Tim Clephas, Yutaka Kondo, github-actions
+
+1.0.0 (2025-03-31)
+------------------
+* chore: update version in package.xml
+* feat(autoware_stop_filter): port autoware_stop_filter from Autoware Universe (`#300 <https://github.com/autowarefoundation/autoware_core/issues/300>`_)
+* Contributors: Ryohsuke Mitsudome

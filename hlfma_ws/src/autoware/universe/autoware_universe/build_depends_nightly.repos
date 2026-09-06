@@ -1,0 +1,22 @@
+# Expected usage: first import build_depends_stable.repos, then import this.
+#
+# Do not add core (core/*) dependency repositories here.
+# Core packages are provided pre-built by the CI Docker image, and their versions
+# are defined by the image tag. Adding them here would cause redundant rebuilds.
+# The only exception is core/autoware_core below, which is frequently co-developed
+# with Universe and pinned to main so unreleased changes can be tested.
+repositories:
+  # core
+  core/autoware_core:
+    type: git
+    url: https://github.com/autowarefoundation/autoware_core.git
+    version: main
+  # universe
+  universe/external/tier4_autoware_msgs:
+    type: git
+    url: https://github.com/tier4/tier4_autoware_msgs.git
+    version: tier4/universe
+  universe/external/managed_transform_buffer:
+    type: git
+    url: https://github.com/autowarefoundation/managed_transform_buffer.git
+    version: main
