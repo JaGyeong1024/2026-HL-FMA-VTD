@@ -22,3 +22,20 @@ echo /opt/acados/lib | sudo tee /etc/ld.so.conf.d/acados.conf
 sudo ldconfig
 ```
 → start_autonomous.sh 는 LD_LIBRARY_PATH env 를 쓰지 않는다(제거됨).
+
+
+## external_request_lane_change_non_preferred.patch
+
+- 대상: `autoware_behavior_path_lane_change_module`의 `get_target_neighbor_lanes`.
+- 재현: 자차가 우선 차로가 아닌 상태에서 외부 요청 우회를 검토하면 기존 함수는
+  자차 차로를 제외한다. `is_lanes_available()`이 false가 되어 후보가 생성되지 않는다.
+  2026-09-06 주행에서 전방 정지차 약 10.9m, 우측 후보 0점과
+  `lane_change.EXTERNAL_REQUEST: lanes are not available` 경고를 관측했다.
+- 변경: `EXTERNAL_REQUEST`에 한해 현재 차로 열을 출발 차로 후보로 유지한다.
+  목표 인접 차로는 기존 라우팅 그래프로 선택하고 경로 유효성·충돌 검사를 거친다.
+  일반 차선변경과 회피 차선변경의 우선 차로 조건은 기존과 같다.
+- 회귀 테스트: 기존 테스트 맵의 우선 차로가 아닌 자차 차로가 외부 요청의
+  출발 차로 목록에 포함되는지 확인한다.
+- 저장소 루트에서 `patch -p1 < patches/external_request_lane_change_non_preferred.patch`
+  적용 후 `hlfma_ws`에서 `colcon build --packages-select autoware_behavior_path_lane_change_module`.
+- 우측 우회 후 좌회전까지의 시뮬레이터 통과 여부는 별도 주행 검증 대상이다.

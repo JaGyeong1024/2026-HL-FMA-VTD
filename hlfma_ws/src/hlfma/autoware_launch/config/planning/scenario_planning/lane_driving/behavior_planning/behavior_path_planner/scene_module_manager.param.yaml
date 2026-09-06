@@ -26,22 +26,22 @@
       - "dynamic_obstacle_avoidance"
 
     external_request_lane_change_left:
-      enable_rtc: false
+      enable_rtc: true
       enable_simultaneous_execution_as_approved_module: false
       enable_simultaneous_execution_as_candidate_module: true
 
     external_request_lane_change_right:
-      enable_rtc: false
+      enable_rtc: true
       enable_simultaneous_execution_as_approved_module: false
       enable_simultaneous_execution_as_candidate_module: true
 
     lane_change_left:
-      enable_rtc: false
+      enable_rtc: true  # blocked_route_detour approves clear route/return candidates
       enable_simultaneous_execution_as_approved_module: true
       enable_simultaneous_execution_as_candidate_module: true
 
     lane_change_right:
-      enable_rtc: false
+      enable_rtc: true  # blocked_route_detour approves clear route/return candidates
       enable_simultaneous_execution_as_approved_module: true
       enable_simultaneous_execution_as_candidate_module: true
 
