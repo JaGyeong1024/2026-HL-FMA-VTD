@@ -19,6 +19,8 @@
   <depend>autoware_perception_msgs</depend>
   <depend>autoware_planning_msgs</depend>
   <depend>autoware_adapi_v1_msgs</depend>
+  <depend>autoware_internal_planning_msgs</depend>
+  <depend>tier4_rtc_msgs</depend>
 
   <export>
     <build_type>ament_python</build_type>
