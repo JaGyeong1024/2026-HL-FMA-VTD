@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HL FMA — 준비: 브리지 + Autoware 기동 (rviz 없음 → 별도 터미널 ./rviz.sh, 출발은 ./start_hlfma.sh)
+# HL FMA — 한 번에 기동+출발: 브리지 + Autoware 기동 후 경로 SET·자율주행 가능 확인 → engage (start_hlfma.sh 호출)
 #
 # usage:
 #   ./start_autonomous.sh                     # 실기: VTD 192.168.50.11 (대회장·연구실 동일 IP)
@@ -7,12 +7,14 @@
 #   ./start_autonomous.sh psim                # Autoware 내장 planning_simulator (브리지 없음, 맵·플래닝만)
 #   ./start_autonomous.sh <host>              # 다른 VTD 호스트
 #
-#   순서:  터미널1 ./start_autonomous.sh  →  (터미널2 ./rviz.sh 로 경로 확인)  →  터미널3 ./start_hlfma.sh
+#   기본 흐름:  터미널1 ./start_autonomous.sh  (기동 → 경로 SET → engage 까지 자동. rviz 는 별도 터미널 ./rviz.sh)
+#   수동 출발:  ENGAGE=false ./start_autonomous.sh  →  확인 후 터미널2 ./start_hlfma.sh
 #
 # 환경변수 (선택):
+#   ENGAGE=false                   기동만 하고 출발(engage)은 사람이 ./start_hlfma.sh 로 (기본 true)
 #   ROUTE_CSV=/path/to/route.csv   경로 자동 주입 (route_node). 기본: $HOME/hlfma/route/route_config.yaml 의 csv_path
 #   ROUTE_CSV=none                 경로 주입 안 함 (rviz 2D Goal Pose 수동)
-#   AUTO_ENGAGE=true               경로 SET 후 자율주행 전환 자동 (기본 false: 사람이 확인 후 engage)
+#   AUTO_ENGAGE=true               (구) route_node 가 SET 직후 즉시 engage. 자율주행 가능 여부를 안 기다리므로 기본 false 유지
 #
 # 종료: Ctrl+C (브리지도 같이 종료)
 #
@@ -103,6 +105,7 @@ ROUTE_CSV=$ROUTE_CSV
 BRIDGE_LOG=$BRIDGE_LOG
 AW_LOG=$AW_LOG
 ROS_LOG_DIR=$ROS_LOG_DIR
+ENGAGE=${ENGAGE:-true}
 GIT_REV=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null)
 EOF
 ros2 launch vtd_autoware_bridge bridge.launch.xml \
@@ -128,4 +131,13 @@ ros2 launch autoware_launch autoware.launch.xml \
   is_simulation:=true > >(tee -i "$AW_LOG") 2>&1 &
 AW_PID=$!
 echo "[autoware] log=$AW_LOG  ros_log_dir=$ROS_LOG_DIR"
+
+# 출발: 경로 SET → 자율주행 가능 → engage. 실패하면 로그에 남고 Autoware 는 계속 떠 있음(수동 ./start_hlfma.sh 가능)
+if [ "${ENGAGE:-true}" != "false" ]; then
+  ENGAGE_LOG="$HOME/hlfma/logs/engage_${RUN_TS}.log"
+  ( "$ROOT/start_hlfma.sh" 2>&1 | tee "$ENGAGE_LOG" ) &
+  echo "[engage] 자동 출발 대기 중 (log=$ENGAGE_LOG). 취소: ENGAGE=false 로 재기동"
+else
+  echo "[engage] ENGAGE=false — 출발은 ./start_hlfma.sh 로"
+fi
 wait "$AW_PID"

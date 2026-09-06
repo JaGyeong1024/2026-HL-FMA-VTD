@@ -1,18 +1,16 @@
 # 실행 순서 (제어기 PC)
 
-## 준비 (터미널 1)
+## 기동 + 출발 (터미널 1) — 한 번에
 cd ~/2026-HL-FMA-VTD
-./start_autonomous.sh              # 브리지 + Autoware, route_config.yaml 의 CSV 자동 주입 (rviz 없음)
-#   로그: tail -f ~/hlfma/logs/bridge_latest.log   → "경로 설정 성공" 확인
+./start_autonomous.sh              # 브리지 + Autoware 기동 → route_config.yaml 의 CSV 주입 → 경로 SET → 자율주행 가능 → engage
+#   로그: tail -f ~/hlfma/logs/bridge_latest.log   → "경로 설정 성공" / engage 결과는 ~/hlfma/logs/engage_<시각>.log
+#   기동만: ENGAGE=false ./start_autonomous.sh
 
 ## rviz (선택, 터미널 2 — 제어기 화면에서, ssh 불가)
 ./rviz.sh
 
-## 시작 (터미널 3, 운영측 Start 후)
-./start_hlfma.sh                   # 경로 SET 확인 → 자율주행 전환
-
-## 자동 시작 (준비와 동시에 engage)
-AUTO_ENGAGE=true ./start_autonomous.sh
+## 수동 출발 (ENGAGE=false 로 기동했을 때, 터미널 3)
+./start_hlfma.sh                   # 경로 SET 확인 → 자율주행 가능 대기 → 전환
 
 ## 경로 CSV 교체
 cp <받은파일>.csv ~/hlfma/route/
