@@ -1,0 +1,49 @@
+#include "agnocast/node/agnocast_only_single_threaded_executor.hpp"
+
+#include "agnocast/agnocast.hpp"
+
+namespace agnocast
+{
+
+AgnocastOnlySingleThreadedExecutor::AgnocastOnlySingleThreadedExecutor(int next_exec_timeout_ms)
+: next_exec_timeout_ms_(next_exec_timeout_ms)
+{
+  const int next_exec_timeout_ms_threshold = 500;  // Rough value
+  if (next_exec_timeout_ms_ > next_exec_timeout_ms_threshold) {
+    RCLCPP_WARN(
+      logger,
+      "Due to the large next_exec_timeout_ms value, the callbacks registered after spin and ROS 2 "
+      "callbacks may be extremely slow to execute.");
+  }
+
+  TRACEPOINT(
+    agnocast_construct_executor, static_cast<const void *>(this),
+    "agnocast_only_single_threaded_executor");
+}
+
+void AgnocastOnlySingleThreadedExecutor::spin()
+{
+  if (spinning_.exchange(true)) {
+    RCLCPP_ERROR(logger, "spin() called while already spinning");
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+
+  RCPPUTILS_SCOPE_EXIT(this->spinning_.store(false););
+
+  while (spinning_.load() && !cancel_requested_.load() && agnocast::ok()) {
+    if (epoll_update_tracker_.take_update_request()) {
+      add_callback_groups_from_nodes_associated_to_executor();
+      epoll_manager_->prepare_epoll([this](const rclcpp::CallbackGroup::SharedPtr & group) {
+        return is_callback_group_associated(group);
+      });
+    }
+
+    agnocast::AgnocastExecutable agnocast_executable;
+    if (get_next_agnocast_executable(agnocast_executable, next_exec_timeout_ms_)) {
+      execute_agnocast_executable(agnocast_executable);
+    }
+  }
+}
+
+}  // namespace agnocast

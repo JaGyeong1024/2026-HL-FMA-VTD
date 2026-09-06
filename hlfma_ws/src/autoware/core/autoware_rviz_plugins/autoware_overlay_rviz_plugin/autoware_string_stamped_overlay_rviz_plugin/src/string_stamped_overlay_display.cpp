@@ -1,0 +1,204 @@
+// Copyright 2024 TIER IV, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "string_stamped_overlay_display.hpp"
+
+#include <QPainter>
+#include <rviz_2d_overlay_plugins/overlay_utils.hpp>
+#include <rviz_common/uniform_string_stream.hpp>
+
+#include <X11/Xlib.h>
+
+#include <algorithm>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace autoware::string_stamped_rviz_plugin
+{
+StringStampedOverlayDisplay::StringStampedOverlayDisplay()
+{
+  const Screen * screen_info = DefaultScreenOfDisplay(XOpenDisplay(NULL));
+
+  constexpr float hight_4k = 2160.0;
+  const float scale = static_cast<float>(screen_info->height) / hight_4k;
+  const auto left = static_cast<int>(std::round(1024 * scale));
+  const auto top = static_cast<int>(std::round(128 * scale));
+
+  property_text_color_ = new rviz_common::properties::ColorProperty(
+    "Text Color", QColor(25, 255, 240), "text color", this, SLOT(updateVisualization()), this);
+  property_left_ = new rviz_common::properties::IntProperty(
+    "Left", left, "Left of the plotter window", this, SLOT(updateVisualization()), this);
+  property_left_->setMin(0);
+  property_top_ = new rviz_common::properties::IntProperty(
+    "Top", top, "Top of the plotter window", this, SLOT(updateVisualization()));
+  property_top_->setMin(0);
+
+  property_value_height_offset_ = new rviz_common::properties::IntProperty(
+    "Value height offset", 0, "Height offset of the plotter window", this,
+    SLOT(updateVisualization()));
+  property_font_size_ = new rviz_common::properties::IntProperty(
+    "Font Size", 15, "Font Size", this, SLOT(updateVisualization()), this);
+  property_font_size_->setMin(1);
+  property_max_letter_num_ = new rviz_common::properties::IntProperty(
+    "Max Letter Num", 100, "Max Letter Num", this, SLOT(updateVisualization()), this);
+  property_max_letter_num_->setMin(10);
+
+  property_last_diag_keep_time_ = new rviz_common::properties::FloatProperty(
+    "Time To Keep Last Diag", 1.0, "Time To Keep Last Diag", this, SLOT(updateVisualization()),
+    this);
+  property_last_diag_keep_time_->setMin(0);
+
+  property_last_diag_erase_time_ = new rviz_common::properties::FloatProperty(
+    "Time To Erase Last Diag", 2.0, "Time To Erase Last Diag", this, SLOT(updateVisualization()),
+    this);
+  property_last_diag_erase_time_->setMin(0.001);
+}
+
+StringStampedOverlayDisplay::~StringStampedOverlayDisplay()
+{
+  if (initialized()) {
+    overlay_->hide();
+  }
+}
+
+void StringStampedOverlayDisplay::onInitialize()
+{
+  RTDClass::onInitialize();
+
+  static int count = 0;
+  rviz_common::UniformStringStream ss;
+  ss << "StringOverlayDisplayObject" << count++;
+  auto logger = context_->getRosNodeAbstraction().lock()->get_raw_node()->get_logger();
+  overlay_.reset(new rviz_2d_overlay_plugins::OverlayObject(ss.str()));
+
+  overlay_->show();
+
+  const int texture_size = property_font_size_->getInt() * property_max_letter_num_->getInt();
+  overlay_->updateTextureSize(texture_size, texture_size);
+  overlay_->setPosition(property_left_->getInt(), property_top_->getInt());
+  overlay_->setDimensions(overlay_->getTextureWidth(), overlay_->getTextureHeight());
+}
+
+void StringStampedOverlayDisplay::onEnable()
+{
+  subscribe();
+  overlay_->show();
+}
+
+void StringStampedOverlayDisplay::onDisable()
+{
+  unsubscribe();
+  reset();
+  overlay_->hide();
+}
+
+void StringStampedOverlayDisplay::update(float wall_dt, float ros_dt)
+{
+  (void)wall_dt;
+  (void)ros_dt;
+
+  {
+    std::lock_guard<std::mutex> message_lock(mutex_);
+    if (!last_non_empty_msg_ptr_) {
+      return;
+    }
+  }
+
+  // calculate text and alpha
+  const auto text_with_alpha = [&]() {
+    std::lock_guard<std::mutex> message_lock(mutex_);
+    if (last_msg_text_.empty()) {
+      const auto current_time = context_->getRosNodeAbstraction().lock()->get_raw_node()->now();
+      const auto duration = (current_time - last_non_empty_msg_ptr_->stamp).seconds();
+      if (
+        duration <
+          property_last_diag_keep_time_->getFloat() + property_last_diag_erase_time_->getFloat() &&
+        duration > 0.0) {
+        const int dynamic_alpha = static_cast<int>(std::max(
+          (1.0 - std::max(duration - property_last_diag_keep_time_->getFloat(), 0.0) /
+                   property_last_diag_erase_time_->getFloat()) *
+            255,
+          0.0));
+        return std::make_pair(last_non_empty_msg_ptr_->data, dynamic_alpha);
+      }
+    }
+    return std::make_pair(last_msg_text_, 255);
+  }();
+
+  // Display
+  QColor background_color;
+  background_color.setAlpha(0);
+  rviz_2d_overlay_plugins::ScopedPixelBuffer buffer = overlay_->getBuffer();
+  QImage hud = buffer.getQImage(*overlay_);
+  hud.fill(background_color);
+
+  QPainter painter(&hud);
+  painter.setRenderHint(QPainter::Antialiasing, true);
+
+  const int w = overlay_->getTextureWidth() - line_width_;
+  const int h = overlay_->getTextureHeight() - line_width_;
+
+  // text
+  QColor text_color(property_text_color_->getColor());
+  text_color.setAlpha(text_with_alpha.second);
+  painter.setPen(QPen(text_color, static_cast<int>(2), Qt::SolidLine));
+  QFont font = painter.font();
+  font.setPixelSize(property_font_size_->getInt());
+  font.setBold(true);
+  painter.setFont(font);
+
+  // same as above, but align on right side
+  painter.drawText(
+    0, std::min(property_value_height_offset_->getInt(), h - 1), w,
+    std::max(h - property_value_height_offset_->getInt(), 1), Qt::AlignLeft | Qt::AlignTop,
+    text_with_alpha.first.c_str());
+  painter.end();
+  updateVisualization();
+}
+
+void StringStampedOverlayDisplay::processMessage(
+  const autoware_internal_debug_msgs::msg::StringStamped::ConstSharedPtr msg_ptr)
+{
+  if (!isEnabled()) {
+    return;
+  }
+
+  {
+    std::lock_guard<std::mutex> message_lock(mutex_);
+    last_msg_text_ = msg_ptr->data;
+
+    // keep the non empty last message for visualization
+    if (!msg_ptr->data.empty()) {
+      last_non_empty_msg_ptr_ = msg_ptr;
+    }
+  }
+
+  queueRender();
+}
+
+void StringStampedOverlayDisplay::updateVisualization()
+{
+  const int texture_size = property_font_size_->getInt() * property_max_letter_num_->getInt();
+  overlay_->updateTextureSize(texture_size, texture_size);
+  overlay_->setPosition(property_left_->getInt(), property_top_->getInt());
+  overlay_->setDimensions(overlay_->getTextureWidth(), overlay_->getTextureHeight());
+}
+
+}  // namespace autoware::string_stamped_rviz_plugin
+
+#include <pluginlib/class_list_macros.hpp>
+PLUGINLIB_EXPORT_CLASS(
+  autoware::string_stamped_rviz_plugin::StringStampedOverlayDisplay, rviz_common::Display)

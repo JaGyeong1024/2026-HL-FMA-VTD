@@ -1,0 +1,58 @@
+autoware_system_design_format: 0.3.0
+
+name: RadarDummy.module
+
+instances:
+  - name: radar_front_center
+    entity: RadarDummyDriver.node
+  - name: radar_front_left
+    entity: RadarDummyDriver.node
+  - name: radar_front_right
+    entity: RadarDummyDriver.node
+  - name: radar_rear_center
+    entity: RadarDummyDriver.node
+  - name: radar_rear_left
+    entity: RadarDummyDriver.node
+  - name: radar_rear_right
+    entity: RadarDummyDriver.node
+
+  - name: simple_object_merger
+    entity: DetectedObjectMergerDummy6.node
+  - name: simple_tracked_object_merger
+    entity: TrackedObjectMergerDummy6.node
+
+subscribers: []
+publishers:
+  - name: detected_objects
+  - name: tracked_objects
+
+connections:
+  - - radar_front_center.publisher.detected_objects
+    - simple_object_merger.subscriber.object1
+  - - radar_front_left.publisher.detected_objects
+    - simple_object_merger.subscriber.object2
+  - - radar_front_right.publisher.detected_objects
+    - simple_object_merger.subscriber.object3
+  - - radar_rear_center.publisher.detected_objects
+    - simple_object_merger.subscriber.object4
+  - - radar_rear_left.publisher.detected_objects
+    - simple_object_merger.subscriber.object5
+  - - radar_rear_right.publisher.detected_objects
+    - simple_object_merger.subscriber.object6
+  - - simple_object_merger.publisher.merged_object
+    - publisher.detected_objects
+
+  - - radar_front_center.publisher.tracked_objects
+    - simple_tracked_object_merger.subscriber.object1
+  - - radar_front_left.publisher.tracked_objects
+    - simple_tracked_object_merger.subscriber.object2
+  - - radar_front_right.publisher.tracked_objects
+    - simple_tracked_object_merger.subscriber.object3
+  - - radar_rear_center.publisher.tracked_objects
+    - simple_tracked_object_merger.subscriber.object4
+  - - radar_rear_left.publisher.tracked_objects
+    - simple_tracked_object_merger.subscriber.object5
+  - - radar_rear_right.publisher.tracked_objects
+    - simple_tracked_object_merger.subscriber.object6
+  - - simple_tracked_object_merger.publisher.merged_object
+    - publisher.tracked_objects

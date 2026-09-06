@@ -1,0 +1,21 @@
+autoware_system_design_format: 0.3.0
+
+name: TrafficLightRecognitionDummy.module
+
+instances:
+  - name: classification
+    entity: TrafficLightRecognitionDummy.node
+
+subscribers: []
+publishers:
+  - name: classification/car/traffic_signals
+  - name: classification/pedestrian/traffic_signals
+  - name: detection/rois
+
+connections:
+  - - publisher.classification/car/traffic_signals
+    - classification.publisher.traffic_signal_car
+  - - classification.publisher.traffic_signal_pedestrian
+    - publisher.classification/pedestrian/traffic_signals
+  - - classification.publisher.traffic_signal_rois
+    - publisher.detection/rois

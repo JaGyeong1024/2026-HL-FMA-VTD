@@ -12,7 +12,7 @@ __pycache__/
 *.pyc
 
 # hlfma_ws: 업스트림 소스는 hlfma.repos로 재현 (vcs import), 빌드 산출물 제외
-hlfma_ws/src/autoware/
+# hlfma_ws/src/autoware/
 hlfma_ws/build/
 hlfma_ws/install/
 hlfma_ws/log/

@@ -1,0 +1,196 @@
+#include "agnocast/agnocast_publisher.hpp"
+
+#include "agnocast/internal/type_registry_writer.hpp"
+#include "agnocast/node/agnocast_node.hpp"
+
+#include <sys/types.h>
+
+#include <array>
+
+namespace agnocast
+{
+
+// Keep the initial-exec TLS model here: it avoids the following infinite recursion that causes a
+// SIGSEGV:
+// 1. heaphook malloc() is called.
+// 2. agnocast_get_borrowed_publisher_num() is called and accesses a thread_local variable.
+// 3. __tls_get_addr() is called to resolve the address.
+// 4. _dl_resize_dtv() is called to resize the DTV region. This occurs when new .so libraries are
+//    loaded via dlopen() and the number of managed TLS variables increases.
+// 5. _dl_resize_dtv() calls malloc(), which loops back to step 1.
+__attribute__((tls_model("initial-exec"))) thread_local uint32_t borrowed_publisher_num = 0;
+
+extern "C" uint32_t agnocast_get_borrowed_publisher_num()
+{
+  return borrowed_publisher_num;
+}
+
+void increment_borrowed_publisher_num()
+{
+  borrowed_publisher_num++;
+}
+
+void decrement_borrowed_publisher_num()
+{
+  if (borrowed_publisher_num == 0) {
+    RCLCPP_ERROR(
+      logger,
+      "The number of publish() called exceeds the number of borrow_loaned_message() called.");
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+  borrowed_publisher_num--;
+}
+
+topic_local_id_t initialize_publisher(
+  const std::string & topic_name, const std::string & node_name, const rclcpp::QoS & qos,
+  const bool is_bridge, const std::string & type_name)
+{
+  validate_ld_preload();
+
+  // Announce to the per-IPC-namespace discovery agent before the kmod call so
+  // the registry line is in place whenever a later snapshot sees the
+  // ioctl-side endpoint. Empty `type_name` (e.g. service types) skips this.
+  if (!type_name.empty()) {
+    internal::TypeRegistryWriter::instance().register_type(topic_name, type_name, "pub", node_name);
+  }
+
+  union ioctl_add_publisher_args pub_args = {};
+  pub_args.topic_name = {topic_name.c_str(), topic_name.size()};
+  pub_args.node_name = {node_name.c_str(), node_name.size()};
+  pub_args.qos_depth = qos.depth();
+  pub_args.qos_is_transient_local = qos.durability() == rclcpp::DurabilityPolicy::TransientLocal;
+  pub_args.is_bridge = is_bridge;
+  if (ioctl(agnocast_fd, AGNOCAST_ADD_PUBLISHER_CMD, &pub_args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_ADD_PUBLISHER_CMD failed: %s", strerror(errno));
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+
+  return pub_args.ret_id;
+}
+
+union ioctl_publish_msg_args publish_core(
+  [[maybe_unused]] const void * publisher_handle /* for CARET */, const std::string & topic_name,
+  const topic_local_id_t publisher_id, const uint64_t msg_virtual_address,
+  std::unordered_map<topic_local_id_t, std::tuple<mqd_t, bool>> & opened_mqs)
+{
+  std::array<topic_local_id_t, MAX_SUBSCRIBER_NUM> subscriber_ids_buffer{};
+
+  union ioctl_publish_msg_args publish_msg_args = {};
+  publish_msg_args.topic_name = {topic_name.c_str(), topic_name.size()};
+  publish_msg_args.publisher_id = publisher_id;
+  publish_msg_args.msg_virtual_address = msg_virtual_address;
+  // The kernel writes subscriber IDs directly to this buffer via copy_to_user,
+  // unlike ret_* fields which are copied back through the union.
+  publish_msg_args.subscriber_ids_buffer_addr =
+    reinterpret_cast<uint64_t>(subscriber_ids_buffer.data());
+  publish_msg_args.subscriber_ids_buffer_size = MAX_SUBSCRIBER_NUM;
+
+  if (ioctl(agnocast_fd, AGNOCAST_PUBLISH_MSG_CMD, &publish_msg_args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_PUBLISH_MSG_CMD failed: %s", strerror(errno));
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+
+  TRACEPOINT(agnocast_publish, publisher_handle, publish_msg_args.ret_entry_id);
+
+  for (uint32_t i = 0; i < publish_msg_args.ret_subscriber_num; i++) {
+    const topic_local_id_t subscriber_id = subscriber_ids_buffer[i];
+    mqd_t mq = 0;
+    if (opened_mqs.find(subscriber_id) != opened_mqs.end()) {
+      std::tuple<mqd_t, bool> & t = opened_mqs[subscriber_id];
+      mq = std::get<0>(t);
+      // The boolean in the tuple indicates whether the mq is used in this publication round.
+      // An unused mq means that its corresponding subscribers have exited, so we close such mqs
+      // later.
+      std::get<1>(t) = true;
+    } else {
+      const std::string mq_name = create_mq_name_for_agnocast_publish(topic_name, subscriber_id);
+      mq = mq_open(mq_name.c_str(), O_WRONLY | O_NONBLOCK);
+      if (mq == -1) {
+        // Right after a subscriber is added, its message queue has not been created yet. Therefore,
+        // the `mq_open` call above might fail. In that case, we just continue.
+        RCLCPP_DEBUG_STREAM(
+          logger, "mq_open failed for topic '" << topic_name << "' (subscriber_id=" << subscriber_id
+                                               << ", mq_name='" << mq_name
+                                               << "'): " << strerror(errno));
+        continue;
+      }
+      opened_mqs.insert({subscriber_id, {mq, true}});
+    }
+
+    struct MqMsgAgnocast mq_msg = {};
+    // Although the size of the struct is 1, we deliberately send a zero-length message
+    if (mq_send(mq, reinterpret_cast<char *>(&mq_msg), 0 /*msg_len*/, 0) == -1) {
+      // If it returns EAGAIN, it means mq_send has already been executed, but the subscriber
+      // hasn't received it yet. Thus, there's no need to send it again since the notification has
+      // already been sent.
+      if (errno != EAGAIN) {
+        RCLCPP_ERROR_STREAM(
+          logger, "mq_send failed for topic '" << topic_name << "' (subscriber_id=" << subscriber_id
+                                               << "): " << strerror(errno));
+      }
+    }
+  }
+
+  // Close mqs that are no longer needed and update `opened_mqs`
+  for (auto it = opened_mqs.begin(); it != opened_mqs.end();) {
+    bool & keep = std::get<1>(it->second);
+    if (!keep) {
+      mqd_t mq = std::get<0>(it->second);
+      if (mq_close(mq) == -1) {
+        RCLCPP_ERROR_STREAM(
+          logger, "mq_close failed for topic '" << topic_name << "' (subscriber_id=" << it->first
+                                                << "): " << strerror(errno));
+      }
+      it = opened_mqs.erase(it);
+    } else {
+      // Update the value for the next publication round
+      keep = false;
+      ++it;
+    }
+  }
+
+  return publish_msg_args;
+}
+
+uint32_t get_subscription_count_core(const std::string & topic_name)
+{
+  union ioctl_get_subscriber_num_args args = {};
+  args.topic_name = {topic_name.c_str(), topic_name.size()};
+  if (ioctl(agnocast_fd, AGNOCAST_GET_SUBSCRIBER_NUM_CMD, &args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_GET_SUBSCRIBER_NUM_CMD failed: %s", strerror(errno));
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+
+  uint32_t inter_count = args.ret_other_process_subscriber_num;
+  // If an A2R bridge exists, exclude the agnocast subscriber created by the bridge
+  if (args.ret_a2r_bridge_exist && inter_count > 0) {
+    inter_count--;
+  }
+
+  uint32_t ros2_count = args.ret_ros2_subscriber_num;
+  // If an R2A bridge exists, exclude the ROS 2 subscriber created by the bridge
+  if (args.ret_r2a_bridge_exist && ros2_count > 0) {
+    ros2_count--;
+  }
+
+  return inter_count + ros2_count;
+}
+
+uint32_t get_intra_subscription_count_core(const std::string & topic_name)
+{
+  union ioctl_get_subscriber_num_args get_subscriber_count_args = {};
+  get_subscriber_count_args.topic_name = {topic_name.c_str(), topic_name.size()};
+  if (ioctl(agnocast_fd, AGNOCAST_GET_SUBSCRIBER_NUM_CMD, &get_subscriber_count_args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_GET_SUBSCRIBER_NUM_CMD failed: %s", strerror(errno));
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+
+  return get_subscriber_count_args.ret_same_process_subscriber_num;
+}
+
+}  // namespace agnocast

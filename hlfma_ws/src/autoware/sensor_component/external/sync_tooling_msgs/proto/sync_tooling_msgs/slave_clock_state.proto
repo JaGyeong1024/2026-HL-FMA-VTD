@@ -1,0 +1,30 @@
+// Copyright 2025 TIER IV, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+import "sync_tooling_msgs/servo_state.proto";
+
+// The state of a slave clock in PHC2SYS, including timing information as reported by PHC2SYS.
+message SlaveClockState {
+    // The state of the clock servo
+    ServoState servo_state = 1;
+    // The offset of the clock from the source clock in nanoseconds, i.e. time(src) - time(dst)
+    int64 offset_ns = 2;
+    // The delay between reading the source clock time and writing it to the destination clock
+    // Although nonsensical, PTP4L reports this as negative in some cases
+    int64 delay_ns = 3;
+    // The frequency offset of the clock from the source clock in parts per billion
+    int64 frequency_offset_ppb = 4;
+}

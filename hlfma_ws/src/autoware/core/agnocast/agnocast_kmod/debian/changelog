@@ -1,0 +1,213 @@
+agnocast-kmod-v2.3.5 (2.3.5-1) noble; urgency=medium
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Tue, 09 Jun 2026 18:30:00 +0900
+
+agnocast-kmod-v2.3.4 (2.3.4-2) noble; urgency=medium
+
+  * fix(kmod): suppress parameter service log (#1334 <https://github.com/tier4/agnocast/issues/1334>)
+  * fix(kmod): remove redundant zero-initialisation of globals (#1316 <https://github.com/tier4/agnocast/issues/1316>)
+  * fix(kmod): place constants on right side of comparisons (#1315 <https://github.com/tier4/agnocast/issues/1315>)
+  * fix(kmod): use kvcalloc instead of kvzalloc with multiply (#1314 <https://github.com/tier4/agnocast/issues/1314>)
+  * fix(kmod): mark file_operations struct as const (#1313 <https://github.com/tier4/agnocast/issues/1313>)
+  * fix(kmod): add explanatory comments to memory barrier calls (#1309 <https://github.com/tier4/agnocast/issues/1309>)
+  * fix(kmod): remove redundant OOM messages after allocation failures (#1311 <https://github.com/tier4/agnocast/issues/1311>)
+  * fix(kmod): remove needless null checks before kfree calls (#1310 <https://github.com/tier4/agnocast/issues/1310>)
+  * refactor(kmod): split ioctl handlers by command (#1213 <https://github.com/tier4/agnocast/issues/1213>)
+  * fix(kmod): add spdx license for kernel module (#1259 <https://github.com/tier4/agnocast/issues/1259>)
+  * fix(kmod): embedded_function_name for checkpatch (#1252 <https://github.com/tier4/agnocast/issues/1252>)
+  * refactor(agnocast_kmod): replace kmalloc with stack buffers for ioctl name copies (#1257 <https://github.com/tier4/agnocast/issues/1257>)
+  * chore: add sparse check for agnocast-kmod (#1250 <https://github.com/tier4/agnocast/issues/1250>)
+  * refactor(kmod): move `increment_message_entry_rc` in `KUNIT_BUILD` (#1249 <https://github.com/tier4/agnocast/issues/1249>)
+  * refactor(kmod): split agnocast_main.c into init, exit, ioctl (#1177 <https://github.com/tier4/agnocast/issues/1177>)
+  * refactor(agnocast_kmod): extract kunit test object list into Makefile.inc (#1239 <https://github.com/tier4/agnocast/issues/1239>)
+  * feat:add version check command (#1224 <https://github.com/tier4/agnocast/issues/1224>)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Thu, 21 May 2026 10:54:00 +0900
+
+agnocast-kmod-v2.3.3 (2.3.3-1) noble; urgency=medium
+
+  * fix: postinst to avoid package to be destroyed (#1206 <https://github.com/tier4/agnocast/issues/1206>)
+  * fix(kmod): add missing linux/module.h include for older kernels (#1202 <https://github.com/tier4/agnocast/issues/1202>)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Thu, 02 Apr 2026 13:45:00 +0900
+
+agnocast-kmod-v2.3.2 (2.3.2-2) noble; urgency=medium
+
+  * fix(kmod): prerm script to run dkms remove on package removal/upgrade (#1193 <https://github.com/tier4/agnocast/issues/1193>)
+  * fix: add Conflicts/Replaces for kmod and clean up stale DKMS on install (#1191 <https://github.com/tier4/agnocast/issues/1191>)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Tue, 24 Mar 2026 23:32:00 +0900
+
+agnocast-kmod-v2.3.1 (2.3.1-1) noble; urgency=medium
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Tue, 17 Mar 2026 19:03:00 +0900
+
+agnocast-kmod-v2.3.0 (2.3.0-1) noble; urgency=medium
+
+  * fix(kmod): fix page allocation failure in topic info ioctl (#1162 <https://github.com/tier4/agnocast/issues/1162>)
+  * fix(kmod): use kvcalloc beside kmalloc_array (#1165 <https://github.com/tier4/agnocast/issues/1165>)
+  * docs(kmod): clarify exit PID ring buffer cannot overflow in production (#1163 <https://github.com/tier4/agnocast/issues/1163>)
+  * fix [need-minor-update]: unlink subscription MQs on abnormal process exit (#1155 <https://github.com/tier4/agnocast/issues/1155>)
+  * feat(kmod): add insmod options for mempool_num and mempool_start_addr (#1153 <https://github.com/tier4/agnocast/issues/1153>)
+  * feat(kmod): bump capacity constants and default mempool size (#1151 <https://github.com/tier4/agnocast/issues/1151>)
+  * fix(bridge)[need-minor-update]: fix bridge shutdown contention (#1149 <https://github.com/tier4/agnocast/issues/1149>)
+  * Revert "fix(bridge)[need-minor-update]: fix bridge shutdown contention" (#1146 <https://github.com/tier4/agnocast/issues/1146>)
+  * fix(bridge)[need-minor-update]: fix bridge shutdown contention (#1140 <https://github.com/tier4/agnocast/issues/1140>)
+  * feat[need-minor-update]: implement `get_publisher_count` API (#1102 <https://github.com/tier4/agnocast/issues/1102>)
+  * agnocast(kmod): include <linux/fs.h> (#1125 <https://github.com/tier4/agnocast/issues/1125>)
+  * fix(kmod): fix bug for `ignore_local_publications` (#1118 <https://github.com/tier4/agnocast/issues/1118>)
+  * refactor(kmod)[need-minor-update]: to use `tgid` inside kmod for bridge related ioctl commands (#1114 <https://github.com/tier4/agnocast/issues/1114>)
+  * fix(kmod)[need-minor-update]: add `topic_name_buffer_size` field for `get_agnocast_pub/sub_topics` (#1113 <https://github.com/tier4/agnocast/issues/1113>)
+  * perf(kmod): skip non-leader threads early in process exit handler (#1120 <https://github.com/tier4/agnocast/issues/1120>)
+  * fix(kmod): use `kzalloc`, `kcalloc`,`memset` in kmod (#1112 <https://github.com/tier4/agnocast/issues/1112>)
+  * fix(kmod): add error handling for topic_local_id overflow (#1110 <https://github.com/tier4/agnocast/issues/1110>)
+  * perf(agnocast_kmod): optimize exit worker and filter non-Agnocast PIDs (#1083 <https://github.com/tier4/agnocast/issues/1083>)
+  * fix(agnocast_kmod): save subscriber_ids_buffer_addr before publish_msg called (#1107 <https://github.com/tier4/agnocast/issues/1107>)
+  * feat(agnocast_kmod): replace do_exit kprobe with sched_process_exit tracepoint (#1089 <https://github.com/tier4/agnocast/issues/1089>)
+  * fix(kmod): ioctl functions name (#1094 <https://github.com/tier4/agnocast/issues/1094>)
+  * fix(agnocast_kmod): fix string handling bugs in node queries and get_version (#1085 <https://github.com/tier4/agnocast/issues/1085>)
+  * fix(agnocast_kmod): add error handling to agnocast_init_device (#1084 <https://github.com/tier4/agnocast/issues/1084>)
+  * fix(agnocast_kmod): guard copy_to_user on error paths in ioctl handler (#1086 <https://github.com/tier4/agnocast/issues/1086>)
+  * fix(agnocast_kmod): add .owner = THIS_MODULE to file_operations (#1080 <https://github.com/tier4/agnocast/issues/1080>)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Mon, 09 Mar 2026 23:09:00 +0900
+
+agnocast-kmod-v2.2.0 (2.2.0-6) noble; urgency=medium
+
+  * fix(kmod)[need-minor-update]: delete unnecessary tests along with the abolish of `MAX_PROCESS_NUM_PER_MEMPOOL` (#1073 <https://github.com/tier4/agnocast/issues/1073>)
+  * fix(agnocastlib): add warning about `mempool_size_gb` (#1069 <https://github.com/tier4/agnocast/issues/1069>)
+  * feat(kmod)[need-minor-update]: increase MAX_PUBLISHER_NUM (#1060 <https://github.com/tier4/agnocast/issues/1060>)
+  * feat(kmod)[need-minor-update]: abolish MAX_PROCESS_NUM_PER_MEMPOOL (#1056 <https://github.com/tier4/agnocast/issues/1056>)
+  * refactor(kmod)[need-minor-update]: fine-grained locking to abolish global_mutex (#1053 <https://github.com/tier4/agnocast/issues/1053>)
+  * fix(kmod)[need-minor-update]: increase `MEMPOOL_NUM` (#1061 <https://github.com/tier4/agnocast/issues/1061>)
+  * refactor(kmod)[need-minor-update]: rename ioctl corresponding functions to ioctl_ prefixed. (#1052 <https://github.com/tier4/agnocast/issues/1052>)
+  * feat(kmod): Increase MAX_SUBSCRIBER_NUM by using bitmap (#1015 <https://github.com/tier4/agnocast/issues/1015>)
+  * feat(agnocastlib): add kunit test for add refcount (#1046 <https://github.com/tier4/agnocast/issues/1046>)
+  * fix(agnocastlib): avoid use_after_free bug for `allow_same_message=true` (#1045 <https://github.com/tier4/agnocast/issues/1045>)
+  * refactor(kmod): reduce kernel module log verbosity by converting non-essential messages to dev_dbg (#1009 <https://github.com/tier4/agnocast/issues/1009>)
+  * feat[needs minor version update]: redesign ipc_shared_ptr (#966 <https://github.com/tier4/agnocast/issues/966>)
+  * refactor(agnocastlib)[need-minor-update]: reduce lock scope of global mutex in kmod (#985 <https://github.com/tier4/agnocast/issues/985>)
+  * refactor(agnocastlib)[needs minor version update]: add debug mode for bridge (#963 <https://github.com/tier4/agnocast/issues/963>)
+  * feat(agnocastlib)[need-minor-update]: add get_intra_subscription_count api (#934 <https://github.com/tier4/agnocast/issues/934>)
+  * feat[needs minor version update]: remove QoS depth limit (#937 <https://github.com/tier4/agnocast/issues/937>)
+  * feat(kmod): add is_bridge in info (#930 <https://github.com/tier4/agnocast/issues/930>)
+  * fix(kmod)[needs major version update]: get_publisher/subscriber_num to return whether bridge exist (#922 <https://github.com/tier4/agnocast/issues/922>)
+  * feat(kmod): add set_ros2_subscriber_num ioctl command (#920 <https://github.com/tier4/agnocast/issues/920>)
+  * feat(kmod)[needs minor version update]: get process num (#902 <https://github.com/tier4/agnocast/issues/902>)
+  * refactor(kmod): removed excessive dmesg  (#877 <https://github.com/tier4/agnocast/issues/877>)
+  * feat(agnocastlib): add check_managed_bridges (#860 <https://github.com/tier4/agnocast/issues/860>)
+  * refactor(kmod): move deb_info (#858 <https://github.com/tier4/agnocast/issues/858>)
+  * feat(kmod)[needs minor version update]: remove publisher cmd (#844 <https://github.com/tier4/agnocast/issues/844>)
+  * feat(kmod)[needs minor version update]: remove subscriber cmd (#838 <https://github.com/tier4/agnocast/issues/838>)
+  * test(kmod)[needs minor version update]: get publisher num cmd (#834 <https://github.com/tier4/agnocast/issues/834>)
+  * feat(kmod)[needs minor version update]: get publisher num cmd (#831 <https://github.com/tier4/agnocast/issues/831>)
+  * test(kmod)[needs minor version update]: remove bridge ioctl (#827 <https://github.com/tier4/agnocast/issues/827>)
+  * refactor(kmod): add blank line (#830 <https://github.com/tier4/agnocast/issues/830>)
+  * feat(kmod)[needs minor version update]: remove bridge ioctl  (#824 <https://github.com/tier4/agnocast/issues/824>)
+  * test(kmod) [needs minor version update]: add bridge ioctl (#816 <https://github.com/tier4/agnocast/issues/816>)
+  * feat(kmod)[needs minor version update]: add bridge ioctl (#812 <https://github.com/tier4/agnocast/issues/812>)
+  * test(kmod) [needs minor version update]: get publisher qos ioctl (#808 <https://github.com/tier4/agnocast/issues/808>)
+  * feat(kmod) [needs minor version update]: add get publisher qos ioctl (#807 <https://github.com/tier4/agnocast/issues/807>)
+  * test(kmod) [needs minor version update]: get subscription qos ioctl (#806 <https://github.com/tier4/agnocast/issues/806>)
+  * feat(kmod) [needs minor version update]: add get subscription qos ioctl (#804 <https://github.com/tier4/agnocast/issues/804>)
+  * test(kmod)[needs minor version update]: ignore_local_publications_for_agnocast_sub (#786 <https://github.com/tier4/agnocast/issues/786>)
+  * feat(kmod)[needs minor version update]: add_ignore_local_publications_for_agnocast_sub (#783 <https://github.com/tier4/agnocast/issues/783>)
+  * feat(kmod) [needs minor version update]: add reliability field to subscriber_info (#775 <https://github.com/tier4/agnocast/issues/775>)
+  * fix(kmod) [needs minor version update]: Remove AGNOCAST_MEMPOOL_SIZE (#719 <https://github.com/tier4/agnocast/issues/719>)
+  * fix(kmod): add node name log for  insert_publisher/subscriber_info (#704 <https://github.com/tier4/agnocast/issues/704>)
+  * fix(kmod): perform cleanup for initializations that were completed when fails in agnocast_init (#703 <https://github.com/tier4/agnocast/issues/703>)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Thu, 19 Feb 2026 2:18:00 +0900
+
+agnocast-kmod-v2.1.2 (2.1.2-1) jammy; urgency=medium
+
+  * refactor(kmod): allocate memory for the name buffers using kmalloc (#641 <https://github.com/tier4/agnocast/issues/641>)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Mon, 18 Aug 2025 0:37:00 +0900
+
+agnocast-kmod-v2.1.1 (2.1.1-1) jammy; urgency=medium
+
+  * fix(kmod): add a boundary check for msg_virtual_address (#635 <https://github.com/tier4/agnocast/issues/635>)
+  * patch level ppa package (#624 <https://github.com/tier4/agnocast/issues/624>)
+  * fix(kunit): update the max process number (#636 <https://github.com/tier4/agnocast/issues/636>)
+  * fix(memory_allocator): increase mempoll size (#629 <https://github.com/tier4/agnocast/issues/629>)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Tue, 13 May 2025 14:45:00 +0900
+
+agnocast-kmod-v2.1.0 (2.1.0-2) jammy; urgency=medium
+
+  * fix(kmod): fix check_daemon_necessity defining location (#616 <https://github.com/tier4/agnocast/issues/616>)
+  * refactor(kmod): reorder ioctl command (#615 <https://github.com/tier4/agnocast/issues/615>)
+  * refactor(kmod): delete unnecessary header file (#611 <https://github.com/tier4/agnocast/issues/611>)
+  * refactor(kmod): change command name to add_publisher/subscriber (#614 <https://github.com/tier4/agnocast/issues/614>)
+  * refactor(kmod): change command name from new_shm to add_process (#613 <https://github.com/tier4/agnocast/issues/613>)
+  * fix: do shm_unlink with daemon process for each ipc_ns (#602 <https://github.com/tier4/agnocast/issues/602>)
+  * fix(kunit): get_topic_num wasn't updated in kunit test (#608 <https://github.com/tier4/agnocast/issues/608>)
+  * refactor(kmod): get ipc_ns in agnocast_ioctl (#603 <https://github.com/tier4/agnocast/issues/603>)
+  * fix(kmod): topic namespace based on ipc_ns not net_ns (#600 <https://github.com/tier4/agnocast/issues/600>)
+  * fix(kmod): support getname_kernel for linux kernel version below 6.2 (#599 <https://github.com/tier4/agnocast/issues/599>)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Wed, 17 Apr 2025 00:02:00 +0900
+
+agnocast-kmod (2.0.1-1) jammy; urgency=medium
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Wed, 03 Apr 2025 00:47:22 +0900
+
+agnocast-kmod (2.0.0-1) jammy; urgency=medium
+
+  * feat(kmod): separate topic_name namespace based on network namespace (#583 <https://github.com/tier4/agnocast/issues/583>)
+  * feat(kmod): allow local pid namespace (#540 <https://github.com/tier4/agnocast/issues/540>)
+  * fix: remove agnocast sysfs (#588 <https://github.com/tier4/agnocast/issues/588>)
+  * refactor(kmod): Move current_pubsub_id & current_entry_id to topic_struct (#584 <https://github.com/tier4/agnocast/issues/584>)
+  * fix(kmod): bug when receive/take msgs after publisher exits (#579 <https://github.com/tier4/agnocast/issues/579>)
+  * fix(kmod): kunit build error (#577 <https://github.com/tier4/agnocast/issues/577>)
+  * feat(kmod): add transient local kunit test for receive_msg (#568 <https://github.com/tier4/agnocast/issues/568>)
+  * refactor(kmod): unified magic number for ioctl (#569 <https://github.com/tier4/agnocast/issues/569>)
+  * fix(kmod): remove pub_info->exited (#570 <https://github.com/tier4/agnocast/issues/570>)
+  * feat: check version consistency (#557 <https://github.com/tier4/agnocast/issues/557>)
+  * feat(kmod): add kunit test for too many mapping processes in take_msg and receive_msg (#567 <https://github.com/tier4/agnocast/issues/567>)
+  * fix(kmod): remove unncessary find_process_info (#566 <https://github.com/tier4/agnocast/issues/566>)
+  * test(kmod): add missing test case for do_exit (#565 <https://github.com/tier4/agnocast/issues/565>)
+  * test(kmod): add do_exit test cases (#559 <https://github.com/tier4/agnocast/issues/559>)
+  * test(kmod): add missing test case for receive_msg (#564 <https://github.com/tier4/agnocast/issues/564>)
+  * fix(kmod): refactor kunit helper functions (#562 <https://github.com/tier4/agnocast/issues/562>)
+  * fix(kmod): fix publish_msg return value (#558 <https://github.com/tier4/agnocast/issues/558>)
+  * fix(kmod): use larger EXIT_QUEUE_SIZE (#556 <https://github.com/tier4/agnocast/issues/556>)
+  * feat(kmod): get kmod version (#553 <https://github.com/tier4/agnocast/issues/553>)
+  * fix(kmod): use larger hashtable for pub/sub (#555 <https://github.com/tier4/agnocast/issues/555>)
+  * test(kmod): add kunit tests for do_exit (#537 <https://github.com/tier4/agnocast/issues/537>)
+  * fix(kmod): restore take_msg tests for publisher_shm_info (#552 <https://github.com/tier4/agnocast/issues/552>)
+  * fix: do shm_unlink in kernel module (#536 <https://github.com/tier4/agnocast/issues/536>)
+  * fix(kmod): restore receive_msg tests for publisher_shm_info (#550 <https://github.com/tier4/agnocast/issues/550>)
+  * fix(kmod): restore decrement_rc kunit test (#549 <https://github.com/tier4/agnocast/issues/549>)
+  * fix(kmod): remove publisher reference on publisher exit (#546 <https://github.com/tier4/agnocast/issues/546>)
+  * feat: handle transient local callbacks in executor (#520 <https://github.com/tier4/agnocast/issues/520>)
+  * fix: pass string length along with its pointer (#534 <https://github.com/tier4/agnocast/issues/534>)
+  * test: add decrement_rc kunit tests (#509 <https://github.com/tier4/agnocast/issues/509>)
+  * fix(kmod): remove invalid test (#533 <https://github.com/tier4/agnocast/issues/533>)
+  * test(kmod): add increment_rc negative tests (#525 <https://github.com/tier4/agnocast/issues/525>)
+  * test(kmod): add kunit test for take_msg (#519 <https://github.com/tier4/agnocast/issues/519>)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Wed, 02 Apr 2025 17:36:22 +0900
+
+agnocast-kmod (1.0.2-1) jammy; urgency=medium
+
+  * fix: unify topic add (`#523 <https://github.com/tier4/agnocast/issues/523>`_)
+  * test: Add test for increment_message_entry function (`#486 <https://github.com/tier4/agnocast/issues/486>`_)
+  * fix: init entry_id used in take_msg (`#521 <https://github.com/tier4/agnocast/issues/521>`_)
+  * refactor: fix errno in take_msg (`#517 <https://github.com/tier4/agnocast/issues/517>`_)
+  * test: add kunit test for receive_msg (`#498 <https://github.com/tier4/agnocast/issues/498>`_)
+  * test: add subscriber_add kunit test for too many mmap (`#514 <https://github.com/tier4/agnocast/issues/514>`_)
+  * fix: skip transient_local procedures on take subscriber addition (`#512 <https://github.com/tier4/agnocast/issues/512>`_)
+  * refactor: rename receive function and fix to appropriate errno (`#497 <https://github.com/tier4/agnocast/issues/497>`_)
+  * test: add subscriber_add kunit tests (`#506 <https://github.com/tier4/agnocast/issues/506>`_)
+  * fix: remove too much dmesg on kunit test (`#510 <https://github.com/tier4/agnocast/issues/510>`_)
+  * fix: fix get_topic_entries_num bug (`#507 <https://github.com/tier4/agnocast/issues/507>`_)
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Fri, 14 Mar 2025 20:48:09 +0900
+
+agnocast-kmod (1.0.1-7) jammy; urgency=medium
+
+  * Initial release.
+
+ -- Takahiro Ishikawa-Aso <sykwer@gmail.com>  Mon, 10 Mar 2025 07:38:53 +0900

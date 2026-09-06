@@ -1,0 +1,67 @@
+autoware_system_design_format: 0.3.0
+
+name: ConcatenatePointcloudDummy.node
+
+package:
+  name: autoware_pointcloud_preprocessor
+  provider: dummy
+
+launch:
+  plugin: autoware::pointcloud_preprocessor::ConcatenatePointcloudComponent
+  executable: concatenate_pointcloud_node
+  node_output: screen
+
+# interfaces
+subscribers:
+  - name: input1
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: input2
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: input3
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: input4
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: input5
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: input6
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: input7
+    message_type: sensor_msgs/msg/PointCloud2
+  - name: input8
+    message_type: sensor_msgs/msg/PointCloud2
+publishers:
+  - name: output
+    message_type: sensor_msgs/msg/PointCloud2
+
+param_files:
+  - name: param_file
+    default: config/concatenate_pointclouds.param.yaml
+
+param_values:
+  - name: input_frame
+    type: string
+    default: base_link
+  - name: output_frame
+    type: string
+    default: base_link
+
+# processes
+processes:
+  - name: update
+    trigger_conditions:
+      - on_input: input1
+      - on_input: input2
+      - on_input: input3
+      - on_input: input4
+      - on_input: input5
+      - on_input: input6
+      - on_input: input7
+      - on_input: input8
+    outcomes:
+      - to_trigger: concatenate
+  - name: concatenate
+    trigger_conditions:
+      - on_trigger: update
+      - periodic: 10.0 # Hz
+    outcomes:
+      - to_output: output

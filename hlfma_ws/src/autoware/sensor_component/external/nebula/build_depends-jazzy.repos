@@ -1,0 +1,5 @@
+repositories:
+  sync_tooling_msgs:
+    type: git
+    url: https://github.com/tier4/sync_tooling_msgs.git
+    version: main

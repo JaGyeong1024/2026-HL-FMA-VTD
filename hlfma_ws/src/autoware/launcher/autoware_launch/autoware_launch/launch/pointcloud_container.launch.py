@@ -1,0 +1,72 @@
+# Copyright 2021 Tier IV, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.actions import GroupAction
+from launch.actions import IncludeLaunchDescription
+from launch.actions import SetEnvironmentVariable
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch.substitutions import PathJoinSubstitution
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.substitutions import FindPackageShare
+
+
+def generate_launch_description():
+    def add_launch_arg(name: str, default_value=None):
+        return DeclareLaunchArgument(name, default_value=default_value)
+
+    agnocast_env_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution(
+                [
+                    FindPackageShare("autoware_agnocast_wrapper"),
+                    "launch",
+                    "agnocast_env.launch.py",
+                ]
+            ),
+        ),
+        launch_arguments={
+            "use_multithread": LaunchConfiguration("use_multithread"),
+        }.items(),
+    )
+
+    pointcloud_container = ComposableNodeContainer(
+        name=LaunchConfiguration("container_name"),
+        namespace="/",
+        package=LaunchConfiguration("container_package"),
+        executable=LaunchConfiguration("container_executable"),
+        composable_node_descriptions=[],
+        output="both",
+    )
+
+    return LaunchDescription(
+        [
+            add_launch_arg("use_multithread", "false"),
+            add_launch_arg("container_name", "pointcloud_container"),
+            agnocast_env_launch,
+            GroupAction(
+                [
+                    SetEnvironmentVariable(
+                        name="LD_PRELOAD",
+                        value=LaunchConfiguration("ld_preload_value"),
+                        condition=IfCondition(LaunchConfiguration("use_agnocast")),
+                    ),
+                    pointcloud_container,
+                ]
+            ),
+        ],
+    )

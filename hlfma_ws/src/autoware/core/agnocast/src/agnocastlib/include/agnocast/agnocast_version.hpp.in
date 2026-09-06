@@ -1,0 +1,9 @@
+#pragma once
+
+namespace ${PROJECT_NAME} {
+  constexpr const char* VERSION = "${PACKAGE_VERSION}";
+}
+
+extern "C" {
+  const char* agnocast_get_version();
+}

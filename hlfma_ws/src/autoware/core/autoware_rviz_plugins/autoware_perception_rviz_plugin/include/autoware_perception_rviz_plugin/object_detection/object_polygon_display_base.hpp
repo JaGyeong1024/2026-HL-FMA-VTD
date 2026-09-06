@@ -1,0 +1,691 @@
+// Copyright 2021 Apex.AI, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+#ifndef AUTOWARE_PERCEPTION_RVIZ_PLUGIN__OBJECT_DETECTION__OBJECT_POLYGON_DISPLAY_BASE_HPP_
+#define AUTOWARE_PERCEPTION_RVIZ_PLUGIN__OBJECT_DETECTION__OBJECT_POLYGON_DISPLAY_BASE_HPP_
+
+#include "autoware_perception_rviz_plugin/object_detection/object_polygon_detail.hpp"
+#include "autoware_perception_rviz_plugin/visibility_control.hpp"
+
+#include <rviz_common/display.hpp>
+#include <rviz_common/properties/color_property.hpp>
+#include <rviz_common/properties/enum_property.hpp>
+#include <rviz_common/properties/float_property.hpp>
+#include <rviz_default_plugins/displays/marker/marker_common.hpp>
+#include <rviz_default_plugins/displays/marker_array/marker_array_display.hpp>
+
+#include <autoware_perception_msgs/msg/object_classification.hpp>
+#include <unique_identifier_msgs/msg/uuid.hpp>
+
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace autoware
+{
+namespace rviz_plugins
+{
+namespace object_detection
+{
+/// \brief Base rviz plugin class for all object msg types. The class defines common properties
+///        for the plugin and also defines common helper functions that can be used by its derived
+///        classes.
+/// \tparam MsgT PredictedObjects or TrackedObjects or DetectedObjects type
+template <typename MsgT>
+class AUTOWARE_PERCEPTION_RVIZ_PLUGIN_PUBLIC ObjectPolygonDisplayBase
+: public rviz_common::RosTopicDisplay<MsgT>
+{
+public:
+  using Color = std::array<float, 3U>;
+  using Marker = visualization_msgs::msg::Marker;
+  using MarkerArray = visualization_msgs::msg::MarkerArray;
+  using MarkerCommon = rviz_default_plugins::displays::MarkerCommon;
+  using ObjectClassificationMsg = autoware_perception_msgs::msg::ObjectClassification;
+  using RosTopicDisplay = rviz_common::RosTopicDisplay<MsgT>;
+
+  using PolygonPropertyMap = std::unordered_map<
+    ObjectClassificationMsg::_label_type, rviz_common::properties::ColorProperty>;
+
+  // Shape rendering mode: merges polygon dimensionality (3D/2D) and fill style into one selector.
+  // 2D has no filled variant (get_2d_shape_marker_ptr draws a wireframe only).
+  enum class ShapeType { SkeletonThreeD = 0, SkeletonTwoD = 1, Fill = 2, None = 3 };
+
+  explicit ObjectPolygonDisplayBase(const std::string & default_topic)
+  : m_marker_common(this),
+    m_line_width_property{
+      "Line Width", 0.03,
+      "Base line width for all line markers (shape, twist, yaw rate, covariance)", this},
+    m_unified_color_property{
+      "Color", QColor{255, 255, 255},
+      "General color used for all classes unless per-class color is enabled", this},
+    m_per_class_color_property{
+      "Per Class Color", false, "Enable to set a separate color per class below", this},
+    m_alpha_property{
+      "Alpha", 0.999F, "Opacity applied to all object colors (shared by every class)", this},
+    m_shape_group_property{"Shape", QVariant(), "Object shape visualizations", this},
+    m_text_group_property{"Text", QVariant(), "Text annotations on objects", this},
+    m_path_group_property{"Path", QVariant(), "Predicted path visualizations", this},
+    m_vector_group_property{"Vector", QVariant(), "Direction/rate vector visualizations", this},
+    m_covariance_group_property{
+      "Covariance", QVariant(), "Covariance ellipse visualizations", this},
+    m_shape_type_property{
+      "Shape Type", "Skeleton 3D", "Shape rendering mode: polygon dimensionality and fill style",
+      &m_shape_group_property},
+    m_display_bbox_footprint_property{
+      "BBox Footprint", false,
+      "Enable/disable the object footprint polygon overlay on bounding-box shapes",
+      &m_shape_group_property},
+    m_display_mesh_property{
+      "Mesh", false, "Enable/disable mesh visualization of the object", &m_shape_group_property},
+    m_display_indicator_property{
+      "Signal Lights", false, "Overlay turn/brake light meshes on the vehicle mesh",
+      &m_display_mesh_property},
+    m_display_label_property{
+      "Label", true, "Enable/disable label visualization", &m_text_group_property},
+    m_display_uuid_property{
+      "UUID", true, "Enable/disable uuid visualization", &m_text_group_property},
+    m_display_velocity_text_property{
+      "Velocity", false, "Enable/disable velocity text visualization", &m_text_group_property},
+    m_display_acceleration_text_property{
+      "Acceleration", false, "Enable/disable acceleration text visualization",
+      &m_text_group_property},
+    m_display_pose_covariance_property{
+      "Pose", true, "Enable/disable pose covariance visualization", &m_covariance_group_property},
+    m_display_yaw_covariance_property{
+      "Yaw", false, "Enable/disable yaw covariance visualization", &m_covariance_group_property},
+    m_display_twist_property{
+      "Twist", true, "Enable/disable twist visualization", &m_vector_group_property},
+    m_display_twist_covariance_property{
+      "Twist", false, "Enable/disable twist covariance visualization",
+      &m_covariance_group_property},
+    m_display_yaw_rate_property{
+      "Yaw Rate", false, "Enable/disable yaw rate visualization", &m_vector_group_property},
+    m_display_yaw_rate_covariance_property{
+      "Yaw Rate", false, "Enable/disable yaw rate covariance visualization",
+      &m_covariance_group_property},
+    m_display_predicted_paths_property{
+      "Predicted Path", true, "Enable/disable predicted paths visualization",
+      &m_path_group_property},
+    m_display_path_confidence_property{
+      "Path Confidence", true, "Enable/disable predicted path confidence visualization",
+      &m_path_group_property},
+    m_display_predicted_path_footprint_property{
+      "Path Footprint", false,
+      "Enable/disable predicted path footprint (bounding box) visualization",
+      &m_path_group_property},
+
+    m_display_existence_probability_property{
+      "Existence Probability", false, "Enable/disable existence probability visualization",
+      &m_text_group_property},
+
+    m_default_topic{default_topic}
+  {
+    // Shape Type merges polygon dimensionality (3D/2D) and fill style into one selector.
+    m_shape_type_property.addOption("Skeleton 3D", static_cast<int>(ShapeType::SkeletonThreeD));
+    m_shape_type_property.addOption("Skeleton 2D", static_cast<int>(ShapeType::SkeletonTwoD));
+    m_shape_type_property.addOption("Fill", static_cast<int>(ShapeType::Fill));
+    m_shape_type_property.addOption("None", static_cast<int>(ShapeType::None));
+
+    m_simple_visualize_mode_property = new rviz_common::properties::EnumProperty(
+      "Path Resolution", "Normal",
+      "Sampling density of predicted-path and footprint markers (Simple draws every other point).",
+      &m_path_group_property);
+    m_simple_visualize_mode_property->addOption("Normal", 0);
+    m_simple_visualize_mode_property->addOption("Simple", 1);
+
+    m_confidence_interval_property = new rviz_common::properties::EnumProperty(
+      "Confidence Interval", "95%", "Confidence interval of state estimations.",
+      &m_covariance_group_property);
+    m_confidence_interval_property->addOption("70%", 0);
+    m_confidence_interval_property->addOption("85%", 1);
+    m_confidence_interval_property->addOption("95%", 2);
+    m_confidence_interval_property->addOption("99%", 3);
+
+    m_alpha_property.setMin(0.0F);
+    m_alpha_property.setMax(1.0F);
+
+    // iterate over default values to create a color property per class, nested under the
+    // "Per Class Color" toggle. Opacity is shared across all classes via m_alpha_property.
+    for (const auto & map_property_it : detail::kDefaultObjectPropertyValues) {
+      const auto & class_property_values = map_property_it.second;
+      const auto & color = class_property_values.color;
+      m_polygon_properties.emplace(
+        std::piecewise_construct, std::forward_as_tuple(map_property_it.first),
+        std::forward_as_tuple(
+          class_property_values.label.c_str(), QColor{color[0], color[1], color[2]},
+          "Color for this class", &m_per_class_color_property));
+    }
+    init_color_list(predicted_path_colors);
+  }
+
+  void onInitialize() override
+  {
+    RosTopicDisplay::RTDClass::onInitialize();
+    m_marker_common.initialize(this->context_, this->scene_node_);
+    QString message_type = QString::fromStdString(rosidl_generator_traits::name<MsgT>());
+    this->topic_property_->setMessageType(message_type);
+    this->topic_property_->setValue(m_default_topic.c_str());
+    this->topic_property_->setDescription("Topic to subscribe to.");
+  }
+
+  void load(const rviz_common::Config & config) override
+  {
+    RosTopicDisplay::Display::load(config);
+    m_marker_common.load(config);
+  }
+
+  void update(float wall_dt, float ros_dt) override { m_marker_common.update(wall_dt, ros_dt); }
+
+  void reset() override
+  {
+    RosTopicDisplay::reset();
+    m_marker_common.clearMarkers();
+  }
+
+  void clear_markers() { m_marker_common.clearMarkers(); }
+
+  void add_marker(visualization_msgs::msg::Marker::ConstSharedPtr marker_ptr)
+  {
+    m_marker_common.addMessage(marker_ptr);
+  }
+
+  void add_marker(visualization_msgs::msg::MarkerArray::ConstSharedPtr markers_ptr)
+  {
+    m_marker_common.addMessage(markers_ptr);
+  }
+
+  void deleteMarker(rviz_default_plugins::displays::MarkerID marker_id)
+  {
+    m_marker_common.deleteMarker(marker_id);
+  }
+
+protected:
+  /// \brief Convert given shape msg into a Marker
+  /// \tparam ClassificationContainerT List type with ObjectClassificationMsg
+  /// \param shape_msg Shape msg to be converted
+  /// \param centroid Centroid position of the shape in Object.header.frame_id frame
+  /// \param orientation Orientation of the shape in Object.header.frame_id frame
+  /// \param labels List of ObjectClassificationMsg objects
+  /// \param line_width Line thickness around the object
+  /// \return Marker ptr. Id and header will have to be set by the caller
+  template <typename ClassificationContainerT>
+  std::optional<Marker::SharedPtr> get_shape_marker_ptr(
+    const autoware_perception_msgs::msg::Shape & shape_msg,
+    const geometry_msgs::msg::Point & centroid, const geometry_msgs::msg::Quaternion & orientation,
+    const ClassificationContainerT & labels, const double & line_width,
+    const bool & is_orientation_available) const
+  {
+    const std_msgs::msg::ColorRGBA color_rgba = get_color_rgba(labels);
+    const bool display_footprint = m_display_bbox_footprint_property.getBool();
+
+    switch (static_cast<ShapeType>(m_shape_type_property.getOptionInt())) {
+      case ShapeType::SkeletonThreeD:
+        return detail::get_shape_marker_ptr(
+          shape_msg, centroid, orientation, color_rgba, line_width, is_orientation_available,
+          detail::ObjectFillType::Skeleton, display_footprint);
+      case ShapeType::Fill:
+        return detail::get_shape_marker_ptr(
+          shape_msg, centroid, orientation, color_rgba, line_width, is_orientation_available,
+          detail::ObjectFillType::Fill, display_footprint);
+      case ShapeType::SkeletonTwoD:
+        return detail::get_2d_shape_marker_ptr(
+          shape_msg, centroid, orientation, color_rgba, line_width, is_orientation_available,
+          display_footprint);
+      case ShapeType::None:
+      default:
+        return std::nullopt;
+    }
+  }
+
+  template <typename ClassificationContainerT>
+  std::optional<Marker::SharedPtr> get_mesh_marker_ptr(
+    const autoware_perception_msgs::msg::Shape & shape_msg,
+    const geometry_msgs::msg::Point & centroid, const geometry_msgs::msg::Quaternion & orientation,
+    const ClassificationContainerT & labels) const
+  {
+    if (m_display_mesh_property.getBool()) {
+      auto marker_ptr = detail::get_mesh_marker_ptr(shape_msg, centroid, orientation, labels);
+      if (marker_ptr) {
+        return marker_ptr;
+      }
+    }
+    return std::nullopt;
+  }
+
+  template <typename ClassificationContainerT>
+  std::optional<MarkerArray::SharedPtr> get_indicator_marker_ptr(
+    const autoware_perception_msgs::msg::Shape & shape_msg,
+    const geometry_msgs::msg::Point & centroid, const geometry_msgs::msg::Quaternion & orientation,
+    const ClassificationContainerT & labels) const
+  {
+    if (m_display_indicator_property.getBool()) {
+      auto marker_ptr = detail::get_indicator_marker_ptr(shape_msg, centroid, orientation, labels);
+      if (marker_ptr) {
+        return marker_ptr;
+      }
+    }
+    return std::nullopt;
+  }
+
+  /// \brief Convert given shape msg into a Marker to visualize label name
+  /// \tparam ClassificationContainerT List type with ObjectClassificationMsg
+  /// \param centroid Centroid position of the shape in Object.header.frame_id frame
+  /// \param labels List of ObjectClassificationMsg objects
+  /// \return Marker ptr. Id and header will have to be set by the caller
+  template <typename ClassificationContainerT>
+  std::optional<Marker::SharedPtr> get_label_marker_ptr(
+    const geometry_msgs::msg::Point & centroid, const geometry_msgs::msg::Quaternion & orientation,
+    const ClassificationContainerT & labels) const
+  {
+    if (m_display_label_property.getBool()) {
+      const std::string label = get_best_label(labels);
+      const std_msgs::msg::ColorRGBA color_rgba = get_color_rgba(labels);
+      return detail::get_label_marker_ptr(centroid, orientation, label, color_rgba);
+    } else {
+      return std::nullopt;
+    }
+  }
+  template <typename ClassificationContainerT>
+  std::optional<Marker::SharedPtr> get_existence_probability_marker_ptr(
+    const geometry_msgs::msg::Point & centroid, const geometry_msgs::msg::Quaternion & orientation,
+    const float existence_probability, const ClassificationContainerT & labels) const
+  {
+    if (m_display_existence_probability_property.getBool()) {
+      const std_msgs::msg::ColorRGBA color_rgba = get_color_rgba(labels);
+      return detail::get_existence_probability_marker_ptr(
+        centroid, orientation, existence_probability, color_rgba);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  template <typename ClassificationContainerT>
+  std::optional<Marker::SharedPtr> get_uuid_marker_ptr(
+    const unique_identifier_msgs::msg::UUID & uuid, const geometry_msgs::msg::Point & centroid,
+    const ClassificationContainerT & labels) const
+  {
+    if (m_display_uuid_property.getBool()) {
+      const std_msgs::msg::ColorRGBA color_rgba = get_color_rgba(labels);
+      const std::string uuid_str = uuid_to_string(uuid);
+      return detail::get_uuid_marker_ptr(uuid_str, centroid, color_rgba);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<Marker::SharedPtr> get_pose_covariance_marker_ptr(
+    const geometry_msgs::msg::PoseWithCovariance & pose_with_covariance) const
+  {
+    if (m_display_pose_covariance_property.getBool()) {
+      return detail::get_pose_covariance_marker_ptr(pose_with_covariance, get_confidence_region());
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<Marker::SharedPtr> get_yaw_covariance_marker_ptr(
+    const geometry_msgs::msg::PoseWithCovariance & pose_with_covariance, const double & length,
+    const double & line_width) const
+  {
+    if (m_display_yaw_covariance_property.getBool()) {
+      return detail::get_yaw_covariance_marker_ptr(
+        pose_with_covariance, length, get_confidence_interval(), line_width);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  template <typename ClassificationContainerT>
+  std::optional<Marker::SharedPtr> get_velocity_text_marker_ptr(
+    const geometry_msgs::msg::Twist & twist, const geometry_msgs::msg::Point & vis_pos,
+    const ClassificationContainerT & labels) const
+  {
+    if (m_display_velocity_text_property.getBool()) {
+      const std_msgs::msg::ColorRGBA color_rgba = get_color_rgba(labels);
+      return detail::get_velocity_text_marker_ptr(twist, vis_pos, color_rgba);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  template <typename ClassificationContainerT>
+  std::optional<Marker::SharedPtr> get_acceleration_text_marker_ptr(
+    const geometry_msgs::msg::Accel & accel, const geometry_msgs::msg::Point & vis_pos,
+    const ClassificationContainerT & labels) const
+  {
+    if (m_display_acceleration_text_property.getBool()) {
+      const std_msgs::msg::ColorRGBA color_rgba = get_color_rgba(labels);
+      return detail::get_acceleration_text_marker_ptr(accel, vis_pos, color_rgba);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<Marker::SharedPtr> get_twist_marker_ptr(
+    const geometry_msgs::msg::PoseWithCovariance & pose_with_covariance,
+    const geometry_msgs::msg::TwistWithCovariance & twist_with_covariance,
+    const double & line_width) const
+  {
+    if (m_display_twist_property.getBool()) {
+      return detail::get_twist_marker_ptr(pose_with_covariance, twist_with_covariance, line_width);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<Marker::SharedPtr> get_twist_covariance_marker_ptr(
+    const geometry_msgs::msg::PoseWithCovariance & pose_with_covariance,
+    const geometry_msgs::msg::TwistWithCovariance & twist_with_covariance) const
+  {
+    if (m_display_twist_covariance_property.getBool()) {
+      return detail::get_twist_covariance_marker_ptr(
+        pose_with_covariance, twist_with_covariance, get_confidence_region());
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<Marker::SharedPtr> get_yaw_rate_marker_ptr(
+    const geometry_msgs::msg::PoseWithCovariance & pose_with_covariance,
+    const geometry_msgs::msg::TwistWithCovariance & twist_with_covariance,
+    const double & line_width) const
+  {
+    if (m_display_yaw_rate_property.getBool()) {
+      return detail::get_yaw_rate_marker_ptr(
+        pose_with_covariance, twist_with_covariance, line_width);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<Marker::SharedPtr> get_yaw_rate_covariance_marker_ptr(
+    const geometry_msgs::msg::PoseWithCovariance & pose_with_covariance,
+    const geometry_msgs::msg::TwistWithCovariance & twist_with_covariance,
+    const double & line_width) const
+  {
+    if (m_display_yaw_rate_covariance_property.getBool()) {
+      return detail::get_yaw_rate_covariance_marker_ptr(
+        pose_with_covariance, twist_with_covariance, get_confidence_interval(), line_width);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<Marker::SharedPtr> get_predicted_path_marker_ptr(
+    const unique_identifier_msgs::msg::UUID & uuid,
+    const autoware_perception_msgs::msg::Shape & shape,
+    const autoware_perception_msgs::msg::PredictedPath & predicted_path) const
+  {
+    if (m_display_predicted_paths_property.getBool()) {
+      const std::string uuid_str = uuid_to_string(uuid);
+      const std_msgs::msg::ColorRGBA predicted_path_color = get_color_from_uuid(uuid_str);
+      return detail::get_predicted_path_marker_ptr(
+        shape, predicted_path, predicted_path_color,
+        m_simple_visualize_mode_property->getOptionInt() == 1);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<Marker::SharedPtr> get_predicted_path_footprint_marker_ptr(
+    const unique_identifier_msgs::msg::UUID & uuid,
+    const autoware_perception_msgs::msg::Shape & shape,
+    const autoware_perception_msgs::msg::PredictedPath & predicted_path) const
+  {
+    if (m_display_predicted_path_footprint_property.getBool()) {
+      const std::string uuid_str = uuid_to_string(uuid);
+      const std_msgs::msg::ColorRGBA predicted_path_color = get_color_from_uuid(uuid_str);
+      return detail::get_predicted_path_footprint_marker_ptr(
+        shape, predicted_path, predicted_path_color,
+        m_simple_visualize_mode_property->getOptionInt() == 1);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<Marker::SharedPtr> get_path_confidence_marker_ptr(
+    const unique_identifier_msgs::msg::UUID & uuid,
+    const autoware_perception_msgs::msg::PredictedPath & predicted_path) const
+  {
+    if (m_display_path_confidence_property.getBool()) {
+      const std::string uuid_str = uuid_to_string(uuid);
+      const std_msgs::msg::ColorRGBA path_confidence_color = get_color_from_uuid(uuid_str);
+      return detail::get_path_confidence_marker_ptr(predicted_path, path_confidence_color);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  /// \brief Get color and alpha values based on the given list of classification values
+  /// \tparam ClassificationContainerT Container of ObjectClassification
+  /// \param labels list of classifications
+  /// \return Color and alpha for the best class in the given list. Unknown class is used in
+  ///         degenerate cases
+  template <typename ClassificationContainerT>
+  std_msgs::msg::ColorRGBA get_color_rgba(const ClassificationContainerT & labels) const
+  {
+    QColor color = m_unified_color_property.getColor();
+    if (m_per_class_color_property.getBool()) {
+      const auto label = detail::get_best_label(labels, detail::kLoggerName);
+      auto it = m_polygon_properties.find(label);
+      if (it == m_polygon_properties.end()) {
+        it = m_polygon_properties.find(ObjectClassificationMsg::UNKNOWN);
+      }
+      color = it->second.getColor();
+    }
+    std_msgs::msg::ColorRGBA color_rgba;
+    color_rgba.r = static_cast<float>(color.redF());
+    color_rgba.g = static_cast<float>(color.greenF());
+    color_rgba.b = static_cast<float>(color.blueF());
+    color_rgba.a = m_alpha_property.getFloat();
+    return color_rgba;
+  }
+
+  /// \brief Get color and alpha values based on the given list of classification values
+  /// \tparam ClassificationContainerT Container of ObjectClassification
+  /// \param labels list of classifications
+  /// \return best label string
+  template <typename ClassificationContainerT>
+  std::string get_best_label(const ClassificationContainerT & labels) const
+  {
+    const auto label = detail::get_best_label(labels, detail::kLoggerName);
+    auto it = detail::kDefaultObjectPropertyValues.find(label);
+    if (it == detail::kDefaultObjectPropertyValues.end()) {
+      it = detail::kDefaultObjectPropertyValues.find(ObjectClassificationMsg::UNKNOWN);
+    }
+    return (it->second).label;
+  }
+  std::string uuid_to_string(const unique_identifier_msgs::msg::UUID & u) const
+  {
+    std::stringstream ss;
+    for (auto i = 0; i < 16; ++i) {
+      ss << std::hex << std::setfill('0') << std::setw(2) << +u.uuid[i];
+    }
+    return ss.str();
+  }
+
+  std_msgs::msg::ColorRGBA AUTOWARE_PERCEPTION_RVIZ_PLUGIN_PUBLIC
+  get_color_from_uuid(const std::string & uuid) const
+  {
+    // Hash the whole uuid so the palette index is well distributed across objects, rather than
+    // keying off only the first two characters.
+    std::size_t hash = 0;
+    for (const char c : uuid) {
+      hash = hash * 31 + static_cast<unsigned char>(c);
+    }
+    const auto i = static_cast<std::size_t>(hash % predicted_path_colors.size());
+
+    std_msgs::msg::ColorRGBA color;
+    color.r = predicted_path_colors.at(i).r;
+    color.g = predicted_path_colors.at(i).g;
+    color.b = predicted_path_colors.at(i).b;
+    return color;
+  }
+
+  void init_color_list(std::vector<std_msgs::msg::ColorRGBA> & colors) const
+  {
+    std_msgs::msg::ColorRGBA sample_color;
+    sample_color.r = 1.0;
+    sample_color.g = 0.65;
+    sample_color.b = 0.0;
+    colors.push_back(sample_color);  // orange
+    sample_color.r = 1.0;
+    sample_color.g = 1.0;
+    sample_color.b = 0.0;
+    colors.push_back(sample_color);  // yellow
+    sample_color.r = 0.69;
+    sample_color.g = 1.0;
+    sample_color.b = 0.18;
+    colors.push_back(sample_color);  // green yellow
+    sample_color.r = 0.59;
+    sample_color.g = 1.0;
+    sample_color.b = 0.59;
+    colors.push_back(sample_color);  // pale green
+    sample_color.r = 0.5;
+    sample_color.g = 1.0;
+    sample_color.b = 0.0;
+    colors.push_back(sample_color);  // chartreuse green
+    sample_color.r = 0.0;
+    sample_color.g = 1.0;
+    sample_color.b = 1.0;
+    colors.push_back(sample_color);  // cyan
+    sample_color.r = 0.53;
+    sample_color.g = 0.81;
+    sample_color.b = 0.98;
+    colors.push_back(sample_color);  // light skyblue
+    sample_color.r = 1.0;
+    sample_color.g = 0.41;
+    sample_color.b = 0.71;
+    colors.push_back(sample_color);  // hot pink
+  }
+
+  double get_line_width() { return m_line_width_property.getFloat(); }
+
+  double get_confidence_interval() const
+  {
+    switch (m_confidence_interval_property->getOptionInt()) {
+      case 0:
+        // 70%
+        return 1.036;
+      case 1:
+        // 85%
+        return 1.440;
+      case 2:
+        // 95%
+        return 1.960;
+      case 3:
+        // 99%
+        return 2.576;
+      default:
+        return 1.960;
+    }
+  }
+
+  double get_confidence_region() const
+  {
+    switch (m_confidence_interval_property->getOptionInt()) {
+      case 0:
+        // 70%
+        return 1.552;
+      case 1:
+        // 85%
+        return 1.802;
+      case 2:
+        // 95%
+        return 2.448;
+      case 3:
+        // 99%
+        return 3.035;
+      default:
+        return 2.448;
+    }
+  }
+
+private:
+  // All rviz plugins should have this. Should be initialized with pointer to this class
+  MarkerCommon m_marker_common;
+
+  // Base line width for all line markers (shape, twist, yaw rate, covariance)
+  rviz_common::properties::FloatProperty m_line_width_property;
+  // General color applied to all classes unless per-class color is enabled
+  rviz_common::properties::ColorProperty m_unified_color_property;
+  // When enabled, use per-class colors (m_polygon_properties); also the parent group of those
+  // colors
+  rviz_common::properties::BoolProperty m_per_class_color_property;
+  // Opacity shared by every object color (per-class and general)
+  rviz_common::properties::FloatProperty m_alpha_property;
+
+  // Group headers that organize the visualization toggles below into categories in the RViz panel.
+  // Declared before the toggles so they are constructed first (each toggle parents to one of
+  // these).
+  rviz_common::properties::Property m_shape_group_property;
+  rviz_common::properties::Property m_text_group_property;
+  rviz_common::properties::Property m_path_group_property;
+  rviz_common::properties::Property m_vector_group_property;
+  rviz_common::properties::Property m_covariance_group_property;
+  // Shape rendering mode (dimensionality + fill); nested under Show Shape, declared after the
+  // group. mutable because rviz's EnumProperty::getOptionInt() is not const-qualified but is read
+  // from the const get_shape_marker_ptr().
+  mutable rviz_common::properties::EnumProperty m_shape_type_property;
+  // Map to store the per-class color property keyed by classification label
+  PolygonPropertyMap m_polygon_properties;
+  // Predicted-path/footprint sampling density (Normal/Simple); nested under Show Path
+  rviz_common::properties::EnumProperty * m_simple_visualize_mode_property;
+  // Property to enable/disable the object footprint polygon overlay on bounding-box shapes
+  rviz_common::properties::BoolProperty m_display_bbox_footprint_property;
+  // Property to enable/disable mesh visualization of the object
+  rviz_common::properties::BoolProperty m_display_mesh_property;
+  // Property to overlay turn/brake light meshes; nested under mesh as it requires the mesh
+  rviz_common::properties::BoolProperty m_display_indicator_property;
+  // Property to set confidence interval of state estimations; nested under Show Covariance
+  rviz_common::properties::EnumProperty * m_confidence_interval_property;
+  // Property to enable/disable label visualization
+  rviz_common::properties::BoolProperty m_display_label_property;
+  // Property to enable/disable uuid visualization
+  rviz_common::properties::BoolProperty m_display_uuid_property;
+  // Property to enable/disable velocity text visualization
+  rviz_common::properties::BoolProperty m_display_velocity_text_property;
+  // Property to enable/disable acceleration text visualization
+  rviz_common::properties::BoolProperty m_display_acceleration_text_property;
+  // Property to enable/disable pose with covariance visualization
+  rviz_common::properties::BoolProperty m_display_pose_covariance_property;
+  // Property to enable/disable yaw covariance visualization
+  rviz_common::properties::BoolProperty m_display_yaw_covariance_property;
+  // Property to enable/disable twist visualization
+  rviz_common::properties::BoolProperty m_display_twist_property;
+  // Property to enable/disable twist covariance visualization
+  rviz_common::properties::BoolProperty m_display_twist_covariance_property;
+  // Property to enable/disable yaw rate visualization
+  rviz_common::properties::BoolProperty m_display_yaw_rate_property;
+  // Property to enable/disable yaw rate covariance visualization
+  rviz_common::properties::BoolProperty m_display_yaw_rate_covariance_property;
+  // Property to enable/disable predicted paths visualization
+  rviz_common::properties::BoolProperty m_display_predicted_paths_property;
+  // Property to enable/disable predicted path confidence visualization
+  rviz_common::properties::BoolProperty m_display_path_confidence_property;
+  // Property to enable/disable predicted path footprint (bounding box) visualization
+  rviz_common::properties::BoolProperty m_display_predicted_path_footprint_property;
+
+  rviz_common::properties::BoolProperty m_display_existence_probability_property;
+
+  // Default topic name to be visualized
+  std::string m_default_topic;
+
+  std::vector<std_msgs::msg::ColorRGBA> predicted_path_colors;
+};
+}  // namespace object_detection
+}  // namespace rviz_plugins
+}  // namespace autoware
+
+#endif  // AUTOWARE_PERCEPTION_RVIZ_PLUGIN__OBJECT_DETECTION__OBJECT_POLYGON_DISPLAY_BASE_HPP_
