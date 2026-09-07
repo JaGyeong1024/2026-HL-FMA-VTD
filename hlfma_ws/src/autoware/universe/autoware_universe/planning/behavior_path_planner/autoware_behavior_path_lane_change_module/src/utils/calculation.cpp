@@ -136,6 +136,9 @@ double calc_dist_to_last_fit_width(
 double calc_maximum_prepare_length(const CommonDataPtr & common_data_ptr)
 {
   const auto max_prepare_duration = common_data_ptr->lc_param_ptr->trajectory.max_prepare_duration;
+  // HL FMA P2 철회(9/7 시뮬 실주행): 외부 속도제한을 여기 반영하면 max_prepare_length 가 제한에 비례해
+  // 줄고, 그 값이 scene.cpp:204/313 의 '차선변경 시작 가능 거리' 판정에도 쓰여 저속에서 후보가 아예
+  // 생성되지 않았다(detour3: 제한 4.0→0.04 로 감소하자 후보 소멸). 규제구역 축소 이득보다 손해가 크다.
   const auto ego_max_speed = common_data_ptr->bpp_param_ptr->max_vel;
 
   return max_prepare_duration * ego_max_speed;
@@ -292,7 +295,32 @@ std::vector<double> calc_shift_intervals(
   const auto & route_handler_ptr = common_data_ptr->route_handler_ptr;
   const auto direction = common_data_ptr->direction;
 
-  return route_handler_ptr->getLateralIntervalsToPreferredLane(lanes.back(), direction);
+  auto intervals = route_handler_ptr->getLateralIntervalsToPreferredLane(lanes.back(), direction);
+
+  // HL FMA P1: on the preferred lane the intervals are empty (nothing to reach), which makes the
+  // minimum lane change length infinite and suppresses every candidate. An external request wants
+  // to leave the preferred lane, so use the lateral offset to the requested-side neighbor instead.
+  if (
+    intervals.empty() && common_data_ptr->lc_type == LaneChangeModuleType::EXTERNAL_REQUEST &&
+    direction != Direction::NONE) {
+    const auto & current = lanes.back();
+    const auto neighbor = direction == Direction::RIGHT
+                            ? route_handler_ptr->getRightLanelet(current)
+                            : route_handler_ptr->getLeftLanelet(current);
+    if (neighbor) {
+      const auto current_centerline = current.centerline();
+      const auto neighbor_centerline = neighbor->centerline();
+      if (!current_centerline.empty() && !neighbor_centerline.empty()) {
+        const auto curr_pt = current_centerline.front();
+        const auto next_pt = neighbor_centerline.front();
+        const auto dist = lanelet::geometry::distance2d(
+          lanelet::utils::to2D(curr_pt), lanelet::utils::to2D(next_pt));
+        intervals.push_back(direction == Direction::RIGHT ? -dist : dist);
+      }
+    }
+  }
+
+  return intervals;
 }
 
 std::pair<MinMaxValue, MinMaxValue> calc_lc_length_and_dist_buffer(

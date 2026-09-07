@@ -354,29 +354,7 @@ TEST_F(TestNormalLaneChange, HlfmaP1_ExternalRequestFromPreferredLaneHasFiniteLe
 
 // P2: 준비구간 상한(규제요소 근접 금지 거리)은 외부 속도제한이 걸려 있으면
 // min(max_vel, 외부 제한) × max_prepare_duration 이어야 한다.
-TEST_F(TestNormalLaneChange, HlfmaP2_MaxPrepareLengthRespectsExternalVelocityLimit)
-{
-  using autoware::behavior_path_planner::utils::lane_change::calculation::
-    calc_maximum_prepare_length;
-  const auto max_prepare_duration = lc_param_ptr_->trajectory.max_prepare_duration;
-  const auto max_vel = planner_data_->parameters.max_vel;
+// HL FMA: P2(외부 속도제한을 max_prepare_length 에 반영) 는 9/7 시뮬 실주행에서 철회했다.
+// 그 값이 차선변경 시작 가능 거리 판정에도 쓰여, 속도제한이 낮아지면 후보가 아예 생성되지 않았다.
+// 관련 테스트도 함께 제거한다. 근거: todo0906.md, scratchpad/fix_detour_timing.md
 
-  // 제한 없음: 기존 동작 (회귀)
-  EXPECT_NEAR(
-    calc_maximum_prepare_length(get_common_data_ptr()), max_prepare_duration * max_vel, 1e-6);
-
-  // 외부 속도제한 4.0 m/s (판단 노드의 hold 접근)
-  auto limit = std::make_shared<autoware_internal_planning_msgs::msg::VelocityLimit>();
-  limit->max_velocity = 4.0;
-  planner_data_->external_limit_max_velocity = limit;
-  normal_lane_change_->setData(planner_data_);
-  EXPECT_NEAR(calc_maximum_prepare_length(get_common_data_ptr()), max_prepare_duration * 4.0, 1e-6)
-    << "P2: 외부 속도제한 시 준비구간 상한이 줄어야 규제요소 근접 금지구역이 실제 속도에 맞음";
-
-  // 외부 제한이 max_vel 보다 크면 max_vel 유지
-  limit->max_velocity = max_vel + 10.0;
-  planner_data_->external_limit_max_velocity = limit;
-  normal_lane_change_->setData(planner_data_);
-  EXPECT_NEAR(
-    calc_maximum_prepare_length(get_common_data_ptr()), max_prepare_duration * max_vel, 1e-6);
-}
