@@ -19,11 +19,12 @@
 
       # trajectory generation
       trajectory:
-        max_prepare_duration: 4.0   # HL FMA 9/7 원복: 이 값×max_vel 이 두 곳에 반대 방향으로 쓰인다.
+        max_prepare_duration: 1.0   # HL FMA 9/8: 준비 구간(횡이동 전 직진)이 정지점보다 길어 옆으로 못 감. 되돌리려면 4.0
         # 규제요소 근접 금지(scene.cpp:342)에는 작을수록 유리하지만, '목표차선 시작점까지 거리'
         # 판정(scene.cpp:312)에는 작을수록 불리하다. 실주행 진단에서 규제 근접 0회 / 목표차선 시작점
         # 초과 다수 → 줄인 것이 순손해였다. 48m standoff 에서 우회 후보를 만들려면 54.4m 가 필요하다.
-        min_prepare_duration: 1.0   # HL FMA 9/8: 13.6m/s 에서 준비 직진 27m→13.6m. 되돌리려면 2.0
+        min_prepare_duration: 0.5   # HL FMA 9/8: 0.0 으로 없앴더니 path.cpp:515 의 하드코딩 5도
+        # 이음매 검사(준비구간↔횡이동 연속성)에 전 후보가 걸려 채택 0 이 됐다. 최소한만 되살린다.
         lateral_jerk: 5.0   # HL FMA 9/8: 횡가속 상향과 세트. 되돌리려면 1.5
         min_longitudinal_acc: -1.0
         max_longitudinal_acc: 0.5   # HL FMA 9/7 단독 재적용: 저속 차선변경 길이의 ½·a·t² 항이 지배적이라
@@ -51,7 +52,7 @@
       frenet:
         enable: true
         use_entire_remaining_distance: false
-        th_yaw_diff: 10.0  # [deg]
+        th_yaw_diff: 10.0  # [deg]  (9/8 확인: 거절 원인이 아니었다. 실제는 path.cpp:515 의 5도 상수)
         th_curvature_smoothing: 0.1 # [/]
         th_average_curvature: 0.020 # [/]
 
@@ -60,22 +61,22 @@
         allow_loose_check_for_cancel: true
         enable_target_lane_bound_check: true
         stopped_object_velocity_threshold: 0.3          # [m/s] Object whose velocity is less than the threshold is treated as static object.
-        prepare:                                        # RSS parameters used during the prepare phase, regardless of whether the ego is searching for a safe path, canceling, or transitioning to another state.
+        prepare:   # HL FMA 9/8 완화 (원래 1.0/0.8/0.5/1.0)
           expected_front_deceleration: -1.0             # [m/s2]
           expected_rear_deceleration: -1.0              # [m/s2]
-          rear_vehicle_reaction_time: 1.0               # [s]
-          rear_vehicle_safety_time_margin: 0.8          # [s]
-          lateral_distance_max_threshold: 0.5           # [m]
-          longitudinal_distance_min_threshold: 1.0      # [m]
+          rear_vehicle_reaction_time: 0.3               # [s]
+          rear_vehicle_safety_time_margin: 0.2          # [s]
+          lateral_distance_max_threshold: 0.3           # [m]
+          longitudinal_distance_min_threshold: 0.5      # [m]
           longitudinal_velocity_delta_time: 0.0         # [s]
           extended_polygon_policy: "along_path"         # [-] available options are `rectangle` or `along_path`
-        execution:
+        execution:   # HL FMA 9/8 완화 (원래 2.0/1.0/2.0/3.0). GT 인지라 지연·오차 없음
           expected_front_deceleration: -1.0
           expected_rear_deceleration: -1.0
-          rear_vehicle_reaction_time: 2.0
-          rear_vehicle_safety_time_margin: 1.0
-          lateral_distance_max_threshold: 2.0
-          longitudinal_distance_min_threshold: 3.0
+          rear_vehicle_reaction_time: 0.5
+          rear_vehicle_safety_time_margin: 0.2
+          lateral_distance_max_threshold: 1.0
+          longitudinal_distance_min_threshold: 1.5
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
         parked:
@@ -87,22 +88,22 @@
           longitudinal_distance_min_threshold: 3.0
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
-        cancel:
+        cancel:   # HL FMA 9/8: execution 과 동일하게. 취소 판정이 더 빡빡하면 시작했다가 되돌아온다 (원래 1.5/0.8/1.0/2.5)
           expected_front_deceleration: -1.0
           expected_rear_deceleration: -2.0
-          rear_vehicle_reaction_time: 1.5
-          rear_vehicle_safety_time_margin: 0.8
+          rear_vehicle_reaction_time: 0.5
+          rear_vehicle_safety_time_margin: 0.2
           lateral_distance_max_threshold: 1.0
-          longitudinal_distance_min_threshold: 2.5
+          longitudinal_distance_min_threshold: 1.5
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
-        stuck:
+        stuck:   # HL FMA 9/8: 상류는 execution 과 같아 완화가 없었다 (원래 2.0/1.0/2.0/3.0)
           expected_front_deceleration: -1.0
           expected_rear_deceleration: -1.0
-          rear_vehicle_reaction_time: 2.0
-          rear_vehicle_safety_time_margin: 1.0
-          lateral_distance_max_threshold: 2.0
-          longitudinal_distance_min_threshold: 3.0
+          rear_vehicle_reaction_time: 0.5
+          rear_vehicle_safety_time_margin: 0.2
+          lateral_distance_max_threshold: 1.0
+          longitudinal_distance_min_threshold: 1.5
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
 
@@ -158,7 +159,7 @@
         duration: 5.0                       # [s]
         max_lateral_jerk: 100.0             # [m/s3]
         overhang_tolerance: 0.0             # [m]
-        unsafe_hysteresis_threshold: 5      # [/]
+        unsafe_hysteresis_threshold: 1      # [/] HL FMA 9/8: GT 인지라 연속 확인이 불필요. 되돌리려면 5
         deceleration_sampling_num: 1        # [/] Used to sample the approved lane change path, specifically for checking safety against leading objects.
 
       lane_change_finish_judge_buffer: 2.0      # [m]

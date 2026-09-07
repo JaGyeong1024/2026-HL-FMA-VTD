@@ -113,6 +113,7 @@ setsid ros2 launch vtd_autoware_bridge bridge.launch.xml \
   route_csv:="$ROUTE_CSV" \
   auto_engage:="${AUTO_ENGAGE:-false}" \
   detour:="${DETOUR:-true}" \
+  lane_plan:="${LANE_PLAN:-false}" \
   > "$BRIDGE_LOG" 2>&1 < /dev/null &
 BR_PID=$!
 echo "[bridge] host=$VTD_HOST route_csv=${ROUTE_CSV:-없음} auto_engage=${AUTO_ENGAGE:-false} log=$BRIDGE_LOG"
