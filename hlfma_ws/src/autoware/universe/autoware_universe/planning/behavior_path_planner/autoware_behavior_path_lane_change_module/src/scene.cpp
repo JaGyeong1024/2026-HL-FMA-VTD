@@ -1327,9 +1327,11 @@ bool NormalLaneChange::get_path_using_path_shifter(
       debug_metrics.lc_metrics.emplace_back(lc_metric, -1);
 
       const auto debug_print_lat = [&](const std::string & s) {
-        RCLCPP_DEBUG(
-          logger_, "%s | lc_time: %.5f | lon_acc: %.5f | lat_acc: %.5f | lc_len: %.5f", s.c_str(),
-          lc_metric.duration, lc_metric.actual_lon_accel, lc_metric.lat_accel, lc_metric.length);
+        // HL FMA 임시 계측(저속 차선변경 길이). 측정 후 RCLCPP_DEBUG 로 되돌린다.
+        RCLCPP_WARN(
+          logger_, "[HLFMA-LEN] %s | v: %.2f | lc_time: %.3f | lat_acc: %.2f | lc_len: %.2f",
+          s.c_str(), common_data_ptr_->get_ego_speed(), lc_metric.duration, lc_metric.lat_accel,
+          lc_metric.length);
       };
 
       if (!check_length_diff(prep_metric.length, lc_metric.length, true)) {

@@ -9,9 +9,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$HOME/hlfma/logs/sim/${TAG}_$(date +%m%d_%H%M%S)"; mkdir -p "$OUT"
 export ROS_DOMAIN_ID="${DOMAIN:-53}"
 export DETOUR="${DETOUR:-false}"
+export LANE_SEQ="${LANE_SEQ:-false}"
+export LANE_PLAN="${LANE_PLAN:-false}"
 source /opt/ros/jazzy/setup.bash; source "$ROOT/hlfma_ws/install/setup.bash"
 note() { echo "  $*" | tee -a "$OUT/result.txt"; }
-echo "== [$TAG] 로그: $OUT  (ROS_DOMAIN_ID=$ROS_DOMAIN_ID, DETOUR=$DETOUR)" | tee -a "$OUT/result.txt"
+echo "== [$TAG] 로그: $OUT  (ROS_DOMAIN_ID=$ROS_DOMAIN_ID, DETOUR=$DETOUR, LANE_SEQ=$LANE_SEQ)" | tee -a "$OUT/result.txt"
 
 # 1) 사전 확인 — VTD 연결·CSV·맵
 timeout 3 nc -z 192.168.50.11 9910 || { note "[중단] VTD 9910 미연결"; exit 1; }
