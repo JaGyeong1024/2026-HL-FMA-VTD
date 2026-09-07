@@ -122,10 +122,10 @@ launch:
       default: "true"
   - arg:
       name: launch_obstacle_velocity_limiter_module
-      default: "true"   # HL FMA 묶음1(9/7): 급출현 보행자·이륜차. 사전테스트까지는 비활성이었음
+      default: "false"
   - arg:
       name: launch_run_out_module
-      default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
+      default: "true"   # HL FMA 묶음1(9/7): 급출현 보행자·이륜차. 사전테스트까지는 비활성(개발계획_0902 §3)
   - arg:
       name: launch_boundary_departure_prevention_module
       default: "true"
