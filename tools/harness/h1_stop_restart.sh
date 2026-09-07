@@ -16,6 +16,10 @@ for c in "${cases[@]}"; do
       note "정지 시 간격 ${g:-없음} m, 통과=$p, 최대감속 실측 $d, 명령 $(mget "['max_decel_cmd']")"
       [ "$p" = "False" ] && pass "정지차 통과 없음" || fail "정지차 옆을 지나감(회피?)"
       [ -n "$g" ] && awk -v g="$g" 'BEGIN{exit !(g>=2 && g<=8)}' && pass "정지 간격 ${g} m" || fail "정지 간격 ${g:-없음} m (2~8 m 밖 또는 미정지)";;
+    h1_ped_d*)
+      oc=$(mget "['mover9_outcome']"); md=$(mget "['mover9_min_dist']"); v=$(mget "['mover9_v_at_min']"); td=$(mget "['mover9_trigger_dist']"); v0=$(mget "['mover9_ego_v_at_start']")
+      note "보행자 출발 시 ego 거리 ${td} m·속도 ${v0} m/s → 결과 **${oc}**, 최소거리 ${md} m(그때 ${v} m/s), 최대감속 실측 $(mget "['max_decel_measured']") 명령 $(mget "['max_decel_cmd_moving']")"
+      [ "$oc" != "충돌" ] && pass "충돌 없음 (${oc})" || fail "충돌 (최소거리 ${md} m)";;
     h1_pedestrian)
       col=$(mget "['mover9_collision']"); md=$(mget "['mover9_min_dist']"); v=$(mget "['mover9_v_at_min']")
       note "보행자 최소거리 ${md} m (그때 속도 ${v} m/s), 최대감속 실측 $(mget "['max_decel_measured']")"

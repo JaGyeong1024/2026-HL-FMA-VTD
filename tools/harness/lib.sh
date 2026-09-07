@@ -53,12 +53,12 @@ PY
 }
 capture_start() {           # 판정용 토픽 bag 기록 (선택 토픽만). $@ 추가 토픽
   local topics=(/vehicle/status/velocity_status /api/operation_mode/state /api/routing/state /localization/kinematic_state
-                /control/command/control_cmd /control/command/turn_indicators_cmd /planning/mission_planning/route
+                /control/command/control_cmd /control/trajectory_follower/control_cmd /control/command/turn_indicators_cmd /planning/mission_planning/route
                 /planning/scenario_planning/max_velocity /planning/trajectory
                 /planning/scenario_planning/lane_driving/behavior_planning/path_with_lane_id
                 /perception/object_recognition/objects /diagnostics_graph/status
                 /api/fail_safe/mrm_state /system/emergency/hazard_status /system/fail_safe/mrm_state /rosout "$@")
-  local extra; extra=$(timeout 15 ros2 topic list 2>/dev/null | grep -E "cooperate_status|planning_factors/(lane_change|external|traffic_light|intersection|crosswalk|stop_line|obstacle_stop|run_out)" | tr '\n' ' ')
+  local extra; extra=$(timeout 15 ros2 topic list 2>/dev/null | grep -E "cooperate_status|planning_factors/" | tr '\n' ' ')
   # 노드 이름을 케이스마다 다르게: 기본 /rosbag2_recorder 가 둘 이상이면 duplicated_node_checker ERROR → MRM 비상정지 →
   # 자율주행 불가 (baseline 9/7 준비 실패의 원인). 직접 백그라운드 (서브셸이면 pid 가 틀려 종료 못 함)
   ros2 bag record --node-name "rec_$(basename "$OUT" | tr -c "A-Za-z0-9_\n" "_")" -o "$OUT/bag" ${topics[*]} $extra > "$OUT/bag_record.log" 2>&1 < /dev/null &

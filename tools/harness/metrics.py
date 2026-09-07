@@ -89,8 +89,17 @@ objs = {}
 for oid, x, y, h, sp, ln, wd in re.findall(r'객체초기 id=(\d+) x=([-\d.]+) y=([-\d.]+) hdg=([-\d.]+) speed=([-\d.]+) len=([-\d.]+) wid=([-\d.]+)', mock_log):
     objs[int(oid)] = dict(x=float(x), y=float(y), h=float(h), speed=float(sp), len=float(ln), wid=float(wd))
 movers = {}
-for oid, x, y, h, sp, ln, wd, t0, t1 in re.findall(r'이동객체 id=(\d+) x=([-\d.]+) y=([-\d.]+) hdg=([-\d.]+) speed=([-\d.]+) len=([-\d.]+) wid=([-\d.]+) t0=([-\d.]+) t1=(\S+)', mock_log):
-    movers[int(oid)] = dict(x=float(x), y=float(y), h=float(h), speed=float(sp), len=float(ln), wid=float(wd), t0=float(t0), t1=None if t1 == 'None' else float(t1))
+for oid, x, y, h, sp, ln, wd, t0, t1 in re.findall(r'이동객체 id=(\d+) x=([-\d.]+) y=([-\d.]+) hdg=([-\d.]+) speed=([-\d.]+) len=([-\d.]+) wid=([-\d.]+) t0=(\S+) t1=(\S+)', mock_log):
+    mv = dict(x=float(x), y=float(y), h=float(h), speed=float(sp), len=float(ln), wid=float(wd), abs_t=False)
+    if t0.startswith('d:'):           # 거리 트리거: 실제 출발 시각은 "이동객체 N 출발" 로그 (시뮬 절대 시각)
+        m = re.search(r't=([\d.]+) 이동객체 ' + oid + r' 출발 \(ego 종거리 ([\d.]+) m, ego v=([\d.]+) km/h\)', mock_log)
+        if not m:
+            continue
+        mv['t0'] = float(m.group(1)); mv['t1'] = mv['t0'] + float(t1) if t1 != 'None' else None; mv['abs_t'] = True
+        mv['trigger_dist'] = float(m.group(2)); mv['ego_v_at_start'] = round(float(m.group(3)) / 3.6, 2)
+    else:
+        mv['t0'] = float(t0); mv['t1'] = None if t1 == 'None' else float(t1)
+    movers[int(oid)] = mv
 
 def gap_to(obj, i):
     """i 번째 스텝에서 ego 앞범퍼→객체 뒷범퍼 종방향 간격 [m] (ego 진행방향 기준)."""
@@ -120,10 +129,19 @@ if '--obj' in args:
 # 이동객체 최소 거리 (등장~소멸 사이, 스케줄 시각은 t_move 기준 또는 접속 기준 — mock.log 의 clock 표시로 구분)
 clock_move = '스케줄 기준 시각 = 지금' in mock_log
 for oid, mv in movers.items():
-    base = (res['t_move'] or 0.0) if clock_move else 0.0
+    base = 0.0 if mv.get('abs_t') else ((res['t_move'] or 0.0) if clock_move else 0.0)
     dmin, tmin, v_at = 1e9, None, None
-    for i in range(len(rows)):
+    stopped_before_cross, passed, vmin_before = False, False, 1e9
+    for i in range(len(rows)):                    # 정지/통과 판정은 출발 이후 전 구간 (객체 소멸 후 포함)
         tc = T[i] - base
+        if tc >= mv['t0']:
+            lon = (mv['x'] - X[i]) * math.cos(Hd[i]) + (mv['y'] - Y[i]) * math.sin(Hd[i])
+            if lon > 0:
+                vmin_before = min(vmin_before, V[i])
+                if V[i] < 0.5:
+                    stopped_before_cross = True
+            elif lon < -EGO_FRONT:
+                passed = True
         if tc < mv['t0'] or (mv['t1'] is not None and tc >= mv['t1']):
             continue
         px = mv['x'] + mv['speed'] * math.cos(mv['h']) * (tc - mv['t0'])
@@ -132,6 +150,13 @@ for oid, mv in movers.items():
         d = math.hypot(px - cx, py - cy)
         if d < dmin:
             dmin, tmin, v_at = d, T[i], V[i]
+    v0 = mv.get('ego_v_at_start', None)
+    slowed = v0 is not None and vmin_before < 0.5 * v0
+    res[f'mover{oid}_outcome'] = ('충돌' if dmin < 2.5 else ('정지' if stopped_before_cross else
+                                  ('감속통과' if (passed and slowed) else ('통과' if passed else '미도달'))))
+    res[f'mover{oid}_vmin_before_cross'] = None if vmin_before == 1e9 else round(vmin_before, 2)
+    if mv.get('abs_t'):
+        res[f'mover{oid}_trigger_dist'] = mv['trigger_dist']; res[f'mover{oid}_ego_v_at_start'] = mv['ego_v_at_start']
     res[f'mover{oid}_min_dist'] = round(dmin, 2)
     res[f'mover{oid}_t_min'] = tmin
     res[f'mover{oid}_v_at_min'] = round(v_at, 2) if v_at is not None else None
