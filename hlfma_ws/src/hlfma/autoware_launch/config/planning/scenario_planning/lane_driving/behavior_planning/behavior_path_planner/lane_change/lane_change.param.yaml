@@ -19,9 +19,9 @@
 
       # trajectory generation
       trajectory:
-        max_prepare_duration: 4.0
+        max_prepare_duration: 2.0   # HL FMA 묶음3: 규제요소 근접 금지 = 이 값×max_vel (53m→27m)
         min_prepare_duration: 2.0
-        lateral_jerk: 0.5
+        lateral_jerk: 1.5   # HL FMA 묶음3: 차선변경 길이 병목(83m→~59m@49km/h). 타이트 설정
         min_longitudinal_acc: -1.0
         max_longitudinal_acc: 1.0
         th_prepare_length_diff: 1.0
@@ -30,7 +30,7 @@
         lon_acc_sampling_num: 5
         lat_acc_sampling_num: 3
         lane_changing_decel_factor: 0.5
-        th_prepare_curvature: 0.03 # [/]
+        th_prepare_curvature: 0.04 # [/]  # HL FMA 묶음3: R≥25m 곡선에서 허용
 
       # delay lane change
       delay_lane_change:
@@ -106,8 +106,8 @@
       # lateral acceleration map
       lateral_acceleration:
         velocity: [0.0, 4.0, 10.0]
-        min_values: [0.4, 0.4, 0.4]
-        max_values: [0.65, 0.65, 0.65]
+        min_values: [0.6, 0.6, 0.6]   # HL FMA 묶음3
+        max_values: [1.2, 1.2, 1.2]   # HL FMA 묶음3: Ioniq6 여유 큼, jerk 와 세트
 
       # target object
       target_object:
