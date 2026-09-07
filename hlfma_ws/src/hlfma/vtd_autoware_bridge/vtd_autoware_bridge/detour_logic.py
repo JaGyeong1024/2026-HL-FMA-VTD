@@ -13,7 +13,13 @@ ROS 노드(blocked_route_detour.py)는 토픽·서비스를 이 모듈의 Inputs
     그 이상은 볼 수 없으므로 "확인 시간"을 줄여 결정을 앞당기는 것이 유일한 수단이다.
   - 감속(HOLD) 개시와 승인(ASSESS) 을 분리했다. 감속은 slowdown_min_stopped_s(짧게) 로 즉시 시작하고,
     승인은 blocker_min_stopped_s 를 채운 뒤에만 한다. 감속은 되돌릴 수 있고 감점도 없다.
-  - 적신호 판정에 latch(signal_hold_s) 를 넣어 HOLD/STOP 진동을 막는다 (factor 가 프레임마다 흔들림).
+  - **대기열 판정에 신호를 쓰지 않는다.** "막힘 앞끝 ~ 다음 정지선 거리 ≥ stopline_min_distance_m",
+    즉 **끼어들 공간이 있는가** 하나가 두 경우를 이미 가른다.
+      · 신호 대기 중인 차들은 정지선에 붙어 선다 → 공간이 없다 → 후보도 안 생기고 자연히 뒤에서 기다린다.
+      · 정지선에서 멀찍이 선 차는 신호로 설명되지 않는다(적색인데 멀찍이 설 이유가 없다)
+        → 움직이지 않는 차로 보고 앞 공간으로 끼어든다.
+    신호 색은 같은 답을 중복으로 내면서, 신호 라우팅이 틀리면(교차로 진입 시 state 0 등) 답을 망친다.
+    ego 자신의 신호 준수는 Autoware traffic_light 모듈 소관이지 이 노드 소관이 아니다.
 """
 import math
 from dataclasses import dataclass, field
@@ -47,6 +53,8 @@ class Params:
     standoff_decel_mps2: float = 1.5         # standoff 접근 감속 프로파일 (보조 레버)
     approach_speed_mps: float = 4.0          # 접근 중 속도 상한
     no_response_s: float = 3.0               # 서서 관찰: blocker 가 이만큼 계속 정지하면 우회 결정
+    standoff_needed_fallback_m: float = 40.0  # 후보가 없을 때 '우회에 필요한 거리' 보수값
+    approach_speed_floor_mps: float = 2.0    # standoff 를 못 만든 경우의 하한(손 놓지 않고 최대한 감속)
     blocker_move_speed_mps: float = 0.5      # 이 이상이면 blocker 가 움직인 것 (히스테리시스)
     lc_finish_margin_m: float = 6.0          # 차선변경 완료 지점과 blocker 사이 여유
     # --- blocker 판정 ---
@@ -56,10 +64,39 @@ class Params:
     detection_distance_m: float = 80.0       # VTD GT 실측 상한 79.8 m (bag 2 회). 이 이상은 볼 수 없다
     path_lateral_margin_m: float = 2.2       # 경로 횡거리 이내면 자차 차선 위
     # --- 기하·의미 조건 ---
-    regulatory_clearance_m: float = 26.6     # max_prepare_duration × max_vel (D4: LC 개시 금지 구역)
-    stopline_min_distance_m: float = 28.0    # 정지차~정지선: 우회+복귀 가능 최소 (타이트 설정 26 + 여유)
-    signal_hold_s: float = 2.0               # 신호 **메시지 자체가 stale** 일 때만 직전 판정을 이만큼 유지
-    signal_debounce_s: float = 0.5           # 색 전이 히스테리시스. 적→비적·비적→적 **양방향 동일 조건**
+    # (판정 미사용 — 진단용으로만 남긴다) Autoware 의 isLaneChangeRequired(scene.cpp:296-342)가 같은 검사를
+    # 이미 한다. 규제요소가 가까우면 **후보를 아예 만들지 않으므로**, 후보 존재가 곧 통과의 증거다.
+    # 우리가 베껴 둔 값(max_prepare_duration × max_vel)이 Autoware 실제 계산과 어긋나면 멀쩡한 우회를 막는다
+    # (9/7 detour16: 우리 54.4 m 기준으로 48 m 를 거부했는데 Autoware 는 후보를 내고 있었다).
+    regulatory_clearance_m: float = 26.6     # 미사용. 래퍼 호환 위해 필드만 유지
+    # **유일한 대기열 판별자이자 기하 조건**: 막힘 앞끝 ~ 다음 정지선 거리가 "우회 후 복귀에 필요한 길이"
+    # 이상인가. 상수가 아니라 **속도 기반으로 계산**한다(9/7 사용자 지적):
+    #   need = n_return × lc_length(v_hold) + stopline_stop_margin_m
+    # 상수 26 은 (a) 복귀에 몇 칸이 필요한지 세지 않고 (b) 속도 의존을 굳혀 저속에서 과대평가였다.
+    stopline_stop_margin_m: float = 3.0      # 복귀 완료 후 정지선까지 남길 여유
+    # 복귀 여유 부족을 **거부 근거로 쓸 것인가**. 기본 false = 계산은 하되 승인을 막지 않고 경고만 남긴다.
+    #  (1) 모델이 실측 대비 과대다: 13.7 m/s 에서 모델 118 m vs 실측 후보 finish 99 m (약 20%).
+    #      원인은 prepare 항 — 우리는 max_prepare_duration(4.0)×v 로 잡는데 실제 선택된 후보의 start 는
+    #      27 m 였다(= 약 2.0×v, min_prepare_duration 쪽). 즉 (4.0−2.0)×v 만큼 과대평가한다.
+    #  (2) 비용이 비대칭이다: 우회 후 복귀 실패는 경로이탈 리스폰 1 회(구간당 1 회 무료, 초과 −6)지만,
+    #      우회를 안 하면 영원히 못 간다. 불확실할 때는 시도하는 쪽이 기대값이 낫다.
+    #  (3) 복귀는 경로상 필수 차선변경이라 Autoware 가 알아서 최선을 다한다.
+    # 실주행에서 복귀가 실제로 되는지 관측해 모델을 보정한 뒤 enforce 를 켤지 정한다.
+    return_check_enforce: bool = False
+    # 계산 결과의 **하한**(실제 판정은 계산값이 지배한다). 12 = 차 길이 4.85 + 정지 여유 3.0 + 슬랙 ~4.
+    # v_hold 나 모델 파라미터가 0 에 가깝게 잘못 들어와 need 가 비정상적으로 작아져도
+    # 정지선에 이보다 가깝게 붙어서 우회를 시작하지는 않게 하는 안전장치다.
+    stopline_min_distance_m: float = 12.0
+    # 차선변경 길이 모델 (Autoware 소스와 같은 식. yaml 과 어긋나지 않게 런치 인자로 받는다)
+    #   t = calc_shift_time_from_jerk(폭, jerk, lat_acc)        (path_shift.cpp:70)
+    #   lc_length(v) = max_prepare_duration·v + v·t + ½·a_lc·t²  (calculation.cpp:356)
+    #   a_lc = clamp((목표속도−v)/t, 0, max_longitudinal_acc)    (calculation.cpp:449)
+    # a_lc 는 **상한으로 고정**해 보수적으로 잡는다 — 저속에서는 실제로 상한에 붙는다(§6 실측).
+    lc_lane_width_m: float = 3.5
+    lc_lateral_jerk: float = 1.5             # yaml: lane_change.trajectory.lateral_jerk
+    lc_lateral_acc: float = 1.2              # yaml: lateral_acceleration.max_values
+    lc_max_prepare_duration: float = 4.0     # yaml: trajectory.max_prepare_duration
+    lc_max_longitudinal_acc: float = 1.0     # yaml: trajectory.max_longitudinal_acc
     # --- 취소 대응 ---
     abort_backoff_s: float = 10.0            # D5: 승인→취소 루프 방지
     max_abort_count: int = 2
@@ -104,20 +141,10 @@ class LaneInfo:
     right_boundary_solid: bool = False
     distance_to_regulatory_m: Optional[float] = None  # 다음 신호등·회전 lanelet 까지 (없으면 None)
     distance_to_stopline_m: Optional[float] = None    # 다음 정지선까지 (없으면 None)
-
-
-@dataclass
-class SignalInfo:
-    """적신호 판정 입력.
-
-    **1차 근거는 `color`(브리지가 경로상 다음 정지선에 실어 보내는 신호 색)** 다.
-    planning_factor(STOP)는 보조일 뿐이다 — 초록이 되면 factor 가 사라지므로 "factor 부재 = 직전값 유지"
-    로 해석하면 영원히 적신호로 고착된다(9/7 detour9: 신호가 1→5→1→5→2 로 순환하는데 red_queue 가 계속 true).
-    """
-    red_stop_factor_distance_m: Optional[float]  # 보조: traffic_light planning_factor STOP 거리 (없으면 None)
-    available: bool = True                       # 신호 메시지가 fresh 한가
-    color: Optional[str] = None                  # 'RED' | 'AMBER' | 'GREEN' | None(정보 없음)
-    color_age_s: Optional[float] = None          # 색 수신 경과시간 (진단용)
+    lanes_to_preferred: Dict[str, int] = field(default_factory=dict)
+    """'left'/'right' → **그 쪽으로 우회했을 때** 우선차선까지 되돌아오는 데 필요한 칸 수.
+    예) 세그먼트 [15379, 15414, 15449, 15484], 자차 15414, 우선(좌회전) 15379, 우회 목적지 15449
+        → 15449 에서 15379 까지 2 칸이므로 lanes_to_preferred['right'] = 2."""
 
 
 @dataclass
@@ -136,7 +163,6 @@ class Inputs:
     ego: EgoState
     objects: List[ObjectInfo]
     lane: LaneInfo
-    signal: SignalInfo
     candidates: Dict[str, CandidateInfo] = field(default_factory=dict)  # 'left'/'right'
     respawn: bool = False
     stale: bool = False              # odom/objects/path 중 하나라도 input_timeout 초과
@@ -150,6 +176,7 @@ class Decision:
     clears: List[str] = field(default_factory=list)   # 해제할 sender
     reason: str = ''
     detail: Dict[str, Any] = field(default_factory=dict)   # 판단 근거 (로그·/detour/status 용)
+    warn: Optional[str] = None                             # 있으면 래퍼가 WARN 으로 남긴다(전이당 1회)
 
 
 class DetourLogic:
@@ -174,7 +201,7 @@ class DetourLogic:
         self.hold_active = False         # sender_hold 제한이 걸려 있는가
         self.hold_value = 0.0
         self.hold_since: Optional[float] = None        # HOLD 진입 시각 (hold_timeout_s 판정)
-        self.standoff_missed = False                   # 인지 시점에 이미 standoff 안이었다
+        self.standoff_missed = False                   # 인지 시점에 이미 우회 필요거리 안이었다
         self.tracked_blocker_id: Optional[int] = None  # standoff_missed 판정용
         self.last_blocked_t = -math.inf  # 마지막으로 blocker 를 본 시각
         self.committed: Optional[str] = None   # 승인해 둔 방향 (RUNNING 관측 전까지)
@@ -183,11 +210,6 @@ class DetourLogic:
         self.ped_active = False
         self.ped_last_seen_t = -math.inf
         self.respawn_until = -math.inf
-        self.red_state: Optional[bool] = None          # 확정된 적신호 여부 (None=아직 관측 전)
-        self.red_pending: Optional[bool] = None        # 전이 대기 중인 값
-        self.red_pending_since = -math.inf
-        self.signal_fresh_t = -math.inf                # 신호 정보를 마지막으로 본 시각 (stale 유지용, 별도 타이머)
-        self.red_basis = ''                            # 판정 근거 (진단)
         self.gave_up_t: Optional[float] = None        # hold_timeout 으로 포기한 시각
         self.gave_up_blocker_id: Optional[int] = None  # 그때의 blocker (바뀌면 즉시 재평가)
 
@@ -244,6 +266,18 @@ class DetourLogic:
         return min(p.approach_speed_mps,
                    math.sqrt(2.0 * p.standoff_decel_mps2 * max(0.0, blocker_distance - target)))
 
+    def needed_distance_m(self, inputs: Inputs) -> float:
+        """우회에 **실제로** 필요한 거리 = 현재 후보의 완료거리 + 여유. 후보가 없으면 보수값.
+
+        9/7 detour14: 판정 기준이 프로파일 목표(73 m)였던 탓에 인지 70 m·56 m 에서도 '이미 안쪽'으로
+        포기했다. 70 m 면 우회는 충분히 가능하다(그때 후보 finish 38 m). 기준은 목표가 아니라 필요거리다.
+        """
+        finishes = [c.finish_distance_m for c in inputs.candidates.values()
+                    if c is not None and c.present and not c.stale and c.finish_distance_m > 0.1]
+        if not finishes:
+            return self.p.standoff_needed_fallback_m
+        return min(finishes) + self.p.lc_finish_margin_m
+
     def effective_standoff_m(self) -> float:
         """프로파일이 겨냥하는 지점. 실제 정지 지점이 standoff_m 이상이 되도록 오버슈트만큼 앞당긴다."""
         return self.p.standoff_m + self.p.standoff_margin_m
@@ -259,47 +293,59 @@ class DetourLogic:
         self.hold_since = None
         clears.append(self.p.sender_hold)
 
-    def _red_queue(self, inputs: Inputs) -> bool:
-        """적신호(=정당한 대기열) 판정.
+    def shift_time_s(self) -> float:
+        """Autoware calc_shift_time_from_jerk(path_shift.cpp:70) 와 같은 식."""
+        p = self.p
+        j, a, l = abs(p.lc_lateral_jerk), abs(p.lc_lateral_acc), abs(p.lc_lane_width_m)
+        if j < 1e-8 or a < 1e-8:
+            return 1e10
+        tj = a / j
+        ta = (math.sqrt(a * a + 4.0 * j * j * l / a) - 3.0 * a) / (2.0 * j)
+        if ta < 0.0:
+            tj, ta = (l / (2.0 * j)) ** (1.0 / 3.0), 0.0
+        return 4.0 * tj + 2.0 * ta
 
-        1차: 브리지 신호 색. RED/AMBER → 적, GREEN(좌회전 화살표 포함) → 비적.
-        2차: 색이 없을 때만 planning_factor(STOP) 를 본다.
-        둘 다 없고 **신호 메시지 자체가 stale** 이면 signal_hold_s 동안만 직전값을 유지하고,
-        그 뒤에는 "신호 정보 없음 = 비적색" 으로 본다(신호 없는 곳의 정차차도 우회 대상이어야 한다).
-        전이는 signal_debounce_s 로 **양방향 동일하게** 디바운스한다(한 방향 고착 방지).
+    def lc_length_m(self, v: float) -> float:
+        """속도 v 에서 차선변경 1 칸에 필요한 길이(준비 + 변경). a_lc 는 상한으로 보수적으로 잡는다."""
+        p = self.p
+        t = self.shift_time_s()
+        return p.lc_max_prepare_duration * v + v * t + 0.5 * p.lc_max_longitudinal_acc * t * t
+
+    def _room_verdict(self, inputs: Inputs, blockers: List[ObjectInfo]):
+        """끼어들 공간이 있는가 — **유일한 대기열 판별자**. 신호를 보지 않는다.
+
+        필요 길이는 상수가 아니라 **우회 후 복귀에 실제로 드는 길이**로 계산한다:
+            need = n_return × lc_length(approach_speed_mps) + stopline_stop_margin_m
+        n_return 은 우회 목적지 차선에서 우선차선까지의 칸 수다(옆 차선로 우회하면 보통 1~2).
+        판정 대상 간격은 가장 가까운 blocker 가 아니라 **정지 차량군 중 가장 앞선 것**과 정지선 사이다.
+        정지선이 근처에 없으면 신호 대기일 수 없고 복귀 제약도 없으므로 공간이 있는 것으로 본다.
         """
-        p, t, sig = self.p, inputs.t, inputs.signal
-        if sig.color is not None or sig.red_stop_factor_distance_m is not None or sig.available:
-            self.signal_fresh_t = t
-        if sig.color in ('RED', 'AMBER'):
-            raw, basis = True, f'color={sig.color}'
-        elif sig.color == 'GREEN':
-            raw, basis = False, 'color=GREEN'
-        elif sig.red_stop_factor_distance_m is not None:
-            raw, basis = True, 'factor=STOP'
-        elif not sig.available and self.red_state is not None \
-                and (t - self.signal_fresh_t) < p.signal_hold_s:
-            # 주의: 디바운스 타이머(red_pending_since)와 **별도 타이머**를 쓴다.
-            # 같은 타이머를 쓰면 디바운스가 매번 초기화해 stale 유지가 영원히 풀리지 않는다.
-            self.red_basis = 'signal stale → 직전값 유지'
-            return bool(self.red_state)
-        else:
-            raw, basis = False, '신호 정보 없음 → 비적색'
-
-        if self.red_state is None:                      # 첫 관측은 즉시 채택
-            self.red_state, self.red_pending = raw, None
-            self.red_pending_since = t
-        elif raw != self.red_state:                     # 전이는 양방향 동일 디바운스
-            if self.red_pending != raw:
-                self.red_pending, self.red_pending_since = raw, t
-            elif t - self.red_pending_since >= p.signal_debounce_s:
-                self.red_state, self.red_pending = raw, None
-                self.red_pending_since = t
-        else:
-            self.red_pending = None
-            self.red_pending_since = t
-        self.red_basis = basis + ('' if self.red_pending is None else f' (전이 대기 →{self.red_pending})')
-        return bool(self.red_state)
+        p, lane = self.p, inputs.lane
+        front = blockers[-1]              # longitudinal 오름차순 → 마지막이 정지선에 가장 가까운 차
+        d_sl = lane.distance_to_stopline_m
+        n_vals = [n for n in lane.lanes_to_preferred.values() if n is not None]
+        n_return = min(n_vals) if n_vals else 1       # 모르면 1 칸으로 가정(가장 흔한 경우)
+        lc_len = self.lc_length_m(p.approach_speed_mps)
+        need = max(p.stopline_min_distance_m, n_return * lc_len + p.stopline_stop_margin_m)
+        info = {'n_lanes': n_return, 'lc_length_model_m': round(lc_len, 1),
+                'need_m': round(need, 1), 'gap_m': None,
+                'stopline_dist_m': None if d_sl is None else round(d_sl, 1),
+                'front_blocker_to_stopline_m': None}
+        if d_sl is None:
+            info.update(verdict='detour', basis='no_stopline')
+            return True, info
+        gap = d_sl - front.longitudinal_m
+        info['gap_m'] = round(gap, 1)
+        info['front_blocker_to_stopline_m'] = round(gap, 1)
+        if gap < need:
+            if not p.return_check_enforce:
+                # 경고만: 계산이 실측 대비 과대하고, 복귀 실패 비용(리스폰 1회) < 미완주 비용이다.
+                info.update(verdict='insufficient', basis='room_short_warn_only')
+                return True, info
+            info.update(verdict='wait', basis='no_room_to_stopline')
+            return False, info
+        info.update(verdict='detour', basis='room_available')
+        return True, info
 
     def _allowed_sides(self, inputs: Inputs) -> List[str]:
         """ASSESS 구조 조건: 같은 방향 이웃 차선 존재 ∧ 그 쪽 경계 실선 아님 (D8: 실선은 Autoware 도 throw)
@@ -422,13 +468,16 @@ class DetourLogic:
 
         if not slow_blockers:
             self.gave_up_t, self.gave_up_blocker_id = None, None
-            self.tracked_blocker_id, self.standoff_missed = None, False
             if self.hold_active and t - self.last_blocked_t < p.clear_time_s:
                 self._set_hold(self.hold_value, limits, t)
                 return Decision(HOLD, None, limits, clears, 'blocker 소실 대기', det)
             if self.hold_active:
                 self._clear_hold(clears)
+            # clear_time 이 지나 확실히 사라졌을 때만 추적을 버린다. 한 tick 누락(차선변경 중 경로 이동으로
+            # 횡거리 필터에서 빠지는 경우)으로 버리면 같은 blocker 를 더 가까이서 '새로 인지' 하게 된다
+            # (9/7 detour14: 승인 직후 같은 id 3 을 56 m 에서 재취득해 standoff_missed 로 빠졌다).
             self.committed = None
+            self.tracked_blocker_id, self.standoff_missed = None, False
             return Decision(FOLLOW, None, limits, clears, '', det)
         b = slow_blockers[0]
         self.last_blocked_t = t
@@ -438,15 +487,13 @@ class DetourLogic:
 
         # 4-b) 인지 시점에 이미 standoff 안이면 standoff 를 만들 수 없다 → 우리가 개입하지 않고
         #      obstacle_stop 에 맡긴다(제한 clear). 사실은 로그·status 에 남긴다.
+        needed = self.needed_distance_m(inputs)
         if b.id != self.tracked_blocker_id:
             self.tracked_blocker_id = b.id
-            self.standoff_missed = b.longitudinal_m < self.effective_standoff_m()
+            self.standoff_missed = b.longitudinal_m < needed
             self.gave_up_t, self.gave_up_blocker_id = None, None
         det['standoff_missed'] = self.standoff_missed
-        if self.standoff_missed:
-            return self._stop(limits, clears,
-                              f'standoff 불가: 인지 시 {b.longitudinal_m:.0f}m < {self.effective_standoff_m():.0f}m'
-                              ' → obstacle_stop 담당', det)
+        det['needed_m'] = round(needed, 1)
 
         # 4-c) blocker 가 다시 움직이면 즉시 제한 해제 → 평상 추종(obstacle_cruise)
         if b.v >= p.blocker_move_speed_mps:
@@ -457,33 +504,60 @@ class DetourLogic:
 
         # 4-d) standoff 접근: blocker 앞 standoff_m 에 서기 위한 속도 상한을 낸다.
         standoff_v = self._standoff_speed(b.longitudinal_m)
+        if self.standoff_missed:
+            # standoff 를 만들 수 없어도 손을 놓지 않는다. 최대한 감속해 남은 거리를 지키되
+            # 0 으로 수렴시키지는 않는다(그러면 우리가 세우는 꼴). 그 사이 후보가 짧아지면 승인된다.
+            # 9/7 detour14: 여기서 clear 하고 물러나 앞차 10.7 m 뒤까지 붙어 99 초를 멈춰 있었다.
+            standoff_v = max(p.approach_speed_floor_mps, standoff_v)
         det['standoff_v'] = round(standoff_v, 2)
         det['standoff_target_m'] = round(self.effective_standoff_m(), 1)
 
         # 5) 서서 관찰 — 시간 압박이 없으므로 여기서 판단한다.
-        #    (a) 우리 방향 적색이면 정당한 대기열이다. 우회하지 않고 계속 기다린다.
-        red = self._red_queue(inputs)
-        det['red_queue'] = red
-        det['signal'] = {'color': inputs.signal.color, 'age_s': inputs.signal.color_age_s,
-                         'factor_m': inputs.signal.red_stop_factor_distance_m,
-                         'fresh': inputs.signal.available, 'basis': self.red_basis}
-        if red:
+        room, qinfo = self._room_verdict(inputs, slow_blockers)
+        det['queue'] = qinfo
+        det['return'] = {k: qinfo[k] for k in ('n_lanes', 'lc_length_model_m', 'need_m', 'gap_m', 'verdict')}
+        warn = None
+        if qinfo['verdict'] == 'insufficient':
+            warn = (f"복귀 여유 부족(간격 {qinfo['gap_m']}m < 필요 {qinfo['need_m']}m"
+                    f" = {qinfo['n_lanes']}칸 × {qinfo['lc_length_model_m']}m) — 모델 과대 가능성이 있어"
+                    ' 막지 않고 진행한다(return_check_enforce=false)')
+        if not room:
+            # 끼어들 공간이 없다 = 저 차들이 정지선에 붙어 서 있다(신호 대기로 설명되는 유일한 경우).
+            # standoff 는 유지한다(§11 원칙: 해제는 blocker 출발·승인 두 경우뿐). 앞이 풀리면 즉시 우회한다.
             self._set_hold(standoff_v, limits, t)
-            return Decision(HOLD, None, limits, clears, '적신호 대기열 → 우회 없이 대기', det)
+            return Decision(HOLD, None, limits, clears,
+                            f"끼어들 공간 없음(간격 {qinfo['gap_m']}m < 필요 {qinfo['need_m']}m"
+                            f" = {qinfo['n_lanes']}칸 × LC {qinfo['lc_length_model_m']}m + 여유) → 대기", det)
 
-        #    (b) 적색이 아니거나 관련 신호가 없다 → blocker 가 no_response_s 이상 무응답이면 우회 결정
+        # 공간이 있다 → blocker 가 no_response_s 이상 무응답이면 우회 결정 (신호 무관)
         if stopped_s < p.no_response_s:
             self._set_hold(standoff_v, limits, t)
             return Decision(HOLD, None, limits, clears,
                             f'관찰 중 {stopped_s:.1f}/{p.no_response_s:.1f}s '
                             f'(목표 {self.effective_standoff_m():.0f}m → 실정지 ~{p.standoff_m:.0f}m)', det)
 
-        # 6) 우회 결정. 방향은 Autoware 후보가 있는 쪽 (맵 구조는 veto 하지 않는다 — 9/7 detour2).
+        # 6) 우회 결정.
+        #
+        # **우리가 판정에 쓰는 것은 셋뿐이다.**
+        #   (a) 우리만 아는 것 : blocker 존재·정지 지속, 정지선까지의 공간(대기열 판별), standoff 확보
+        #   (b) Autoware 가 알려주는 것 : 후보 존재 여부, safe, start/finish 실측
+        #   (c) 우리 안전 여유 : finish + lc_finish_margin_m < blocker 거리
+        #
+        # **Autoware 가 이미 검사하는 것은 다시 판단하지 않는다.**
+        #   실선 교차(path.cpp:510 에서 예외로 후보를 안 만듦), 이웃 차선 유무(라우팅 그래프),
+        #   규제요소 근접(isLaneChangeRequired, scene.cpp:296-342), 목표차선 시작점 거리,
+        #   목표차선 후방 RSS. → **후보가 존재하고 safe 라는 사실이 이 조건들을 통과했다는 증거다.**
+        #
+        # 오늘(9/7) 같은 실수를 세 번 했다. 전부 "우리가 Autoware 판단을 베껴 중복 검사" 한 것이었다.
+        #   ① 맵 실선 판정  : 맵 태그가 섹션 중점 근사라 양쪽 실선으로 오판 → 우회를 통째로 막음(detour2)
+        #   ② P2 패치       : 외부 속도제한을 max_prepare_length 에 반영했더니 후보 생성 자체가 죽음
+        #   ③ 규제요소 거리 : 우리 54.4 m 로 48 m 를 거부했는데 Autoware 는 후보를 내고 있었음(detour16)
+        # 맵 기반 값(map_sides, reg_m, return_side)은 **로그·선호용 관측치**이지 veto 가 아니다.
         if self.abort_count >= p.max_abort_count:
             self._set_hold(standoff_v, limits, t)
             return Decision(HOLD, None, limits, clears, f'abort {self.abort_count}회: 우회 포기, 대기', det)
         lane = inputs.lane
-        map_sides = self._allowed_sides(inputs)          # 참고용(선호·로그). veto 하지 않는다.
+        map_sides = self._allowed_sides(inputs)          # 관측치(로그·선호). veto 하지 않는다.
         sides = self._candidate_sides(inputs)            # 실제 판단 근거
         det['struct'] = {'nl': lane.neighbor_left, 'nr': lane.neighbor_right,
                          'solid_l': lane.left_boundary_solid, 'solid_r': lane.right_boundary_solid,
@@ -498,19 +572,6 @@ class DetourLogic:
         # 새 정책에 명시되진 않았으나 이전 설계의 안전 조건이라 유지한다. 여기서는 STOP(clear) 이 맞다 —
         # 구조적으로 우회가 불가능하므로 앞차 뒤에 정상적으로 서는 것이 옳다(obstacle_stop 담당).
         det['reg_m'] = None if lane.distance_to_regulatory_m is None else round(lane.distance_to_regulatory_m, 1)
-        if lane.distance_to_regulatory_m is not None and lane.distance_to_regulatory_m < p.regulatory_clearance_m:
-            self._set_hold(standoff_v, limits, t)
-            return Decision(HOLD, None, limits, clears,
-                            f'기하: 규제요소 {lane.distance_to_regulatory_m:.0f}m < {p.regulatory_clearance_m}m'
-                            ' → 우회 불가, standoff 유지', det)
-        if lane.distance_to_stopline_m is not None:
-            gap = lane.distance_to_stopline_m - b.longitudinal_m
-            det['stopline_gap_m'] = round(gap, 1)
-            if gap < p.stopline_min_distance_m:
-                self._set_hold(standoff_v, limits, t)
-                return Decision(HOLD, None, limits, clears,
-                                f'기하: 정지차~정지선 {gap:.0f}m < {p.stopline_min_distance_m}m'
-                                ' → 우회 불가, standoff 유지', det)
 
         det['cand'] = {s_: self._cand_detail(inputs.candidates.get(s_)) for s_ in (LEFT, RIGHT)}
         room = b.longitudinal_m - p.lc_finish_margin_m
@@ -532,7 +593,8 @@ class DetourLogic:
             if self.hold_active:
                 self._clear_hold(clears)   # 차선변경은 Autoware 가 정상 속도로 수행
             return Decision(LANE_CHANGE, side, limits, clears,
-                            f'{side} 승인 (blocker {b.longitudinal_m:.0f}m, LC 완료 {c.finish_distance_m:.0f}m)', det)
+                            f'{side} 승인 (blocker {b.longitudinal_m:.0f}m, LC 완료 {c.finish_distance_m:.0f}m)',
+                            det, warn)
         self._set_hold(standoff_v, limits, t)
         return Decision(HOLD, None, limits, clears,
                         '후보 없음/unsafe/LC 길이 부족 → standoff 유지하며 대기(상황 바뀌면 즉시 우회)', det)

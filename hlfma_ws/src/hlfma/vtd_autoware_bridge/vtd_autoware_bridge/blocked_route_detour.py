@@ -21,18 +21,17 @@ from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 from std_msgs.msg import Empty, String
 from nav_msgs.msg import Odometry
-from autoware_perception_msgs.msg import (
-    PredictedObjects, ObjectClassification, TrafficLightGroupArray, TrafficLightElement)
+from autoware_perception_msgs.msg import PredictedObjects, ObjectClassification
 from autoware_planning_msgs.msg import LaneletRoute
 from autoware_internal_planning_msgs.msg import (
-    PathWithLaneId, VelocityLimit, VelocityLimitClearCommand, PlanningFactor, PlanningFactorArray)
+    PathWithLaneId, VelocityLimit, VelocityLimitClearCommand)
 from tier4_rtc_msgs.msg import CooperateStatusArray, CooperateCommand, Command, State, Module
 from tier4_rtc_msgs.srv import CooperateCommands
 
 from .osm_map import OsmMap
 from .tl_router import TrafficLightRouter
 from .detour_logic import (
-    DetourLogic, Params, EgoState, ObjectInfo, LaneInfo, SignalInfo, CandidateInfo, Inputs, LEFT, RIGHT)
+    DetourLogic, Params, EgoState, ObjectInfo, LaneInfo, CandidateInfo, Inputs, LEFT, RIGHT)
 
 _CLASS_NAME = {
     ObjectClassification.CAR: 'CAR', ObjectClassification.TRUCK: 'TRUCK', ObjectClassification.BUS: 'BUS',
@@ -89,15 +88,22 @@ class BlockedRouteDetour(Node):
         # standoff 근거(실측, 정지 상태 후보 finish): detour1 40.4 m / detour2 29.8 m → 큰 쪽 + 여유 6 m.
         dp('standoff_m', 48.0); dp('standoff_decel_mps2', 1.5); dp('approach_speed_mps', 4.0)
         dp('standoff_margin_m', 18.0)     # 오버슈트 보정(실측 11~16.6 m). 유효 목표 = standoff + margin
-        dp('signal_debounce_s', 0.5)      # 신호 색 전이 히스테리시스(양방향 동일)
         dp('no_response_s', 3.0)          # 서서 관찰: 이만큼 무응답이면 우회 결정
+        dp('standoff_needed_fallback_m', 40.0)  # 후보 없을 때 '우회 필요거리' 보수값
+        dp('approach_speed_floor_mps', 2.0)     # standoff 못 만든 경우 하한(손 놓지 않음)
         dp('blocker_move_speed_mps', 0.5)  # 이 이상이면 blocker 출발 → 추종 복귀
         dp('lc_finish_margin_m', 6.0)
         dp('blocker_stop_speed_mps', 0.3); dp('blocked_time_s', 0.5); dp('detection_distance_m', 80.0)
         dp('slowdown_time_s', 0.2)
         dp('hold_timeout_s', 20.0)
-        dp('signal_hold_s', 2.0)
-        dp('path_lateral_margin_m', 2.2); dp('regulatory_zone_m', 26.6); dp('stopline_min_m', 28.0)
+        dp('path_lateral_margin_m', 2.2); dp('regulatory_zone_m', 26.6)
+        # 복귀 여유는 상수가 아니라 차선변경 길이 모델로 계산한다. 아래 넷은 lane_change.param.yaml 과
+        # **같은 값이어야 한다** — 어긋나면 우리가 Autoware 와 다른 기하로 판단하게 된다.
+        dp('stopline_min_m', 12.0)          # 계산 결과의 하한
+        dp('return_check_enforce', False)   # 복귀 여유 부족을 거부 근거로 쓸지(기본 경고만)
+        dp('stopline_stop_margin_m', 3.0)   # 복귀 완료 후 정지선까지 여유
+        dp('lc_lane_width_m', 3.5); dp('lc_lateral_jerk', 1.5); dp('lc_lateral_acc', 1.2)
+        dp('lc_max_prepare_duration', 4.0); dp('lc_max_longitudinal_acc', 1.0)
         dp('abort_backoff_s', 10.0); dp('max_abort_count', 2)
         dp('pedestrian_lookahead_m', 50.0); dp('pedestrian_lateral_margin_m', 2.5); dp('pedestrian_slow_kph', 30.0)
         dp('pedestrian_release_s', 1.0); dp('respawn_hold_s', 1.5); dp('input_timeout_s', 1.0); dp('clear_time_s', 1.0)
@@ -105,17 +111,24 @@ class BlockedRouteDetour(Node):
         g = lambda k: self.get_parameter(k).value
         self.params = Params(
             standoff_m=float(g('standoff_m')), standoff_decel_mps2=float(g('standoff_decel_mps2')),
-            standoff_margin_m=float(g('standoff_margin_m')), signal_debounce_s=float(g('signal_debounce_s')),
+            standoff_margin_m=float(g('standoff_margin_m')),
             approach_speed_mps=float(g('approach_speed_mps')), no_response_s=float(g('no_response_s')),
+            standoff_needed_fallback_m=float(g('standoff_needed_fallback_m')),
+            approach_speed_floor_mps=float(g('approach_speed_floor_mps')),
             blocker_move_speed_mps=float(g('blocker_move_speed_mps')),
             lc_finish_margin_m=float(g('lc_finish_margin_m')),
             blocker_stop_speed_mps=float(g('blocker_stop_speed_mps')),
             blocker_min_stopped_s=float(g('blocked_time_s')),
             slowdown_min_stopped_s=float(g('slowdown_time_s')),
-            signal_hold_s=float(g('signal_hold_s')),
             detection_distance_m=float(g('detection_distance_m')),
             path_lateral_margin_m=float(g('path_lateral_margin_m')),
             regulatory_clearance_m=float(g('regulatory_zone_m')), stopline_min_distance_m=float(g('stopline_min_m')),
+            stopline_stop_margin_m=float(g('stopline_stop_margin_m')),
+            return_check_enforce=bool(g('return_check_enforce')),
+            lc_lane_width_m=float(g('lc_lane_width_m')), lc_lateral_jerk=float(g('lc_lateral_jerk')),
+            lc_lateral_acc=float(g('lc_lateral_acc')),
+            lc_max_prepare_duration=float(g('lc_max_prepare_duration')),
+            lc_max_longitudinal_acc=float(g('lc_max_longitudinal_acc')),
             abort_backoff_s=float(g('abort_backoff_s')), max_abort_count=int(g('max_abort_count')),
             ped_lookahead_m=float(g('pedestrian_lookahead_m')),
             ped_lateral_margin_m=float(g('pedestrian_lateral_margin_m')),
@@ -146,9 +159,6 @@ class BlockedRouteDetour(Node):
         self.odom = self.objects = self.path = self.route = None
         self.rx = {}                   # 이름 → 수신 시각(monotonic)
         self.status = {LEFT: None, RIGHT: None}
-        self.tl_factors = None
-        self.tl_signal_groups = 0
-        self.tl_color = None
         self.stopped_since = {}        # 객체 id → 정지 시작 시각
         self.respawn_pending = False
         self.route_pref = []           # preferred lanelet 열
@@ -165,8 +175,6 @@ class BlockedRouteDetour(Node):
         for side, base in _MODULE_TOPIC.items():
             self.create_subscription(CooperateStatusArray, f'/planning/cooperate_status/{base}',
                                      lambda m, s=side: self.on_status(s, m), 10)
-        self.create_subscription(PlanningFactorArray, '/planning/planning_factors/traffic_light', self.on_tl_factor, 10)
-        self.create_subscription(TrafficLightGroupArray, '/perception/traffic_light_recognition/traffic_signals', self.on_tl_signal, 10)
         self.create_subscription(Empty, '/vtd/respawn', self.on_respawn, 10)
         self.rtc = {side: self.create_client(CooperateCommands, f'/planning/cooperate_commands/{base}')
                     for side, base in _MODULE_TOPIC.items()}
@@ -181,7 +189,7 @@ class BlockedRouteDetour(Node):
             f'무응답 {self.params.no_response_s}s 면 우회, 접근 상한 {self.params.approach_speed_mps}m/s, '
             f'감지 {self.params.detection_distance_m}m(VTD GT 실측 상한 ~80m), '
             f'게이트 감속 {self.params.slowdown_min_stopped_s}s / 승인 {self.params.blocker_min_stopped_s}s, '
-            f'신호 latch {self.params.signal_hold_s}s')
+            f'대기열 판정: 막힘 앞끝~정지선 {self.params.stopline_min_distance_m}m 이상이면 우회 대상(신호 안 봄)')
 
     # ------------------------------------------------------------ 수신
     def _rx(self, name, msg):
@@ -194,7 +202,7 @@ class BlockedRouteDetour(Node):
     def input_ages(self, now):
         """각 입력의 마지막 수신 경과시간[s]. 미수신은 None. (9/7: 노드가 42 s 동안 FOLLOW 였던 원인 추적용)"""
         out = {}
-        for name in ('odom', 'objects', 'path', 'tl_factor', 'tl_signal', 'status_left', 'status_right'):
+        for name in ('odom', 'objects', 'path', 'status_left', 'status_right'):
             ts = self.rx.get(name)
             out[name] = None if ts is None else round(now - ts, 2)
         out['route'] = self.route is not None
@@ -214,31 +222,6 @@ class BlockedRouteDetour(Node):
     def on_status(self, side, m):
         self.status[side] = list(m.statuses)
         self.rx['status_' + side] = time.monotonic()
-
-    def on_tl_factor(self, m):
-        self.tl_factors = m
-        self.rx['tl_factor'] = time.monotonic()
-
-    def on_tl_signal(self, m):
-        """경로상 다음 정지선의 신호 색을 뽑는다 (브리지는 그 정지선의 그룹만 발행한다).
-
-        GREEN 이 하나라도 있으면 비적색으로 본다 — 좌회전 화살표(GREEN LEFT_ARROW)를 포함하기 위해서다.
-        (9/7 detour9: factor 부재를 직전값 유지로 해석해 적신호가 영구 고착됐다. 색이 1차 근거다.)"""
-        self.tl_signal_groups = len(m.traffic_light_groups)
-        color = None
-        for g in m.traffic_light_groups:
-            for e in g.elements:
-                if e.color == TrafficLightElement.GREEN:
-                    color = 'GREEN'
-                    break
-                if e.color == TrafficLightElement.RED:
-                    color = 'RED'
-                elif e.color == TrafficLightElement.AMBER and color != 'RED':
-                    color = 'AMBER'
-            if color == 'GREEN':
-                break
-        self.tl_color = color
-        self.rx['tl_signal'] = time.monotonic()
 
     def on_respawn(self, _):
         self.respawn_pending = True
@@ -264,12 +247,39 @@ class BlockedRouteDetour(Node):
         half = max(1.0, self.map.width_at(lid, x, y) / 2.0)
         return lid, seg_idx, role, half
 
+    def _count_lanes(self, start, target, limit=6):
+        """start 차선에서 target 차선까지 좌우 이웃을 따라간 칸 수. 못 찾으면 None."""
+        if start is None or target is None:
+            return None
+        for pick in (0, 1):                      # 0=left, 1=right
+            cur, n = start, 0
+            while cur is not None and n <= limit:
+                if cur == target:
+                    return n
+                cur = self.map.neighbors(cur)[pick]
+                n += 1
+        return None
+
+    def _lanes_to_preferred(self, lid, seg_idx):
+        """{'left'/'right': 그 쪽으로 우회했을 때 우선차선까지 되돌아오는 칸 수}."""
+        out = {}
+        if seg_idx is None or seg_idx >= len(self.route_segs):
+            return out
+        pref = self.route_segs[seg_idx][0]
+        ln, rn = self.map.neighbors(lid)
+        for side, nb in (('left', ln), ('right', rn)):
+            n = self._count_lanes(nb, pref)
+            if n is not None:
+                out[side] = n
+        return out
+
     def _lane_info(self, lid, seg_idx, x, y, s_route_ego):
         """이웃 차선·실선·다음 규제요소(회전 lanelet·신호등)·정지선 거리."""
         ln, rn = self.map.neighbors(lid)
         info = LaneInfo(neighbor_left=ln is not None, neighbor_right=rn is not None,
                         left_boundary_solid=self.map.boundary_solid(lid, 'left'),
-                        right_boundary_solid=self.map.boundary_solid(lid, 'right'))
+                        right_boundary_solid=self.map.boundary_solid(lid, 'right'),
+                        lanes_to_preferred=self._lanes_to_preferred(lid, seg_idx))
         # 정지선: tl_router 가 경로 누적거리로 계산 (경로상 다음 정지선)
         if self.tlr is not None and self.tlr.has_route() and s_route_ego is not None:
             entry = self.tlr.next_stop(s_route_ego)
@@ -327,18 +337,6 @@ class BlockedRouteDetour(Node):
                              start_distance_m=float(st.start_distance), finish_distance_m=float(st.finish_distance),
                              stale=not self.fresh('status_' + side, now))
 
-    def _red_factor(self, now):
-        """보조 근거: traffic_light 모듈 STOP factor 의 control point 거리. 없으면 None.
-
-        **부재를 '직전값 유지' 로 해석하지 않는다.** 초록이 되면 factor 가 사라지므로 그렇게 하면
-        영원히 적신호가 된다(9/7 detour9). 히스테리시스는 detour_logic 이 색 기준으로 양방향 처리한다.
-        """
-        if self.tl_factors is None or not self.fresh('tl_factor', now):
-            return None
-        ds = [cp.distance for f in self.tl_factors.factors
-              if f.behavior == PlanningFactor.STOP for cp in f.control_points]
-        return min(ds) if ds else None
-
     # ------------------------------------------------------------ tick
     def tick(self):
         now = time.monotonic()
@@ -364,13 +362,8 @@ class BlockedRouteDetour(Node):
                         loc = self.tlr.locate(ex, ey)
                         s_route = loc[1] if loc is not None else None
                     lane = self._lane_info(lid, seg_idx, ex, ey, s_route)
-        sig_fresh = self.fresh('tl_signal', now)
-        sig_age = None if 'tl_signal' not in self.rx else round(now - self.rx['tl_signal'], 2)
-        signal = SignalInfo(red_stop_factor_distance_m=self._red_factor(now),
-                            available=sig_fresh and self.tl_signal_groups > 0,
-                            color=(self.tl_color if sig_fresh else None), color_age_s=sig_age)
         inputs = Inputs(t=t, ego=EgoState(t=t, v=ego_v, lane_role=role, lane_half_width_m=half), objects=objects,
-                        lane=lane, signal=signal, candidates={LEFT: self._candidate(LEFT, now), RIGHT: self._candidate(RIGHT, now)},
+                        lane=lane, candidates={LEFT: self._candidate(LEFT, now), RIGHT: self._candidate(RIGHT, now)},
                         respawn=respawn, stale=stale)
         d = self.logic.step(inputs)
         self._apply(d, now)
@@ -396,6 +389,11 @@ class BlockedRouteDetour(Node):
             self.get_logger().info(f'DETOUR heartbeat {d.state} {d.reason} | '
                                    + json.dumps(d.detail, ensure_ascii=False)
                                    + ' ages=' + json.dumps(self.input_ages(now)))
+        if getattr(d, 'warn', None) and d.warn != getattr(self, 'last_warn', None):
+            self.get_logger().warning('DETOUR ' + d.warn)
+            self.last_warn = d.warn
+        elif not getattr(d, 'warn', None):
+            self.last_warn = None
         if d.state != self.last_state or d.approve:
             self.get_logger().info(f'DETOUR {d.state} {d.reason} | ' + json.dumps(d.detail, ensure_ascii=False)
                                    + f' limits={d.limits} clears={d.clears} approve={d.approve}'

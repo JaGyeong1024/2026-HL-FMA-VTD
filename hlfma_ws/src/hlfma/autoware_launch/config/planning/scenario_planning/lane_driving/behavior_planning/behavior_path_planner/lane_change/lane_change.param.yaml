@@ -23,10 +23,12 @@
         # 규제요소 근접 금지(scene.cpp:342)에는 작을수록 유리하지만, '목표차선 시작점까지 거리'
         # 판정(scene.cpp:312)에는 작을수록 불리하다. 실주행 진단에서 규제 근접 0회 / 목표차선 시작점
         # 초과 다수 → 줄인 것이 순손해였다. 48m standoff 에서 우회 후보를 만들려면 54.4m 가 필요하다.
-        min_prepare_duration: 2.0
-        lateral_jerk: 1.5   # HL FMA 묶음3: 차선변경 길이 병목(83m→~59m@49km/h). 타이트 설정
+        min_prepare_duration: 1.0   # HL FMA 9/8: 13.6m/s 에서 준비 직진 27m→13.6m. 되돌리려면 2.0
+        lateral_jerk: 5.0   # HL FMA 9/8: 횡가속 상향과 세트. 되돌리려면 1.5
         min_longitudinal_acc: -1.0
-        max_longitudinal_acc: 1.0   # HL FMA 9/7 원복: 0.5 와 min_values 1.0 을 동시에 바꿔 안전 판정이 깨졌다.
+        max_longitudinal_acc: 0.5   # HL FMA 9/7 단독 재적용: 저속 차선변경 길이의 ½·a·t² 항이 지배적이라
+        # (2m/s 에서 앞 두 항 13m + 이 항 9m) 이 값을 줄이면 저속 LC 가 크게 짧아져 우회 후 복귀가 가능해진다.
+        # 앞서 안전 판정이 깨진 것은 min_values 1.0 과 동시 변경 탓으로 보고 이번엔 단독 적용해 확인한다.
         th_prepare_length_diff: 1.0
         th_lane_changing_length_diff: 1.0
         min_lane_changing_velocity: 2.78
@@ -37,7 +39,10 @@
 
       # delay lane change
       delay_lane_change:
-        enable: true
+        # HL FMA 9/8: 실측으로 이 기능이 차단자였다. "목표 차선에 주차 차량 + 자차 미정지 → 건너뜀"
+        # 이 우리 시나리오와 정확히 반대로 작동한다(정지하면 거리가 없어 후보 자체가 안 생김).
+        # lat_up 주행에서 이 사유로 52회 거절. 되돌리려면 true.
+        enable: false
         check_only_parked_vehicle: false
         min_road_shoulder_width: 0.5  # [m]
         th_parked_vehicle_shift_ratio: 0.6
@@ -109,9 +114,10 @@
       # lateral acceleration map
       lateral_acceleration:
         velocity: [0.0, 4.0, 10.0]
-        min_values: [1.0, 1.0, 1.0]   # HL FMA 9/7: 완만한 후보를 빼 shift 시간 5.25→4.55s (약 4m 단축).
-        # detour13 의 안전 판정 실패는 max_longitudinal_acc 0.5 와 동시 변경 탓으로 보고 그쪽만 원복했다.
-        max_values: [1.2, 1.2, 1.2]   # HL FMA 묶음3: Ioniq6 여유 큼, jerk 와 세트
+        min_values: [2.0, 2.0, 2.0]   # HL FMA 9/8: 채택 후보 중앙값 51.5m 로는 50m 앞 정지차 전에 못 끝난다.
+        # 채점 15항목에 승차감·가속도 기준 없음. 실제 제약은 차로 유지(항목3) 즉 MPC 추종 오차뿐이다.
+        # 13.6m/s 에서 4.0m/s^2 = 곡률 0.022, 조향 0.064rad (한계 0.48rad 의 13%) 로 여유가 크다.
+        max_values: [4.0, 4.0, 4.0]   # 되돌리려면 min 1.0 / max 1.2
 
       # target object
       target_object:
