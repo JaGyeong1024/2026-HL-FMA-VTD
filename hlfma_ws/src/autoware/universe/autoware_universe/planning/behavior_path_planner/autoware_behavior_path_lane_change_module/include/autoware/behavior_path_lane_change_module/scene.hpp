@@ -82,7 +82,7 @@ public:
 
   std::optional<PathWithLaneId> extendPath() override;
 
-  void resetParameters() override;
+  void resetParameters(const bool keep_signal_timer = false) override;
 
   TurnSignalInfo updateOutputTurnSignal() const override;
 

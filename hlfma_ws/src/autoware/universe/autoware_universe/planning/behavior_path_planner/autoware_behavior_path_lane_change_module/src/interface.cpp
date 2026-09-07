@@ -56,6 +56,7 @@ LaneChangeInterface::LaneChangeInterface(
 
 void LaneChangeInterface::processOnExit()
 {
+  RCLCPP_WARN(getLogger(), "[HLFMA-R] reset:processOnExit (모듈 종료)");
   module_type_->resetParameters();
   debug_marker_.markers.clear();
   post_process_safety_status_ = {};
@@ -197,7 +198,8 @@ BehaviorModuleOutput LaneChangeInterface::planWaitingApproval()
     updateRTCStatus(
       std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest(), false,
       State::WAITING_FOR_EXECUTION);
-    module_type_->resetParameters();
+    // HL FMA 9/8: 깜빡이 타이머는 유지한다(true). 여기서 지우면 prepare 가 영영 안 줄어든다.
+    module_type_->resetParameters(true);
     return out;
   }
 
@@ -253,6 +255,7 @@ bool LaneChangeInterface::canTransitSuccessState()
   }
 
   if (module_type_->hasFinishedLaneChange()) {
+    RCLCPP_WARN(getLogger(), "[HLFMA-R] reset:finished (차선변경 완료)");
     module_type_->resetParameters();
     log_debug_throttled("Lane change process has completed.");
     return true;

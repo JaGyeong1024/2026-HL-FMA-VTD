@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 하네스 공통 단계. 각 h*.sh 가 source 한다. 함수 하나 = 단계 하나.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-export ROS_DOMAIN_ID="${HARNESS_DOMAIN:-53}"
+export ROS_DOMAIN_ID="${HARNESS_DOMAIN:-43}"
 source /opt/ros/jazzy/setup.bash
 source "$ROOT/hlfma_ws/install/setup.bash"
 EGO_FRONT=3.808   # 후륜축→앞범퍼 [m] (대회정보 §4)
@@ -57,6 +57,7 @@ capture_start() {           # 판정용 토픽 bag 기록 (선택 토픽만). $@
                 /planning/scenario_planning/max_velocity /planning/trajectory
                 /planning/scenario_planning/lane_driving/behavior_planning/path_with_lane_id
                 /perception/object_recognition/objects /diagnostics_graph/status
+                /planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/debug/internal_state
                 /api/fail_safe/mrm_state /system/emergency/hazard_status /system/fail_safe/mrm_state /rosout "$@")
   local extra; extra=$(timeout 15 ros2 topic list 2>/dev/null | grep -E "cooperate_status|planning_factors/" | tr '\n' ' ')
   # 노드 이름을 케이스마다 다르게: 기본 /rosbag2_recorder 가 둘 이상이면 duplicated_node_checker ERROR → MRM 비상정지 →
@@ -113,6 +114,8 @@ snapshot_state() {          # 현재 route/mode/속도 한 줄
   echo "route=$r mode=$m v=$v"
 }
 stack_stop() {              # bag → 스택(정리 훅) → 잔존 강제(이 클론 경로로 한정) → mock 순으로 종료
+  # HOLD=1 이면 스택·mock 을 살려둔다 (rviz 로 계속 보기 위해). 수동 종료: ./stop.sh
+  if [ "${HOLD:-0}" = "1" ]; then bag_stop; note "HOLD=1 — 스택·mock 유지. rviz: ROS_DOMAIN_ID=$ROS_DOMAIN_ID ./rviz.sh / 종료: ./stop.sh"; return 0; fi
   bag_stop
   # TERM 을 쓴다: 비대화형 셸이 백그라운드로 띄운 스크립트는 SIGINT 가 무시 상태로 상속되어 trap INT 가 안 걸린다(9/7 실측: INT 후 90 s 잔존 25).
   [ -n "$STACK_PID" ] && kill -TERM "$STACK_PID" 2>/dev/null

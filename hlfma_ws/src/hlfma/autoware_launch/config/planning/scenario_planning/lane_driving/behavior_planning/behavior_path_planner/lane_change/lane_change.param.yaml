@@ -19,7 +19,9 @@
 
       # trajectory generation
       trajectory:
-        max_prepare_duration: 1.0   # HL FMA 9/8: 준비 구간(횡이동 전 직진)이 정지점보다 길어 옆으로 못 감. 되돌리려면 4.0
+        max_prepare_duration: 4.0   # HL FMA 9/8 재원복: 1.0 으로 줄였더니 'Ego is far from target lane
+        # start' 판정 임계(= 이 값 x max_vel)가 54.4m -> 13.6m 로 좁아져 차선변경이 계획조차 안 됐다.
+        # (9/7 주석의 경고와 같은 함정. 이 값은 규제요소 근접 판정과 목표차선 도달 판정에 반대로 작용한다)
         # 규제요소 근접 금지(scene.cpp:342)에는 작을수록 유리하지만, '목표차선 시작점까지 거리'
         # 판정(scene.cpp:312)에는 작을수록 불리하다. 실주행 진단에서 규제 근접 0회 / 목표차선 시작점
         # 초과 다수 → 줄인 것이 순손해였다. 48m standoff 에서 우회 후보를 만들려면 54.4m 가 필요하다.
