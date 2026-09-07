@@ -17,14 +17,14 @@
 
     # constraints param for normal driving
     normal:
-      min_acc: -1.0         # min deceleration [m/ss]
-      max_acc: 1.0          # max acceleration [m/ss]
-      min_jerk: -1.0        # min jerk [m/sss]
+      min_acc: -2.5         # min deceleration [m/ss]  # HL FMA 묶음1: 스무더가 쓰는 실제 감속(정지거리 99m→50m). 2차 -3.5
+      max_acc: 1.5          # max acceleration [m/ss]  # HL FMA 묶음1: 재출발·LC 최저속 도달
+      min_jerk: -2.0        # min jerk [m/sss]  # HL FMA 묶음1
       max_jerk: 1.0         # max jerk [m/sss]
 
     # constraints to be observed
     limit:
       min_acc: -2.5         # min deceleration limit [m/ss]
-      max_acc: 1.0          # max acceleration limit [m/ss]
+      max_acc: 2.0          # max acceleration limit [m/ss]  # HL FMA 묶음1
       min_jerk: -1.5        # min jerk limit [m/sss]
       max_jerk: 1.5         # max jerk limit [m/sss]
