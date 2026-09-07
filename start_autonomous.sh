@@ -11,6 +11,7 @@
 #   수동 출발:  ENGAGE=false ./start_autonomous.sh  →  확인 후 터미널2 ./start_hlfma.sh
 #
 # 환경변수 (선택):
+#   DETOUR=false                   판단 노드(차선 단위 회피) 끄기 — 묶음 1·3 단독 검증용 (기본 true)
 #   ENGAGE=false                   기동만 하고 출발(engage)은 사람이 ./start_hlfma.sh 로 (기본 true)
 #   ROUTE_CSV=/path/to/route.csv   경로 자동 주입 (route_node). 기본: $HOME/hlfma/route/route_config.yaml 의 csv_path
 #   ROUTE_CSV=none                 경로 주입 안 함 (rviz 2D Goal Pose 수동)
@@ -108,8 +109,10 @@ GIT_REV=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null)
 EOF
 setsid ros2 launch vtd_autoware_bridge bridge.launch.xml \
   vtd_host:="$VTD_HOST" \
+  map_osm:="$ROOT/map/lanelet2_map.osm" \
   route_csv:="$ROUTE_CSV" \
   auto_engage:="${AUTO_ENGAGE:-false}" \
+  detour:="${DETOUR:-true}" \
   > "$BRIDGE_LOG" 2>&1 < /dev/null &
 BR_PID=$!
 echo "[bridge] host=$VTD_HOST route_csv=${ROUTE_CSV:-없음} auto_engage=${AUTO_ENGAGE:-false} log=$BRIDGE_LOG"
