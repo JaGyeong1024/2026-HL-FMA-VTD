@@ -8,7 +8,12 @@ launch:
   # behavior path modules
   - arg:
       name: launch_static_obstacle_avoidance
-      default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
+      default: "false"   # HL FMA 9/8: 켜면 slot2 우선순위가 lane_change 위이고
+      #   enable_simultaneous_execution_as_candidate_module=false 라 lane_change_* 가 후보에서 축출된다.
+      #   실측(h4_pocket_pref_0908_062752): avoidance 만 RUNNING, lane_change_left/right 는 계속
+      #   WAITING_APPROVAL 로 승격 실패. 게다가 좌회전 포켓 반대편(우측)으로 밀어 목표에서 멀어졌다.
+      #   되돌리려면 "true". 그 경우 scene_module_manager.param.yaml 에서 우선순위를 lane_change 아래로
+      #   내리고 candidate 동시실행을 열어야 한다.
   - arg:
       name: launch_avoidance_by_lane_change_module
       default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
@@ -26,10 +31,20 @@ launch:
       default: "true"
   - arg:
       name: launch_external_request_lane_change_right_module
-      default: "true"   # HL FMA 묶음2(9/7): 차선 단위 회피는 external_request 로만
+      default: "false"  # HL FMA 9/8: 껐다. 우회는 change_route 로 preferred 를 C 로 바꿔
+      #   경로 기반 lane_change_right 가 맡는다(전 구간 C 로 두면 type=0 dir=2 valid=1 확인).
+      #   external 을 함께 켜두면 루트와 무관하게 반대 방향 후보를 계속 내고, 승인된 모듈들이
+      #   각자 정지점을 꽂아 교착된다(h4_pocket_ext2_0908: lane_change_right 15.7m 와
+      #   external_..._left 1.6m 가 동시에 정지 → obstacle_stop 1.75m 로 고착).
+      #   되돌리려면 "true".
   - arg:
       name: launch_external_request_lane_change_left_module
-      default: "true"   # HL FMA 묶음2(9/7): 차선 단위 회피는 external_request 로만
+      default: "false"  # HL FMA 9/8: 껐다. 우회는 change_route 로 preferred 를 C 로 바꿔
+      #   경로 기반 lane_change_right 가 맡는다(전 구간 C 로 두면 type=0 dir=2 valid=1 확인).
+      #   external 을 함께 켜두면 루트와 무관하게 반대 방향 후보를 계속 내고, 승인된 모듈들이
+      #   각자 정지점을 꽂아 교착된다(h4_pocket_ext2_0908: lane_change_right 15.7m 와
+      #   external_..._left 1.6m 가 동시에 정지 → obstacle_stop 1.75m 로 고착).
+      #   되돌리려면 "true".
   - arg:
       name: launch_goal_planner_module
       default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)

@@ -10,7 +10,7 @@
 실행 (제어기 PC, 이 클론 루트에서)
     bash tools/harness/h1_stop_restart.sh                 # cases/h1_*.conf 전부
     bash tools/harness/h1_stop_restart.sh h1_car_ahead    # 하나만
-    HARNESS_DOMAIN=53 …                                   # 다른 클론 스택이 43 으로 떠 있으면 도메인 분리 (기본 53)
+    HARNESS_DOMAIN=53 …                                   # 기본 43(rviz.sh 와 동일). 다른 클론 스택이 43 에 떠 있을 때만 분리
 
 산출: `~/hlfma/logs/harness/<케이스>_<시각>/` — mock.log, trace.csv, autoware.log, bridge.log, ready.txt, engage.txt,
        bag/ (선택 토픽), metrics.json, result.txt(PASS/FAIL 근거)

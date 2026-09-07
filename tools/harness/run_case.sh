@@ -3,7 +3,7 @@
 run_case() {
   local name="$1"; local conf="$ROOT/tools/harness/cases/$name.conf"
   [ -f "$conf" ] || { echo "conf 없음: $conf"; return 1; }
-  unset ROUTE MOCK_ARGS RUN_SEC METRIC_ARGS EXPECT EXPECT_DETOUR STOPLINE_OFFSET VEL_LIMIT ROUTE_CHAIN OBJ_LAT
+  unset ROUTE MOCK_ARGS RUN_SEC METRIC_ARGS EXPECT EXPECT_DETOUR STOPLINE_OFFSET VEL_LIMIT ROUTE_CHAIN OBJ_LAT REROUTE
   source "$conf"
   harness_init "$name"
   cp "$conf" "$OUT/case.conf"
@@ -21,6 +21,12 @@ run_case() {
   stack_start "$ROUTE"
   sleep 20; capture_start        # 기동 초기부터 기록 (MRM·diag·trajectory 의 시작 상태 증거)
   if ! stack_wait_ready 170; then fail "준비 실패 (route SET / 자율주행 가능)"; stack_stop; return 1; fi
+  # REROUTE="2=15449 3=15233" — SET 된 루트의 preferred 만 바꿔 우회를 경로로 표현 (engage 전)
+  if [ -n "$REROUTE" ]; then
+    note "preferred 재지정: $REROUTE"
+    python3 "$ROOT/tools/harness/reroute_preferred.py" $REROUTE 2>&1 | tee "$OUT/reroute.txt" | sed "s/^/  /"
+    sleep 3
+  fi
   if [ -n "$VEL_LIMIT" ]; then set_velocity_limit "$VEL_LIMIT"; fi
   sleep 2; engage
   run_for "$RUN_SEC"

@@ -87,7 +87,7 @@ public:
 
   virtual std::optional<PathWithLaneId> extendPath() = 0;
 
-  virtual void resetParameters() = 0;
+  virtual void resetParameters(const bool keep_signal_timer = false) = 0;
 
   virtual TurnSignalInfo updateOutputTurnSignal() const = 0;
 

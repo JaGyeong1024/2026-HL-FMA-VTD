@@ -1,3 +1,8 @@
+# 주의(9/8): 이 모듈은 현재 default_preset.yaml 에서 꺼져 있다.
+#   켜면 slot2 우선순위가 lane_change 위이고 후보 독점(candidate 동시실행 false)이라
+#   lane_change_* 가 승인 풀에 오르지 못한다. 아래 policy 설정들은 그동안 비활성이다.
+#   다시 켜려면 preset 을 true 로 하고 scene_module_manager.param.yaml 에서 우선순위를
+#   lane_change 아래로 내린 뒤 candidate 동시실행을 열 것. 근거: docs/대회정보/todo0908.md §2-1
 # see AvoidanceParameters description in avoidance_module_data.hpp for description.
 /**:
   ros__parameters:
@@ -152,7 +157,8 @@
           # "auto"   : generate candidate path. if RTC is running as AUTO mode, the ego avoids it automatically.
           # "manual" : generate candidate path and wait operator approval even if RTC is running as AUTO mode.
           # "ignore" : never avoid it.
-          policy: "manual"                              # [-]
+          policy: "auto"                                # [-] HL FMA 9/8: manual 은 후보만 만들고
+          # 승인을 기다린다(RTC AUTO 여도). 차선 내 정지차를 자동으로 피하려면 auto. 되돌리려면 manual
           condition:
             th_stopped_time: 3.0                        # [s]
             th_moving_distance: 1.0                     # [m]
@@ -171,7 +177,10 @@
           # "auto"   : generate candidate path. if RTC is running as AUTO mode, the ego avoids it automatically.
           # "manual" : generate candidate path and wait operator approval even if RTC is running as AUTO mode.
           # "ignore" : never avoid it.
-          policy: "ignore"                                # [-]
+          # HL FMA 9/8: ignore 가 차선 내 정지차 회피를 막고 있었다(실측 IS_NOT_PARKING_OBJECT,
+          # shiftable ratio 0.03 vs 요구 0.8). 공도에선 불법주차 회피가 민감해 기본 ignore 로 보인다.
+          # 되돌리려면 ignore.
+          policy: "auto"                                  # [-]
           condition:
             th_road_border_distance: 0.8                  # [m] threshold distance from road border to parking vehicle side
 

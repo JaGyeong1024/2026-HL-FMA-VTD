@@ -173,6 +173,15 @@ void NormalLaneChange::update_transient_data(const bool is_approved)
                 : calculation::calc_actual_prepare_duration(
                     common_data_ptr_, common_data_ptr_->get_ego_speed(), active_signal_duration);
 
+  // HL FMA 임시 검증: 깜빡이 타이머가 쌓여 준비 시간이 줄어드는지. 확인 후 삭제.
+  RCLCPP_WARN_THROTTLE(
+    logger_, clock_, 1000,
+    "[HLFMA-PREP] type=%d dir=%d v=%.2f 준비시간=%.2fs 깜빡이누적=%.2fs 준비거리=%.1fm",
+    static_cast<int>(common_data_ptr_->lc_type), static_cast<int>(direction_),
+    common_data_ptr_->get_ego_speed(), transient_data.lane_change_prepare_duration,
+    active_signal_duration,
+    transient_data.lane_change_prepare_duration * common_data_ptr_->get_ego_speed());
+
   std::tie(transient_data.lane_changing_length, transient_data.current_dist_buffer) =
     calculation::calc_lc_length_and_dist_buffer(common_data_ptr_, get_current_lanes());
 
@@ -256,6 +265,22 @@ void NormalLaneChange::updateLaneChangeStatus()
 
   // Update status
   status_.is_valid_path = found_valid_path;
+  // HL FMA 일괄 계측 A: 유효경로 여부 + 필요 길이 vs 가용 경로 길이
+  RCLCPP_WARN_THROTTLE(
+    logger_, clock_, 500,
+    "[HLFMA-A] type=%d dir=%d v=%.2f valid=%d 준비=%.2fs(%.1fm) 횡이동=%.1fm 필요=%.1fm "
+    "경로길이=%.1fm 종점까지=%.1fm",
+    static_cast<int>(common_data_ptr_->lc_type), static_cast<int>(direction_),
+    common_data_ptr_->get_ego_speed(), static_cast<int>(found_valid_path),
+    common_data_ptr_->transient_data.lane_change_prepare_duration,
+    common_data_ptr_->transient_data.lane_change_prepare_duration *
+      common_data_ptr_->get_ego_speed(),
+    common_data_ptr_->transient_data.lane_changing_length.min,
+    common_data_ptr_->transient_data.lane_change_prepare_duration *
+        common_data_ptr_->get_ego_speed() +
+      common_data_ptr_->transient_data.lane_changing_length.min,
+    motion_utils::calcArcLength(prev_module_output_.path.points),
+    common_data_ptr_->transient_data.dist_to_terminal_end);
   status_.is_safe = found_safe_path;
   status_.lane_change_path.path.header = getRouteHeader();
 }
@@ -375,11 +400,15 @@ TurnSignalInfo NormalLaneChange::get_current_turn_signal_info() const
     return get_terminal_turn_signal_info();
   }
 
+  // HL FMA 9/8: 타이머를 여기서 시작한다. 아래 !is_valid_path 분기도 깜빡이를 실제로 켜는데
+  // (get_turn_signal 을 반환한다) 그 시간을 세지 않아 active_signal_duration 이 영구히 0 이었고,
+  // 그래서 prepare 가 max_prepare_duration(4.0s) 에 고정됐다. 유효 경로가 없는 동안에도 깜빡이는
+  // 켜져 있으므로(실측: turn=2 가 100s 이상 지속) 그 시간을 세는 것이 설계 의도에 맞다.
+  set_signal_activation_time();
+
   if (!status_.is_valid_path) {
     return get_turn_signal(getEgoPose(), prev_path.back().point.pose);
   }
-
-  set_signal_activation_time();
 
   return get_turn_signal(getEgoPose(), getLaneChangePath().info.lane_changing_end);
 }
@@ -728,7 +757,7 @@ std::optional<PathWithLaneId> NormalLaneChange::extendPath()
     target_lanes, dist_to_end_of_path, dist_to_target_pose);
 }
 
-void NormalLaneChange::resetParameters()
+void NormalLaneChange::resetParameters(const bool keep_signal_timer)
 {
   is_abort_path_approved_ = false;
   is_abort_approval_requested_ = false;
@@ -737,7 +766,11 @@ void NormalLaneChange::resetParameters()
   status_ = LaneChangeStatus();
   unsafe_hysteresis_count_ = 0;
   lane_change_debug_.reset();
-  set_signal_activation_time(true);
+  // 유효 경로가 없다는 이유로 타이머를 지우면 영원히 누적되지 않는다(한 판에 3800회 관측).
+  // 모듈 종료·차선변경 완료에서만 지운다.
+  if (!keep_signal_timer) {
+    set_signal_activation_time(true);
+  }
 
   RCLCPP_DEBUG(logger_, "reset all flags and debug information.");
 }
@@ -1327,11 +1360,11 @@ bool NormalLaneChange::get_path_using_path_shifter(
       debug_metrics.lc_metrics.emplace_back(lc_metric, -1);
 
       const auto debug_print_lat = [&](const std::string & s) {
-        // HL FMA 임시 계측(저속 차선변경 길이). 측정 후 RCLCPP_DEBUG 로 되돌린다.
-        RCLCPP_WARN(
-          logger_, "[HLFMA-LEN] %s | v: %.2f | lc_time: %.3f | lat_acc: %.2f | lc_len: %.2f",
-          s.c_str(), common_data_ptr_->get_ego_speed(), lc_metric.duration, lc_metric.lat_accel,
-          lc_metric.length);
+        // HL FMA 일괄 계측 B: 후보별 채택/거절 사유
+        RCLCPP_WARN_THROTTLE(
+          logger_, clock_, 300, "[HLFMA-B] %s | v=%.2f lc_time=%.2f lat_acc=%.2f lc_len=%.2f",
+          s.c_str(), common_data_ptr_->get_ego_speed(), lc_metric.duration,
+          lc_metric.lat_accel, lc_metric.length);
       };
 
       if (!check_length_diff(prep_metric.length, lc_metric.length, true)) {
@@ -1417,9 +1450,19 @@ bool NormalLaneChange::check_candidate_path_safety(
       candidate_path, ego_predicted_paths, target_objects,
       common_data_ptr_->lc_param_ptr->safety.rss_params_for_stuck,
       lane_change_debug_.collision_check_objects);
+    // HL FMA 진단(임시): 완화 RSS 적용 결과. 원인 규명 후 제거.
+    RCLCPP_WARN_THROTTLE(
+      logger_, clock_, 300, "[HLFMA-S] stuck RSS 적용 → safe=%d (막는 객체 후행=%d)",
+      safety_check_with_stuck_rss.is_safe, safety_check_with_stuck_rss.is_trailing_object);
     return safety_check_with_stuck_rss.is_safe;
   }
 
+  // HL FMA 진단(임시): 무엇이 unsafe 를 만드는가. stuck 이면 완화 RSS 로 재시도된다.
+  if (!safety_check_with_normal_rss.is_safe) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, clock_, 300, "[HLFMA-S] normal RSS unsafe: ego_stuck=%d 막는객체_후행=%d v_prepare=%.2f",
+      is_stuck, safety_check_with_normal_rss.is_trailing_object, lc_start_velocity);
+  }
   return safety_check_with_normal_rss.is_safe;
 }
 

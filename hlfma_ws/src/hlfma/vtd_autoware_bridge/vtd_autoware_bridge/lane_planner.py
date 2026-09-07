@@ -66,8 +66,16 @@ class LanePlanner(Node):
             self.create_subscription(
                 CooperateStatusArray, f'/planning/cooperate_status/external_request_lane_change_{side}',
                 lambda m, s=side: self.rtc_status.__setitem__(s, m), 1)
-        self.rtc_cli = self.create_client(
-            CooperateCommands, '/planning/cooperate_commands')
+        # RTC 승인 서비스는 모듈마다 따로 만들어진다:
+        #   rtc_interface.cpp:142  cooperate_commands_namespace_ + "/" + name
+        # 접미사 없는 '/planning/cooperate_commands' 로 잡으면 service_is_ready() 가 영원히 false 라
+        # 승인이 한 번도 전송되지 않는다(2026-09-08 실측: 우측 후보 valid=1 인데 WAITING_APPROVAL 고착).
+        self.rtc_cli = {
+            side: self.create_client(
+                CooperateCommands,
+                f'/planning/cooperate_commands/external_request_lane_change_{side}')
+            for side in ('left', 'right')
+        }
         self.approved_uuid = set()
 
         # 속도 상한: 현재 속도로 해가 없고 더 느리면 있으면, 그 속도를 걸어 계획을 성립시킨다.
@@ -303,7 +311,12 @@ class LanePlanner(Node):
     def send_rtc(self, side):
         """해당 방향 external_request 후보를 승인한다. 이미 보낸 uuid 는 건너뛴다."""
         msg = self.rtc_status.get(side)
-        if msg is None or not msg.statuses or not self.rtc_cli.service_is_ready():
+        cli = self.rtc_cli.get(side)
+        if msg is None or not msg.statuses or cli is None or not cli.service_is_ready():
+            # 조용히 반환하면 승인이 안 되는 것을 관측할 수 없다 — 이유를 남긴다.
+            why = ('상태 토픽 없음' if msg is None else
+                   '후보 없음' if not msg.statuses else '서비스 미준비')
+            self.get_logger().warning(f'RTC 승인 불가({side}): {why}', throttle_duration_sec=5.0)
             return
         reqs = []
         for st in msg.statuses:
@@ -311,6 +324,8 @@ class LanePlanner(Node):
             if u in self.approved_uuid:
                 continue
             if not st.safe:
+                self.get_logger().warning(
+                    f'RTC 후보가 unsafe 로 표시됨({side}) — 승인 보류', throttle_duration_sec=5.0)
                 continue
             reqs.append(st)
         if not reqs:
@@ -325,7 +340,7 @@ class LanePlanner(Node):
             req.commands.append(cc)
             self.approved_uuid.add(bytes(st.uuid.uuid))
         self.get_logger().info(f'RTC 승인 전송: {side} {len(req.commands)}건')
-        self.rtc_cli.call_async(req)
+        cli.call_async(req)
 
     # ---------------------------------------------------------------- tick
     def event_key(self):

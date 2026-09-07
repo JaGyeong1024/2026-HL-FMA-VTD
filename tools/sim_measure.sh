@@ -78,7 +78,7 @@ TOPICS=(/localization/kinematic_state /planning/trajectory /control/command/cont
         /api/operation_mode/state /api/routing/state /system/emergency/hazard_status
         /api/fail_safe/mrm_state /vtd/respawn /vtd/raw_rx /rosout
         /planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/output/is_reroute_available)
-EXTRA=$(ros2 topic list 2>/dev/null | grep -E "planning_factors/|cooperate_status/|^/detour/" | tr '\n' ' ')
+EXTRA=$(ros2 topic list 2>/dev/null | grep -E "planning_factors/|cooperate_status/|^/detour/|avoidance_debug_message_array|behavior_path_planner/debug/internal_state|behavior_path_planner/debug/static_obstacle_avoidance$" | tr '\n' ' ')
 ros2 bag record --node-name "rec_${TAG}_$(date +%H%M%S)" -o "$OUT/bag" ${TOPICS[*]} $EXTRA \
     > "$OUT/bag_record.log" 2>&1 < /dev/null &
 BAG_PID=$!
