@@ -14,7 +14,7 @@ set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROUTE="${1:-$ROOT/docs/대회정보/route_example.csv}"
 OUT="$HOME/hlfma/logs/regress_mock"; mkdir -p "$OUT"
-export ROS_DOMAIN_ID=43
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-43}"
 source /opt/ros/jazzy/setup.bash
 source "$ROOT/hlfma_ws/install/setup.bash"
 export LD_LIBRARY_PATH="$HOME/acados/lib:${LD_LIBRARY_PATH:-}"
@@ -22,11 +22,12 @@ export LD_LIBRARY_PATH="$HOME/acados/lib:${LD_LIBRARY_PATH:-}"
 pass=0; fail=0
 check() { if [ "$2" = "1" ]; then echo "  [PASS] $1"; pass=$((pass+1)); else echo "  [FAIL] $1"; fail=$((fail+1)); fi; }
 cleanup() {
-  kill $AW_PID 2>/dev/null; sleep 5; kill -9 $AW_PID 2>/dev/null
-  pkill -9 -f "[-][-]ros-args" 2>/dev/null; pkill -f mock_vtd.py 2>/dev/null; pkill -f vtd_autoware_bridge 2>/dev/null
+  # start_autonomous.sh 의 종료 훅이 자기 프로세스 그룹만 정리한다 (다른 클론 스택은 안 건드림)
+  kill -INT $AW_PID 2>/dev/null; for i in $(seq 1 30); do kill -0 $AW_PID 2>/dev/null || break; sleep 0.5; done
+  kill -9 $AW_PID 2>/dev/null; kill $MOCK_PID 2>/dev/null
 }
 trap cleanup EXIT
-pkill -9 -f "[-][-]ros-args" 2>/dev/null; pkill -f mock_vtd.py 2>/dev/null; sleep 2
+pkill -f "mock_vtd.py --tl" 2>/dev/null; sleep 1
 
 echo "== mock VTD (신호 적색 → ${TL_GREEN_AT:-170}s에 녹색) =="
 GREEN_AT="${TL_GREEN_AT:-170}"   # engage(~110s) 후 적색을 보며 정지선에 서고, 이 시각에 녹색

@@ -272,3 +272,111 @@ TEST_F(TestNormalLaneChange, testGetPathWhenValid)
 
   ASSERT_TRUE(lc_status.is_valid_path);
 }
+
+// ---------------------------------------------------------------------------
+// HL FMA 하네스: external_request 차선변경 패치 P0/P1/P2 (수정 전 red, 수정 후 green)
+// 근거: docs 스크래치 adv_bundle2.md D1/D4, NG 68aeeb5
+// ---------------------------------------------------------------------------
+#include "autoware/behavior_path_lane_change_module/utils/calculation.hpp"
+#include "autoware/behavior_path_lane_change_module/utils/utils.hpp"
+
+#include <autoware_internal_planning_msgs/msg/velocity_limit.hpp>
+
+#include <set>
+
+namespace
+{
+constexpr std::array<int64_t, 6> kLeftLaneIds{4765, 4770, 4775, 4424, 4780, 4785};
+constexpr std::array<int64_t, 3> kLeftNonPreferredIds{4424, 4780, 4785};
+}  // namespace
+
+// P0 (NG 68aeeb5): 자차가 우선차선이 아닌 차선 열에 있어도 EXTERNAL_REQUEST 는
+// target_neighbor 가 비지 않아야 한다 (비면 is_lanes_available()=false → 후보 0).
+TEST_F(TestNormalLaneChange, HlfmaP0_ExternalRequestNeighborLanesFromNonPreferredLane)
+{
+  const auto & rh = *planner_data_->route_handler;
+  lanelet::ConstLanelets current_lanes;
+  for (const auto id : kLeftNonPreferredIds) {
+    current_lanes.push_back(rh.getLaneletsFromId(id));
+    ASSERT_NE(rh.getNumLaneToPreferredLane(current_lanes.back()), 0) << "fixture: lane " << id;
+  }
+
+  const auto normal = autoware::behavior_path_planner::utils::lane_change::get_target_neighbor_lanes(
+    rh, current_lanes, LaneChangeModuleType::NORMAL);
+  EXPECT_EQ(normal.size(), current_lanes.size()) << "NORMAL(필수) 은 기존 동작 유지";
+
+  const auto external =
+    autoware::behavior_path_planner::utils::lane_change::get_target_neighbor_lanes(
+      rh, current_lanes, LaneChangeModuleType::EXTERNAL_REQUEST);
+  EXPECT_EQ(external.size(), current_lanes.size())
+    << "P0: EXTERNAL_REQUEST 는 비우선차선에서도 현재 차선 열을 target_neighbor 로 써야 함";
+}
+
+// P1: 자차가 우선차선(좌회전 차선 등)에 있을 때 EXTERNAL_REQUEST(우측 우회)의
+// 최소 차선변경 길이가 DBL_MAX 가 되면 안 된다 (calc_shift_intervals 빈 벡터 → 후보 0).
+TEST_F(TestNormalLaneChange, HlfmaP1_ExternalRequestFromPreferredLaneHasFiniteLength)
+{
+  // 경로: 좌측 차선(y>0)을 전 구간 우선차선으로 → 자차(-50,1.75) 는 우선차선
+  std::string autoware_route_handler_dir{"autoware_route_handler"};
+  const auto rh_test_route =
+    get_absolute_path_to_route(autoware_route_handler_dir, "lane_change_test_route.yaml");
+  auto route_opt = autoware::test_utils::parse<std::optional<LaneletRoute>>(rh_test_route);
+  ASSERT_TRUE(route_opt.has_value());
+  auto route = *route_opt;
+  const std::set<int64_t> left_ids(kLeftLaneIds.begin(), kLeftLaneIds.end());
+  for (auto & seg : route.segments) {
+    for (const auto & p : seg.primitives) {
+      if (left_ids.count(p.id)) seg.preferred_primitive = p;
+    }
+  }
+  planner_data_->route_handler->setRoute(route);
+
+  normal_lane_change_ = std::make_shared<NormalLaneChange>(
+    lc_param_ptr_, LaneChangeModuleType::EXTERNAL_REQUEST, Direction::RIGHT);
+  normal_lane_change_->setData(planner_data_);
+  set_previous_approved_path();
+
+  constexpr auto is_approved = true;
+  normal_lane_change_->update_lanes(!is_approved);
+  const auto & common = get_common_data_ptr();
+  ASSERT_TRUE(common->is_lanes_available()) << "fixture: 우선차선에서 external 후보 차선은 있어야 함";
+  ASSERT_EQ(
+    planner_data_->route_handler->getNumLaneToPreferredLane(common->lanes_ptr->current.back()), 0)
+    << "fixture: 현재 차선 열의 끝이 우선차선이어야 P1 조건";
+
+  const auto [lc_length, dist_buffer] =
+    autoware::behavior_path_planner::utils::lane_change::calculation::
+      calc_lc_length_and_dist_buffer(common, common->lanes_ptr->current);
+  EXPECT_LT(lc_length.min, 1.0e6)
+    << "P1: 우선차선에서 external_request 최소 차선변경 길이가 무한대 (후보 생성 불가)";
+  EXPECT_LT(dist_buffer.min, 1.0e6);
+}
+
+// P2: 준비구간 상한(규제요소 근접 금지 거리)은 외부 속도제한이 걸려 있으면
+// min(max_vel, 외부 제한) × max_prepare_duration 이어야 한다.
+TEST_F(TestNormalLaneChange, HlfmaP2_MaxPrepareLengthRespectsExternalVelocityLimit)
+{
+  using autoware::behavior_path_planner::utils::lane_change::calculation::
+    calc_maximum_prepare_length;
+  const auto max_prepare_duration = lc_param_ptr_->trajectory.max_prepare_duration;
+  const auto max_vel = planner_data_->parameters.max_vel;
+
+  // 제한 없음: 기존 동작 (회귀)
+  EXPECT_NEAR(
+    calc_maximum_prepare_length(get_common_data_ptr()), max_prepare_duration * max_vel, 1e-6);
+
+  // 외부 속도제한 4.0 m/s (판단 노드의 hold 접근)
+  auto limit = std::make_shared<autoware_internal_planning_msgs::msg::VelocityLimit>();
+  limit->max_velocity = 4.0;
+  planner_data_->external_limit_max_velocity = limit;
+  normal_lane_change_->setData(planner_data_);
+  EXPECT_NEAR(calc_maximum_prepare_length(get_common_data_ptr()), max_prepare_duration * 4.0, 1e-6)
+    << "P2: 외부 속도제한 시 준비구간 상한이 줄어야 규제요소 근접 금지구역이 실제 속도에 맞음";
+
+  // 외부 제한이 max_vel 보다 크면 max_vel 유지
+  limit->max_velocity = max_vel + 10.0;
+  planner_data_->external_limit_max_velocity = limit;
+  normal_lane_change_->setData(planner_data_);
+  EXPECT_NEAR(
+    calc_maximum_prepare_length(get_common_data_ptr()), max_prepare_duration * max_vel, 1e-6);
+}

@@ -59,33 +59,31 @@ if [ -n "$ROUTE_CSV" ] && [ ! -f "$ROUTE_CSV" ]; then
   echo "[route] CSV 없음: $ROUTE_CSV" >&2; exit 1
 fi
 
-# 이미 떠 있는 Autoware/브리지가 있으면 중단 (VTD 9910 은 동시 접속 1개, ROS 그래프 중복 방지)
-if pgrep -f "autoware.launch.xml|planning_simulator.launch.xml" >/dev/null; then
-  echo "[start] Autoware 가 이미 실행 중입니다. 먼저 종료하세요:  pkill -f ros-args ; pkill -f vtd_autoware_bridge" >&2
+# 이미 떠 있는 "이 디렉터리의" Autoware/브리지가 있으면 중단 (VTD 9910 은 동시 접속 1개, ROS 그래프 중복 방지).
+# 다른 클론(-NG/-MY)의 스택은 건드리지 않는다 — 동시 주행은 ROS_DOMAIN_ID 를 다르게 해서만 가능.
+if pgrep -f "map_path:=$ROOT/map" >/dev/null || pgrep -f "$ROOT/hlfma_ws/install/vtd_autoware_bridge" >/dev/null; then
+  echo "[start] 이 디렉터리($ROOT)의 Autoware/브리지가 이미 실행 중입니다. 먼저 ./stop.sh 로 종료하세요." >&2
   exit 1
 fi
 # 종료 훅: Ctrl+C(SIGINT)/종료 시 브리지·route_node·Autoware 노드를 확실히 정리한다.
-# ros2 launch 가 자식에 SIGINT 를 보내지만 component_container 일부가 늦게 죽어 다음 실행을
-# 방해하므로(ROS 그래프 잔존), 여기서 프로세스 그룹째 정리한다.
-AW_PID=""
+# 두 launch 를 setsid 로 각자 프로세스 그룹에 띄우고, 그룹째 신호를 보낸다(다른 클론 프로세스는 영향 없음).
+# component_container 일부가 늦게 죽으면 그룹 KILL, 마지막으로 이 install 경로로 식별되는 잔존 노드 정리.
+AW_PID=""; BR_PID=""
 cleanup() {
   trap - EXIT INT TERM
   echo "[start] 종료 정리..." >&2
-  [ -n "$AW_PID" ] && kill -INT "$AW_PID" 2>/dev/null
-  pkill -INT -f "vtd_autoware_bridge|vtd_route_node" 2>/dev/null
-  # component_container 등이 8초 안에 안 죽으면 강제
-  for i in $(seq 1 16); do pgrep -f "autoware.launch.xml|vtd_autoware_bridge" >/dev/null || break; sleep 0.5; done
-  pkill -KILL -f "vtd_autoware_bridge|vtd_route_node" 2>/dev/null
-  pkill -KILL -f "autoware.launch.xml" 2>/dev/null
-  pkill -KILL -f "rclcpp_components/component_container" 2>/dev/null
-  pkill -KILL -f "robot_state_publisher .*ros-args" 2>/dev/null
-  # 이 launch 가 띄운 잔존 노드(설치 경로로 식별) 정리
+  for pid in "$AW_PID" "$BR_PID"; do [ -n "$pid" ] && kill -INT -- "-$pid" 2>/dev/null; done
+  for i in $(seq 1 16); do
+    alive=0; for pid in "$AW_PID" "$BR_PID"; do [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=1; done
+    [ "$alive" = "0" ] && break; sleep 0.5
+  done
+  for pid in "$AW_PID" "$BR_PID"; do [ -n "$pid" ] && kill -KILL -- "-$pid" 2>/dev/null; done
   pkill -KILL -f "$ROOT/hlfma_ws/install/" 2>/dev/null
   exit 0
 }
 trap cleanup EXIT INT TERM
-# 시작 전, 지난 실행의 잔존물이 있으면 정리
-pkill -KILL -f "vtd_autoware_bridge|vtd_route_node" 2>/dev/null
+# 시작 전, 지난 실행의 "이 디렉터리" 잔존물이 있으면 정리
+pkill -KILL -f "$ROOT/hlfma_ws/install/vtd_autoware_bridge" 2>/dev/null
 
 mkdir -p "$HOME/hlfma/logs"
 RUN_TS="$(date +%m%d_%H%M%S)"
@@ -108,16 +106,17 @@ ROS_LOG_DIR=$ROS_LOG_DIR
 ENGAGE=${ENGAGE:-true}
 GIT_REV=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null)
 EOF
-ros2 launch vtd_autoware_bridge bridge.launch.xml \
+setsid ros2 launch vtd_autoware_bridge bridge.launch.xml \
   vtd_host:="$VTD_HOST" \
   route_csv:="$ROUTE_CSV" \
   auto_engage:="${AUTO_ENGAGE:-false}" \
-  > "$BRIDGE_LOG" 2>&1 &
+  > "$BRIDGE_LOG" 2>&1 < /dev/null &
+BR_PID=$!
 echo "[bridge] host=$VTD_HOST route_csv=${ROUTE_CSV:-없음} auto_engage=${AUTO_ENGAGE:-false} log=$BRIDGE_LOG"
 sleep 3
 grep -m3 "맵 로드\|VTD 연결\|경로 CSV" "$BRIDGE_LOG" 2>/dev/null || true
 
-ros2 launch autoware_launch autoware.launch.xml \
+setsid ros2 launch autoware_launch autoware.launch.xml \
   "${COMMON_ARGS[@]}" \
   launch_perception:=false \
   launch_localization:=false \
@@ -128,7 +127,7 @@ ros2 launch autoware_launch autoware.launch.xml \
   system_run_mode:=planning_simulation \
   launch_system_monitor:=false \
   launch_dummy_diag_publisher:=true \
-  is_simulation:=true > >(tee -i "$AW_LOG") 2>&1 &
+  is_simulation:=true > >(tee -i "$AW_LOG") 2>&1 < /dev/null &
 AW_PID=$!
 echo "[autoware] log=$AW_LOG  ros_log_dir=$ROS_LOG_DIR"
 
