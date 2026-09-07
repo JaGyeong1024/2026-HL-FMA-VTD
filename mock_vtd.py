@@ -15,6 +15,7 @@
   --obj-abs ID,X,Y,Z,HDG_RAD,SPEED,LEN,WID  절대 좌표 객체 (tools/harness/place.py 가 만들어 줌)
   --obj-at T:add:ID | T:del:ID              시각 T 에 객체를 보이게/안 보이게
   --mover ID,DX,DY,HDG,SPEED,LEN,WID,T0[,T1]  T0 에 나타나 등속 직진, T1 에 사라짐 (보행자 급출발 재현)
+                                            T0="d:40" 이면 ego 가 객체 위치의 40 m 앞(진행방향 종거리)에 왔을 때 출발, T1 은 출발 후 지속 초
   --trace FILE                              매 스텝 wall,t,x,y,h,v,steer,accel,tl,n_obj 을 CSV 로 기록
   --start-deadband A                        정지 상태(v<0.05)에서 가속 명령이 A m/s² 미만이면 움직이지 않음
                                             (VTD 출발 데드밴드 모사. 실측값 확정 전엔 가정치 — 재출발 교착 D1 재현용)
@@ -110,6 +111,15 @@ class MockVTD:
                 o[1] += o[5] * np.cos(o[4]) * DT
                 o[2] += o[5] * np.sin(o[4]) * DT
         for mv in self.movers:                    # 이동 객체 (등장 후 등속 직진)
+            if isinstance(mv[9], str):            # 거리 트리거 "d:D": ego 종거리 <= D 이면 출발 시각 확정
+                D = float(mv[9][2:])
+                lon = (mv[1] - self.x) * np.cos(self.h) + (mv[2] - self.y) * np.sin(self.h)
+                if 0.0 < lon <= D:
+                    dur = mv[10]
+                    mv[9] = self.sim_time if self.clock_mode == "connect" else (tc if tc is not None else 0.0)
+                    mv[10] = None if dur is None else mv[9] + dur
+                    print(f"[mock] t={self.sim_time:.1f} 이동객체 {mv[0]} 출발 (ego 종거리 {lon:.1f} m, ego v={self.v*3.6:.1f} km/h)", flush=True)
+                continue
             if tc is not None and mv[9] <= tc and (mv[10] is None or tc < mv[10]):
                 mv[1] += mv[5] * np.cos(mv[4]) * DT
                 mv[2] += mv[5] * np.sin(mv[4]) * DT
@@ -130,6 +140,8 @@ class MockVTD:
         tc = self.sched_clock()
         out = [tuple(o) for oid, o in self.obj_defs.items() if oid not in self.hidden]
         for mv in self.movers:
+            if isinstance(mv[9], str):
+                continue                          # 거리 트리거 대기 중: 아직 안 보임
             if tc is not None and mv[9] <= tc and (mv[10] is None or tc < mv[10]):
                 out.append(tuple(mv[:9]))
         return out
@@ -282,9 +294,11 @@ def main():
             hidden.add(int(i))
     movers = []
     for spec in a.mover or []:
-        f = [float(v) for v in spec.split(",")]
-        i, dx, dy, hd, sp, ln, wd, t0 = f[:8]
-        t1 = f[8] if len(f) > 8 else None
+        parts = spec.split(",")
+        f = [float(v) for v in parts[:7]]
+        i, dx, dy, hd, sp, ln, wd = f
+        t0 = parts[7] if parts[7].startswith("d:") else float(parts[7])
+        t1 = float(parts[8]) if len(parts) > 8 else None
         ox, oy, oh = rel(dx, dy, hd)
         movers.append((int(i), float(ox), float(oy), a.z, float(oh), sp, ln, wd, 1.7, t0, t1))
     m = MockVTD(a.x, a.y, a.hdg, host=a.host, port=a.port, time_scale=a.time_scale, z=a.z,
