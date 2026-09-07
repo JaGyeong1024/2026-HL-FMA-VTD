@@ -9,19 +9,36 @@
   <arg name="detection_distance_m" default="80.0" description="VTD GT 실측 상한 79.8m"/>
   <!-- 9/7 정책: 우회 가능 거리를 남기고 서서(standoff) 관찰한 뒤 판단. 정지 상태 후보 finish 실측
        detour1 40.4m / detour2 29.8m → 큰 쪽 + 여유 6m 로 48 을 기본값으로 둔다. -->
-  <arg name="standoff_m" default="55.0" description="blocker 앞 이 거리에 정지"/>
+  <arg name="standoff_m" default="48.0" description="blocker 앞 이 거리에 정지"/>
   <arg name="standoff_margin_m" default="18.0" description="오버슈트 보정. 실측 11~16.6m (detour9 목표48→실제31.4)"/>
   <arg name="standoff_decel_mps2" default="1.5" description="standoff 접근 감속 프로파일"/>
-  <arg name="signal_debounce_s" default="0.5" description="신호 색 전이 히스테리시스(양방향 동일)"/>
   <arg name="approach_speed_mps" default="4.0" description="접근 중 속도 상한"/>
   <arg name="no_response_s" default="3.0" description="서서 관찰: 무응답 지속 시 우회 결정"/>
+  <arg name="standoff_needed_fallback_m" default="40.0" description="후보 없을 때 우회 필요거리 보수값"/>
+  <arg name="approach_speed_floor_mps" default="2.0" description="standoff 못 만든 경우 하한(손 놓지 않음)"/>
   <arg name="blocker_move_speed_mps" default="0.5" description="이 이상이면 출발로 보고 추종 복귀"/>
   <arg name="lc_finish_margin_m" default="3.0" description="LC 완료 지점과 blocker 사이 여유"/>
-  <arg name="stopline_min_m" default="28.0" description="정지차~정지선 최소(우회+복귀 가능)"/>
+  <!-- 유일한 대기열 판별자이자 기하 조건: 막힘 앞끝~정지선 거리 ≥ 복귀에 필요한 길이. 신호는 보지 않는다.
+       상수가 아니라 **속도 기반 계산**이다 (9/7 사용자 지적: 상수는 복귀 칸 수를 세지 않고 속도 의존을 굳힌다):
+         need = n_return × lc_length(approach_speed_mps) + stopline_stop_margin_m
+       n_return = 우회 목적지 차선에서 우선차선까지의 칸 수(맵·경로에서 계산). -->
+  <arg name="stopline_min_m" default="12.0"
+       description="위 계산 결과의 하한. 차 길이(4.85)+정지 여유+슬랙 수준으로, 계산이 비정상적으로
+                    작게 나와도 이보다 가깝게 붙지 않게 하는 안전장치다."/>
+  <arg name="stopline_stop_margin_m" default="3.0" description="복귀 완료 후 정지선까지 남길 여유"/>
+  <!-- 복귀 여유 부족을 거부 근거로 쓸지. 기본 false(경고만): 모델이 실측 대비 ~20% 과대이고,
+       복귀 실패 비용(경로이탈 리스폰 1회)이 미완주보다 작다. 실주행으로 모델을 보정한 뒤 결정한다. -->
+  <arg name="return_check_enforce" default="false"/>
+  <!-- 차선변경 길이 모델 파라미터. **lane_change.param.yaml 과 같은 값이어야 한다** —
+       어긋나면 우리가 Autoware 와 다른 기하로 판단하게 된다(오늘 세 번 겪은 실수의 형태). -->
+  <arg name="lc_lane_width_m" default="3.5"/>
+  <arg name="lc_lateral_jerk" default="1.5" description="yaml trajectory.lateral_jerk"/>
+  <arg name="lc_lateral_acc" default="1.2" description="yaml lateral_acceleration.max_values"/>
+  <arg name="lc_max_prepare_duration" default="4.0" description="yaml trajectory.max_prepare_duration"/>
+  <arg name="lc_max_longitudinal_acc" default="1.0" description="yaml trajectory.max_longitudinal_acc"/>
   <arg name="regulatory_zone_m" default="54.4" description="lane_change max_prepare_duration×max_vel"/>
   <arg name="blocked_time_s" default="0.5" description="승인 게이트. GT 속도는 정확해 긴 필터 불필요"/>
   <arg name="slowdown_time_s" default="0.2" description="감속 개시 게이트(승인보다 짧게)"/>
-  <arg name="signal_hold_s" default="2.0" description="적신호 factor latch (HOLD/STOP 진동 억제)"/>
   <arg name="pedestrian_slow_kph" default="30.0"/>
   <arg name="route_csv" default="" description="경로 CSV (seq,x,y). 비우면 route_node를 띄우지 않음"/>
   <arg name="auto_engage" default="false" description="경로 SET 후 자율주행 전환까지 자동 요청"/>
@@ -44,16 +61,23 @@
     <param name="standoff_m" value="$(var standoff_m)"/>
     <param name="standoff_margin_m" value="$(var standoff_margin_m)"/>
     <param name="standoff_decel_mps2" value="$(var standoff_decel_mps2)"/>
-    <param name="signal_debounce_s" value="$(var signal_debounce_s)"/>
     <param name="approach_speed_mps" value="$(var approach_speed_mps)"/>
     <param name="no_response_s" value="$(var no_response_s)"/>
+    <param name="standoff_needed_fallback_m" value="$(var standoff_needed_fallback_m)"/>
+    <param name="approach_speed_floor_mps" value="$(var approach_speed_floor_mps)"/>
     <param name="blocker_move_speed_mps" value="$(var blocker_move_speed_mps)"/>
     <param name="lc_finish_margin_m" value="$(var lc_finish_margin_m)"/>
     <param name="stopline_min_m" value="$(var stopline_min_m)"/>
+    <param name="stopline_stop_margin_m" value="$(var stopline_stop_margin_m)"/>
+    <param name="return_check_enforce" value="$(var return_check_enforce)"/>
+    <param name="lc_lane_width_m" value="$(var lc_lane_width_m)"/>
+    <param name="lc_lateral_jerk" value="$(var lc_lateral_jerk)"/>
+    <param name="lc_lateral_acc" value="$(var lc_lateral_acc)"/>
+    <param name="lc_max_prepare_duration" value="$(var lc_max_prepare_duration)"/>
+    <param name="lc_max_longitudinal_acc" value="$(var lc_max_longitudinal_acc)"/>
     <param name="regulatory_zone_m" value="$(var regulatory_zone_m)"/>
     <param name="blocked_time_s" value="$(var blocked_time_s)"/>
     <param name="slowdown_time_s" value="$(var slowdown_time_s)"/>
-    <param name="signal_hold_s" value="$(var signal_hold_s)"/>
     <param name="pedestrian_slow_kph" value="$(var pedestrian_slow_kph)"/>
   </node>
 

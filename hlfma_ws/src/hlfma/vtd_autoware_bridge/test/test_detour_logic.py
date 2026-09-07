@@ -5,14 +5,17 @@
   적색이면 대기, 아니면 무응답 no_response_s 후 우회 결정 → 후보 safe & finish+여유<거리 면 승인.
 시간 압박(인지 80 m / 1.5 초 예산)이 사라지는 것이 이 설계의 요점이다.
 """
+import dataclasses
+
 import pytest
 
 from vtd_autoware_bridge.detour_logic import (
-    DetourLogic, Params, EgoState, ObjectInfo, LaneInfo, SignalInfo, CandidateInfo, Inputs,
+    DetourLogic, Params, EgoState, ObjectInfo, LaneInfo, CandidateInfo, Inputs,
     FOLLOW, ASSESS, HOLD, LANE_CHANGE, STOP, LEFT, RIGHT,
 )
 
 P = Params()
+PE = dataclasses.replace(P, return_check_enforce=True)   # 복귀 여유 부족을 veto 하는 모드
 T0 = 100.0
 EFF = P.standoff_m + P.standoff_margin_m   # 프로파일이 겨냥하는 지점(오버슈트 보정 포함)
 # 실제 인지 거리(detour9: 76.6 m)에 맞춘다. detection_distance_m(80) 안이면서 EFF 보다 멀어야 한다.
@@ -36,17 +39,28 @@ def lane(left=True, right=True, reg=500.0, stopline=500.0, left_solid=False, rig
                     distance_to_regulatory_m=reg, distance_to_stopline_m=stopline)
 
 
+def lane_at_stopline(front_d=None, gap=5.0, **kw):
+    """막힘 앞끝이 정지선에서 gap 만큼 앞 → 복귀 불가(gap < need_m())."""
+    return lane(stopline=(FAR if front_d is None else front_d) + gap, **kw)
+
+
 def cand(safe=True, state='WAITING', start=6.0, finish=25.0, present=True, stale=False):
     return CandidateInfo(present=present, safe=safe, state=state,
                          start_distance_m=start, finish_distance_m=finish, stale=stale)
 
 
-def inputs(objects=(), lane_=None, signal=None, cands=None, t=T0, v=12.0, role='preferred',
+def inputs(objects=(), lane_=None, cands=None, t=T0, v=12.0, role='preferred',
            respawn=False, stale=False):
     return Inputs(t=t, ego=EgoState(t=t, v=v, lane_role=role), objects=list(objects),
-                  lane=lane_ or lane(), signal=signal or SignalInfo(None, True),
+                  lane=lane_ or lane(),
                   candidates=cands if cands is not None else {LEFT: cand(), RIGHT: cand()},
                   respawn=respawn, stale=stale)
+
+
+def need_m(n=1):
+    """복귀에 필요한 길이 = n칸 × lc_length(approach_speed) + 정지 여유 (하한 stopline_min_distance_m)."""
+    lg = DetourLogic(P)
+    return max(P.stopline_min_distance_m, n * lg.lc_length_m(P.approach_speed_mps) + P.stopline_stop_margin_m)
 
 
 def standoff_v(d):
@@ -116,12 +130,31 @@ def test_observing_before_no_response_holds_at_standoff_profile():
     assert '관찰' in d.reason
 
 
-def test_standoff_missed_hands_over_to_obstacle_stop():
-    """인지 시점에 이미 standoff 안이면 standoff 를 만들 수 없다 → 개입하지 않고 넘긴다."""
-    d = DetourLogic(P).step(inputs([car(EFF - 10.0)]))
-    assert d.state == STOP and d.approve is None
-    assert all(s != P.sender_hold for s, _ in d.limits)
+def test_standoff_missed_keeps_decelerating_instead_of_giving_up():
+    """9/7 detour14: standoff 를 못 만든다고 손을 놓아 앞차 10.7 m 뒤에서 99 초를 멈춰 있었다.
+    이제는 최대한 감속해 남은 거리를 지키되 0 으로 수렴시키지 않는다."""
+    near = P.standoff_needed_fallback_m - 10.0
+    d = DetourLogic(P).step(inputs([car(near)], cands=NONE_C))
     assert d.detail.get('standoff_missed') is True
+    assert d.state == HOLD                                  # STOP 으로 손 놓지 않는다
+    assert dict(d.limits).get(P.sender_hold) == pytest.approx(P.approach_speed_floor_mps)
+    assert P.sender_hold not in d.clears
+
+
+def test_needed_distance_uses_candidate_finish_not_profile_target():
+    """판정 기준은 프로파일 목표(EFF)가 아니라 '우회에 실제로 필요한 거리'(후보 finish + 여유)다.
+    9/7 detour14: 70 m 인지인데 목표 73 m 기준으로 포기했다 — 그때 후보 finish 는 38 m 였다."""
+    short = {LEFT: cand(present=False), RIGHT: cand(safe=True, state='WAITING', start=5.0, finish=38.0)}
+    lg = DetourLogic(P)
+    assert lg.needed_distance_m(inputs([], cands=short)) == pytest.approx(38.0 + P.lc_finish_margin_m)
+    d = lg.step(inputs([car(70.0)], cands=short))           # 70 m > 필요 41 m → 포기하지 않는다
+    assert d.detail.get('standoff_missed') is False
+    assert d.state in (HOLD, LANE_CHANGE)
+
+
+def test_needed_distance_falls_back_without_candidate():
+    lg = DetourLogic(P)
+    assert lg.needed_distance_m(inputs([], cands=NONE_C)) == pytest.approx(P.standoff_needed_fallback_m)
 
 
 def test_standoff_kept_once_established_even_when_close():
@@ -132,89 +165,89 @@ def test_standoff_kept_once_established_even_when_close():
     assert d.state == HOLD and d.detail.get('standoff_missed') is False
 
 
-# ---------------------------------------------------------------- 서서 관찰: 적색 / 무신호
-def RED_SIG(color='RED'):
-    return SignalInfo(red_stop_factor_distance_m=None, available=True, color=color, color_age_s=0.0)
+# ------------------------------------------- 대기열 판정 (신호를 보지 않는다, 두 분기)
+def test_queue_no_room_to_stopline_waits():
+    """막힘 앞끝이 정지선에 붙어 있으면 끼어들 공간이 없다 → 대기.
+    (신호 대기 중인 차들이 바로 이 모습이다. 신호를 보지 않아도 결과가 같다.)"""
+    d = DetourLogic(PE).step(inputs([car()], lane_=lane_at_stopline()))
+    q = d.detail['queue']
+    assert q['basis'] == 'no_room_to_stopline' and q['verdict'] == 'wait'
+    assert d.state == HOLD and '공간 없음' in d.reason
+    assert P.sender_hold in dict(d.limits)          # standoff 는 유지한다
 
 
-def GREEN_SIG():
-    return SignalInfo(red_stop_factor_distance_m=None, available=True, color='GREEN', color_age_s=0.0)
+def test_queue_room_available_detours():
+    """복귀에 필요한 길이만큼 여유가 있으면 신호와 무관하게 우회 대상이다."""
+    d = DetourLogic(P).step(inputs([car()], lane_=lane(stopline=FAR + need_m() + 5.0)))
+    q = d.detail['queue']
+    assert q['basis'] == 'room_available' and q['verdict'] == 'detour'
+    assert d.state == LANE_CHANGE and d.approve in (LEFT, RIGHT)
 
 
-def test_red_signal_waits_without_detour():
-    """적색이면 정당한 대기열이다. 우회하지 않고 standoff 제한을 유지한 채 기다린다."""
-    sig = RED_SIG()
-    d = DetourLogic(P).step(inputs([car()], signal=sig))
-    assert d.state == HOLD and d.approve is None
-    assert P.sender_hold in dict(d.limits)
-    assert '적신호' in d.reason
+def test_return_need_scales_with_lane_count():
+    """복귀 칸 수가 늘면 필요 길이도 그만큼 늘어난다(상수가 아니다)."""
+    two = lane(stopline=FAR + need_m(1) + 5.0)
+    two.lanes_to_preferred = {'right': 2}
+    d = DetourLogic(PE).step(inputs([car()], lane_=two))
+    assert d.detail['return']['n_lanes'] == 2
+    assert d.detail['return']['need_m'] == pytest.approx(need_m(2), abs=0.2)
+    assert d.state == HOLD          # 1칸 기준으로는 충분했지만 2칸에는 부족
+    wide = lane(stopline=FAR + need_m(2) + 5.0)
+    wide.lanes_to_preferred = {'right': 2}
+    assert DetourLogic(PE).step(inputs([car()], lane_=wide)).state == LANE_CHANGE
 
 
-def test_signal_cycling_flips_red_queue_both_ways():
-    """9/7 detour9: 신호가 1(적)→5(녹+화살표)→1→5→2(황) 로 순환하는데 red_queue 가 true 로 고착됐다.
-    색을 1차 근거로 삼고 양방향 동일 디바운스를 적용해 따라 바뀌어야 한다."""
+def test_return_detail_fields():
+    d = DetourLogic(P).step(inputs([car()], lane_=lane(stopline=FAR + need_m() + 5.0)))
+    r = d.detail['return']
+    assert set(r) == {'n_lanes', 'lc_length_model_m', 'need_m', 'gap_m', 'verdict'}
+    assert r['lc_length_model_m'] == pytest.approx(DetourLogic(P).lc_length_m(P.approach_speed_mps), abs=0.1)
+
+
+def test_lc_length_grows_with_speed():
     lg = DetourLogic(P)
-    t = T0
-    assert lg.step(inputs([car(t=t)], signal=RED_SIG(), t=t)).state == HOLD          # 적 → 대기
-    # 초록으로 바뀌면 디바운스 후 우회 판단으로 넘어간다
-    t += P.signal_debounce_s + 0.1
-    lg.step(inputs([car(t=t)], signal=GREEN_SIG(), t=t))
-    t += P.signal_debounce_s + 0.1
-    d = lg.step(inputs([car(t=t)], signal=GREEN_SIG(), t=t))
-    assert d.state == LANE_CHANGE and d.approve is not None
-    assert d.detail['signal']['color'] == 'GREEN' and d.detail['red_queue'] is False
-    # 다시 적색이면 같은 조건으로 되돌아온다 (한 방향 고착 아님)
+    assert lg.lc_length_m(2.0) < lg.lc_length_m(4.0) < lg.lc_length_m(8.0)
+    assert lg.shift_time_s() == pytest.approx(4.31, abs=0.05)   # 폭 3.5, jerk 1.5, acc 1.2
+
+
+def test_queue_no_stopline_detours():
+    d = DetourLogic(P).step(inputs([car()], lane_=lane(stopline=None)))
+    assert d.detail['queue']['basis'] == 'no_stopline'
+    assert d.state == LANE_CHANGE
+
+
+def test_queue_boundary_at_threshold_allows_detour():
+    """경계는 gap >= need 에서 통과한다. 정확히 need 를 쓰면 부동소수 오차로 갈리므로 1 mm 를 더한다
+    (기하가 아니라 부동소수 문제다 — 판정식은 그대로 두고 테스트만 경계를 비켜 쓴다)."""
+    d = DetourLogic(P).step(inputs([car()], lane_=lane(stopline=FAR + need_m() + 0.001)))
+    assert d.detail['queue']['basis'] == 'room_available'
+    assert d.detail['return']['gap_m'] >= d.detail['return']['need_m']
+
+
+def test_queue_just_below_threshold_waits():
+    d = DetourLogic(PE).step(inputs([car()], lane_=lane(stopline=FAR + need_m() - 1.0)))
+    assert d.detail['queue']['basis'] == 'no_room_to_stopline'
+
+
+def test_queue_gap_uses_frontmost_stopped_vehicle():
+    """간격은 가장 가까운 blocker 가 아니라 **정지 차량군 중 가장 앞선 것** 기준이다."""
+    near = car(56.0)
+    front = ObjectInfo(id=2, cls='CAR', v=0.0, longitudinal_m=79.0, lateral_m=0.0,
+                       stopped_since=T0 - LONG)          # 감지 한계 80 m 안
+    sl = lane(stopline=84.0)                             # 앞선 차 기준 5 m (가까운 차 기준이면 28 m)
+    d = DetourLogic(PE).step(inputs([near, front], lane_=sl))
+    q = d.detail['queue']
+    assert q['front_blocker_to_stopline_m'] == pytest.approx(5.0)
+    assert q['basis'] == 'no_room_to_stopline'
+
+
+def test_queue_verdict_has_no_signal_dependency():
+    """판정 입력에 신호가 없다 — 같은 기하면 항상 같은 답이다."""
+    lg = DetourLogic(PE)
     for _ in range(3):
-        t += P.signal_debounce_s + 0.1
-        d = lg.step(inputs([car(t=t)], signal=RED_SIG(), t=t))
-    assert d.detail['red_queue'] is True and '적신호' in d.reason
-
-
-def test_amber_counts_as_red():
-    d = DetourLogic(P).step(inputs([car()], signal=RED_SIG('AMBER')))
-    assert d.state == HOLD and '적신호' in d.reason
-
-
-def test_no_signal_area_stopped_car_is_detour_target():
-    """신호가 아예 없는 구간의 정차차도 우회 대상이어야 한다(정보 없음 = 비적색)."""
-    sig = SignalInfo(red_stop_factor_distance_m=None, available=False, color=None, color_age_s=None)
-    d = DetourLogic(P).step(inputs([car()], signal=sig))
-    assert d.state == LANE_CHANGE and d.approve is not None
-    assert d.detail['red_queue'] is False
-
-
-def test_signal_stale_holds_previous_briefly_then_releases():
-    """신호 **메시지 자체가** stale 일 때만 직전값을 짧게 유지하고, 그 뒤에는 비적색으로 본다."""
-    lg = DetourLogic(P)
-    t = T0
-    assert lg.step(inputs([car(t=t)], signal=RED_SIG(), t=t)).state == HOLD
-    stale_sig = SignalInfo(red_stop_factor_distance_m=None, available=False, color=None, color_age_s=5.0)
-    t += 0.2
-    d = lg.step(inputs([car(t=t)], signal=stale_sig, t=t))
-    assert d.detail['red_queue'] is True            # 짧은 동안은 유지
-    t += P.signal_hold_s + P.signal_debounce_s + 0.3
-    lg.step(inputs([car(t=t)], signal=stale_sig, t=t))
-    t += P.signal_debounce_s + 0.1
-    d = lg.step(inputs([car(t=t)], signal=stale_sig, t=t))
-    assert d.detail['red_queue'] is False           # 이후에는 비적색
-
-
-def test_signal_detail_carries_basis():
-    d = DetourLogic(P).step(inputs([car()], signal=RED_SIG()))
-    sd = d.detail['signal']
-    assert sd['color'] == 'RED' and sd['fresh'] is True and 'color=RED' in sd['basis']
-
-
-def test_green_and_no_response_triggers_detour():
-    d = DetourLogic(P).step(inputs([car()], signal=GREEN_SIG()))
-    assert d.state == LANE_CHANGE and d.approve in (LEFT, RIGHT)
-
-
-def test_no_signal_info_also_triggers_detour_after_no_response():
-    """관련 신호가 아예 없어도 무응답이면 동일하게 우회한다(신호 유무로 갈라지지 않는다)."""
-    sig = SignalInfo(red_stop_factor_distance_m=None, available=False, color=None)
-    d = DetourLogic(P).step(inputs([car()], signal=sig))
-    assert d.state == LANE_CHANGE and d.approve in (LEFT, RIGHT)
+        d = lg.step(inputs([car()], lane_=lane_at_stopline()))
+        assert d.detail['queue']['basis'] == 'no_room_to_stopline'
+    assert 'signal' not in d.detail and 'red_queue' not in d.detail
 
 
 # ---------------------------------------------------------------- blocker 출발 → 추종 복귀
@@ -279,14 +312,27 @@ def test_blocker_present_ignores_return_duty_rule():
     assert P.sender_hold not in d.clears
 
 
-def test_regulatory_within_clearance_keeps_standoff():
-    d = DetourLogic(P).step(inputs([car(FAR)], lane_=lane(reg=P.regulatory_clearance_m - 1.0)))
-    assert d.state == HOLD and d.approve is None
-    assert dict(d.limits).get(P.sender_hold) == pytest.approx(standoff_v(FAR))
+def test_regulatory_proximity_does_not_veto():
+    """규제요소 근접은 Autoware 가 isLaneChangeRequired(scene.cpp:296-342)에서 이미 검사한다.
+    가까우면 후보를 아예 안 만들므로, **후보가 있다는 사실이 통과의 증거**다.
+    우리가 베낀 값으로 중복 검사하면 값이 어긋날 때 멀쩡한 우회를 막는다
+    (9/7 detour16: 우리 54.4 m 기준으로 48 m 를 거부했는데 Autoware 는 후보를 내고 있었다)."""
+    d = DetourLogic(P).step(inputs([car(FAR)], lane_=lane(reg=1.0)))   # 규제요소 코앞
+    assert d.state == LANE_CHANGE and d.approve in (LEFT, RIGHT)
+    assert d.detail['reg_m'] == pytest.approx(1.0)                     # 관측치로는 남는다
+
+
+def test_no_candidate_still_holds_regardless_of_map_values():
+    """맵 기반 값(이웃·실선·규제요소)은 어떤 조합이어도 veto 가 아니다. 후보 유무가 판단한다."""
+    hostile = lane(left=False, right=False, reg=1.0, left_solid=True, right_solid=True)
+    d = DetourLogic(P).step(inputs([car(FAR)], lane_=hostile, cands=NONE_C))
+    assert d.state == HOLD                                   # 후보가 없어서 대기일 뿐
+    d = DetourLogic(P).step(inputs([car(FAR)], lane_=hostile))
+    assert d.state == LANE_CHANGE and d.approve is not None   # 후보가 있으면 승인
 
 
 def test_stopline_gap_below_threshold_keeps_standoff():
-    d = DetourLogic(P).step(inputs([car(FAR)],
+    d = DetourLogic(PE).step(inputs([car(FAR)],
                                    lane_=lane(stopline=FAR + P.stopline_min_distance_m - 1.0)))
     assert d.state == HOLD and d.approve is None
     assert P.sender_hold in dict(d.limits)
@@ -294,18 +340,16 @@ def test_stopline_gap_below_threshold_keeps_standoff():
 
 # ------------------------------------------- standoff 유지 원칙 (9/7 detour6)
 @pytest.mark.parametrize('name,kw', [
-    ('적신호 대기열', dict(signal=SignalInfo(None, True, 'RED', 0.0))),
+    ('끼어들 공간 없음', dict(lane_=lane_at_stopline())),
     ('후보 없음', dict(cands=NONE_C)),
     ('후보 unsafe', dict(cands=UNSAFE)),
     ('후보 stale', dict(cands={LEFT: cand(stale=True), RIGHT: cand(stale=True)})),
     ('LC 길이 부족', dict(cands={LEFT: cand(finish=98.5), RIGHT: cand(finish=98.5)})),
-    ('규제요소 근접', dict(lane_=lane(reg=P.regulatory_clearance_m - 1.0))),
-    ('정지선 여유 부족', dict(lane_=lane(stopline=FAR + P.stopline_min_distance_m - 1.0))),
     ('복귀 방향뿐', dict(role='right_of_preferred', cands=NONE_C)),
 ])
 def test_cannot_detour_now_keeps_standoff_limit(name, kw):
     """'지금은 불가' 는 제한을 푸는 이유가 아니다. 풀면 blocker 코앞까지 기어가 우회 여유를 잃는다."""
-    d = DetourLogic(P).step(inputs([car(FAR)], **kw))
+    d = DetourLogic(PE).step(inputs([car(FAR)], **kw))
     assert d.state == HOLD, name
     assert P.sender_hold in dict(d.limits), name
     assert P.sender_hold not in d.clears, name
@@ -416,3 +460,35 @@ def test_detail_carries_decision_basis():
     assert d.detail.get('blocker', {}).get('dist') == FAR
     assert 'cand_sides' in d.detail.get('struct', {})
     assert d.detail.get('standoff_missed') is False
+
+
+# ------------------------------------------- 복귀 검사: 기본은 경고, enforce 시 veto
+def test_return_insufficient_warns_but_allows_by_default():
+    """모델이 실측 대비 과대(13.7 m/s 에서 118 vs 99)하고, 복귀 실패 비용(리스폰 1회)이 미완주보다 작다.
+    따라서 기본값은 막지 않고 경고만 남긴다."""
+    tight = lane(stopline=FAR + 5.0)                     # 복귀 여유가 한참 부족
+    d = DetourLogic(P).step(inputs([car()], lane_=tight))
+    assert d.state == LANE_CHANGE and d.approve in (LEFT, RIGHT)   # 막지 않는다
+    assert d.detail['return']['verdict'] == 'insufficient'
+    assert d.warn and '복귀 여유 부족' in d.warn
+
+
+def test_return_insufficient_vetoes_when_enforced():
+    tight = lane(stopline=FAR + 5.0)
+    d = DetourLogic(PE).step(inputs([car()], lane_=tight))
+    assert d.state == HOLD and d.approve is None
+    assert d.detail['return']['verdict'] == 'wait'
+
+
+def test_return_sufficient_has_no_warning():
+    d = DetourLogic(P).step(inputs([car()], lane_=lane(stopline=FAR + need_m() + 5.0)))
+    assert d.detail['return']['verdict'] == 'detour'
+    assert d.warn is None
+
+
+def test_return_status_fields_for_calibration():
+    """다음 주행에서 모델값과 실제 복귀 성공 여부를 대조하기 위한 관측 필드."""
+    d = DetourLogic(P).step(inputs([car()], lane_=lane(stopline=FAR + 5.0)))
+    r = d.detail['return']
+    assert set(r) == {'n_lanes', 'lc_length_model_m', 'need_m', 'gap_m', 'verdict'}
+    assert r['gap_m'] == pytest.approx(5.0)
