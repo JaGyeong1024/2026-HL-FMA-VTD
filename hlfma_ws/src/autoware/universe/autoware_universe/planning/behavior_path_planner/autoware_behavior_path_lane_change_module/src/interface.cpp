@@ -70,6 +70,10 @@ bool LaneChangeInterface::isExecutionRequested() const
   }
 
   if (auto err = module_type_->isLaneChangeRequired()) {
+    // HL FMA 진단(임시): 외부요청 우회가 왜 후보를 못 만드는지 실주행에서 읽기 위해.
+    // 원인 규명 후 제거할 것. todo0906 기술부채.
+    RCLCPP_WARN_THROTTLE(
+      getLogger(), *clock_, 1000, "[HLFMA] lane change not required: %s", err->c_str());
     interface_debug_.request_info = err.value();
     return false;
   }

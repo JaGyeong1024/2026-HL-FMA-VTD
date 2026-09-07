@@ -257,6 +257,10 @@ class VtdAutowareBridge(Node):
                 self.wz_f += a * (wrap(st.heading - self.prev[3]) / dt - self.wz_f)
                 self.ax_f += a * ((self.vx_f - self.prev_vx) / dt - self.ax_f)
                 self.prev_vx = self.vx_f
+        # 조향 보고 필터용 dt. 아래에서 self.prev 를 t 로 덮으므로 여기서 미리 뽑아 둔다.
+        # (9/7 정적 감사: t - self.prev[0] 을 갱신 후에 계산해 항상 하한 1e-3 이 되고,
+        #  실효 시정수가 0.2s 가 아니라 약 10s 가 되어 조향 보고가 명령을 못 따라갔다.)
+        self.steer_dt = 0.05 if self.prev is None else min(0.2, max(1e-3, t - self.prev[0]))
         self.prev = (t, st.x, st.y, st.heading)
         self.last_pose = (st.x, st.y, z, st.heading)
         qx, qy, qz, qw = yaw_to_quat(st.heading)
@@ -312,7 +316,7 @@ class VtdAutowareBridge(Node):
         # 조향 보고: 실측값이 없어 명령값에 1차 지연을 씌운 근사 (개발계획_0902 §4 '임시 아님' 항목)
         with self.cmd_lock:
             target = self.cmd_steer
-        dt_s = 0.05 if self.prev is None else min(0.2, max(1e-3, t - self.prev[0]))
+        dt_s = getattr(self, 'steer_dt', 0.05)
         self.steer_rep += (target - self.steer_rep) * min(1.0, dt_s / max(self.steer_tau, 1e-3))
         steer = SteeringReport()
         steer.stamp = stamp

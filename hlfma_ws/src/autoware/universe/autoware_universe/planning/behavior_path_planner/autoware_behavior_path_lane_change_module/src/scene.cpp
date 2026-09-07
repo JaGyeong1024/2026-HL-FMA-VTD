@@ -449,7 +449,8 @@ BehaviorModuleOutput NormalLaneChange::getTerminalLaneChangePath() const
   const auto terminal_lc_path = compute_terminal_lane_change_path();
 
   if (!terminal_lc_path) {
-    RCLCPP_DEBUG(logger_, "Terminal path not found. Returning previous module's path as output.");
+    // HL FMA 진단(임시): 후보 미생성 사유. 원인 규명 후 제거(todo0906 기술부채).
+    RCLCPP_WARN_THROTTLE(logger_, clock_, 1000, "[HLFMA] Terminal path not found.");
     return prev_module_output_;
   }
 
@@ -467,7 +468,8 @@ BehaviorModuleOutput NormalLaneChange::generateOutput()
 {
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
   if (!status_.is_valid_path) {
-    RCLCPP_DEBUG(logger_, "No valid path found. Returning previous module's path as output.");
+    // HL FMA 진단(임시)
+    RCLCPP_WARN_THROTTLE(logger_, clock_, 1000, "[HLFMA] No valid path found.");
     insert_stop_point(get_current_lanes(), prev_module_output_.path);
     return prev_module_output_;
   }
@@ -1361,7 +1363,8 @@ bool NormalLaneChange::get_path_using_path_shifter(
     }
   }
 
-  RCLCPP_DEBUG(logger_, "No safety path found.");
+  // HL FMA 진단(임시)
+  RCLCPP_WARN_THROTTLE(logger_, clock_, 1000, "[HLFMA] No safety path found.");
   return false;
 }
 

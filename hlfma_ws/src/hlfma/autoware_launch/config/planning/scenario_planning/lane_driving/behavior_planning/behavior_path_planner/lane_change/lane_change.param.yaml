@@ -19,11 +19,14 @@
 
       # trajectory generation
       trajectory:
-        max_prepare_duration: 2.0   # HL FMA 묶음3: 규제요소 근접 금지 = 이 값×max_vel (53m→27m)
+        max_prepare_duration: 4.0   # HL FMA 9/7 원복: 이 값×max_vel 이 두 곳에 반대 방향으로 쓰인다.
+        # 규제요소 근접 금지(scene.cpp:342)에는 작을수록 유리하지만, '목표차선 시작점까지 거리'
+        # 판정(scene.cpp:312)에는 작을수록 불리하다. 실주행 진단에서 규제 근접 0회 / 목표차선 시작점
+        # 초과 다수 → 줄인 것이 순손해였다. 48m standoff 에서 우회 후보를 만들려면 54.4m 가 필요하다.
         min_prepare_duration: 2.0
         lateral_jerk: 1.5   # HL FMA 묶음3: 차선변경 길이 병목(83m→~59m@49km/h). 타이트 설정
         min_longitudinal_acc: -1.0
-        max_longitudinal_acc: 1.0
+        max_longitudinal_acc: 1.0   # HL FMA 9/7 원복: 0.5 와 min_values 1.0 을 동시에 바꿔 안전 판정이 깨졌다.
         th_prepare_length_diff: 1.0
         th_lane_changing_length_diff: 1.0
         min_lane_changing_velocity: 2.78
@@ -106,7 +109,8 @@
       # lateral acceleration map
       lateral_acceleration:
         velocity: [0.0, 4.0, 10.0]
-        min_values: [0.6, 0.6, 0.6]   # HL FMA 묶음3
+        min_values: [1.0, 1.0, 1.0]   # HL FMA 9/7: 완만한 후보를 빼 shift 시간 5.25→4.55s (약 4m 단축).
+        # detour13 의 안전 판정 실패는 max_longitudinal_acc 0.5 와 동시 변경 탓으로 보고 그쪽만 원복했다.
         max_values: [1.2, 1.2, 1.2]   # HL FMA 묶음3: Ioniq6 여유 큼, jerk 와 세트
 
       # target object

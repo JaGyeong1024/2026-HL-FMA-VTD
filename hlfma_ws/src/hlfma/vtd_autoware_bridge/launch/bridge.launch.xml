@@ -1,7 +1,28 @@
 <launch>
   <!-- VTD ↔ Autoware 어댑터. start_autoware.sh가 인자를 넘긴다. -->
   <arg name="vtd_host" default="192.168.50.11"/>
+  <!-- map_osm: start_autonomous.sh 가 자기 클론의 map 을 넘긴다(클론별 독립). 기본값은 main 디렉터리(폴백) -->
   <arg name="map_osm" default="$(env HOME)/2026-HL-FMA-VTD/map/lanelet2_map.osm"/>
+  <arg name="detour" default="true" description="차선 단위 회피 판단 노드(blocked_route_detour) 기동"/>
+  <!-- 9/7 시뮬 bag 실측 반영: VTD GT objects 는 79.8 m 까지만 온다(정지차 최초 인지 79.5 m, 그때 13.9 m/s).
+       인지~판정 예산이 1.5 초뿐이라 확인 시간을 줄이고, 감속 목표는 실측 finish 모델로 역산한다. -->
+  <arg name="detection_distance_m" default="80.0" description="VTD GT 실측 상한 79.8m"/>
+  <!-- 9/7 정책: 우회 가능 거리를 남기고 서서(standoff) 관찰한 뒤 판단. 정지 상태 후보 finish 실측
+       detour1 40.4m / detour2 29.8m → 큰 쪽 + 여유 6m 로 48 을 기본값으로 둔다. -->
+  <arg name="standoff_m" default="55.0" description="blocker 앞 이 거리에 정지"/>
+  <arg name="standoff_margin_m" default="18.0" description="오버슈트 보정. 실측 11~16.6m (detour9 목표48→실제31.4)"/>
+  <arg name="standoff_decel_mps2" default="1.5" description="standoff 접근 감속 프로파일"/>
+  <arg name="signal_debounce_s" default="0.5" description="신호 색 전이 히스테리시스(양방향 동일)"/>
+  <arg name="approach_speed_mps" default="4.0" description="접근 중 속도 상한"/>
+  <arg name="no_response_s" default="3.0" description="서서 관찰: 무응답 지속 시 우회 결정"/>
+  <arg name="blocker_move_speed_mps" default="0.5" description="이 이상이면 출발로 보고 추종 복귀"/>
+  <arg name="lc_finish_margin_m" default="3.0" description="LC 완료 지점과 blocker 사이 여유"/>
+  <arg name="stopline_min_m" default="28.0" description="정지차~정지선 최소(우회+복귀 가능)"/>
+  <arg name="regulatory_zone_m" default="54.4" description="lane_change max_prepare_duration×max_vel"/>
+  <arg name="blocked_time_s" default="0.5" description="승인 게이트. GT 속도는 정확해 긴 필터 불필요"/>
+  <arg name="slowdown_time_s" default="0.2" description="감속 개시 게이트(승인보다 짧게)"/>
+  <arg name="signal_hold_s" default="2.0" description="적신호 factor latch (HOLD/STOP 진동 억제)"/>
+  <arg name="pedestrian_slow_kph" default="30.0"/>
   <arg name="route_csv" default="" description="경로 CSV (seq,x,y). 비우면 route_node를 띄우지 않음"/>
   <arg name="auto_engage" default="false" description="경로 SET 후 자율주행 전환까지 자동 요청"/>
   <arg name="steer_sign" default="1.0"/>
@@ -14,6 +35,26 @@
     <param name="steer_sign" value="$(var steer_sign)"/>
     <param name="state4_go" value="$(var state4_go)"/>
     <param name="ego_z_mode" value="$(var ego_z_mode)"/>
+  </node>
+
+  <!-- 차선 단위 회피 판단: external_request 차선변경 RTC 승인 + 속도제한(sender: detour_hold / detour_pedestrian) -->
+  <node pkg="vtd_autoware_bridge" exec="blocked_route_detour" name="blocked_route_detour" output="screen" if="$(var detour)">
+    <param name="map_osm" value="$(var map_osm)"/>
+    <param name="detection_distance_m" value="$(var detection_distance_m)"/>
+    <param name="standoff_m" value="$(var standoff_m)"/>
+    <param name="standoff_margin_m" value="$(var standoff_margin_m)"/>
+    <param name="standoff_decel_mps2" value="$(var standoff_decel_mps2)"/>
+    <param name="signal_debounce_s" value="$(var signal_debounce_s)"/>
+    <param name="approach_speed_mps" value="$(var approach_speed_mps)"/>
+    <param name="no_response_s" value="$(var no_response_s)"/>
+    <param name="blocker_move_speed_mps" value="$(var blocker_move_speed_mps)"/>
+    <param name="lc_finish_margin_m" value="$(var lc_finish_margin_m)"/>
+    <param name="stopline_min_m" value="$(var stopline_min_m)"/>
+    <param name="regulatory_zone_m" value="$(var regulatory_zone_m)"/>
+    <param name="blocked_time_s" value="$(var blocked_time_s)"/>
+    <param name="slowdown_time_s" value="$(var slowdown_time_s)"/>
+    <param name="signal_hold_s" value="$(var signal_hold_s)"/>
+    <param name="pedestrian_slow_kph" value="$(var pedestrian_slow_kph)"/>
   </node>
 
   <group unless="$(eval '\'$(var route_csv)\' == \'\'')">

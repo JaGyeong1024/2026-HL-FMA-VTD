@@ -113,9 +113,9 @@ if [ "$BAG_MODE" != "none" ]; then
   # 스크립트의 백그라운드 자식은 SIGINT 를 무시하도록 시작되므로 서브셸에서 되살린다
   # (set -m 은 쓰지 않는다: 터미널에서 bag 이 키 입력을 읽다 SIGTTIN 으로 정지 → 즉시 종료 판정)
   if [ "$BAG_MODE" = "all" ]; then
-    ( trap - INT; exec ros2 bag record -a --include-hidden-topics -o "$OUT/bag" ) </dev/null >>"$LOG" 2>&1 &
+    ( trap - INT; exec ros2 bag record --node-name "rec_$(basename "$OUT" | tr -c "A-Za-z0-9_" "_")" -a --include-hidden-topics -o "$OUT/bag" ) </dev/null >>"$LOG" 2>&1 &
   else
-    ( trap - INT; exec ros2 bag record --topics /vtd/raw_rx /vtd/raw_tx -o "$OUT/bag" ) </dev/null >>"$LOG" 2>&1 &
+    ( trap - INT; exec ros2 bag record --node-name "rec_$(basename "$OUT" | tr -c "A-Za-z0-9_" "_")" --topics /vtd/raw_rx /vtd/raw_tx -o "$OUT/bag" ) </dev/null >>"$LOG" 2>&1 &
   fi
   BAG_PID=$!
   log "bag: $([ "$BAG_MODE" = all ] && echo 전토픽 || echo '/vtd/raw_rx /vtd/raw_tx') pid=$BAG_PID"
