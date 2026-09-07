@@ -26,10 +26,10 @@ launch:
       default: "true"
   - arg:
       name: launch_external_request_lane_change_right_module
-      default: "false"
+      default: "true"   # HL FMA 묶음2(9/7): 차선 단위 회피는 external_request 로만
   - arg:
       name: launch_external_request_lane_change_left_module
-      default: "false"
+      default: "true"   # HL FMA 묶음2(9/7): 차선 단위 회피는 external_request 로만
   - arg:
       name: launch_goal_planner_module
       default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)

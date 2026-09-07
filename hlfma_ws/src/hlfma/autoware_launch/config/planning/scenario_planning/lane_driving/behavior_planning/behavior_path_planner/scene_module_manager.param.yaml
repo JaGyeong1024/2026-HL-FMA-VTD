@@ -26,13 +26,17 @@
       - "dynamic_obstacle_avoidance"
 
     external_request_lane_change_left:
-      enable_rtc: false
-      enable_simultaneous_execution_as_approved_module: false
+      enable_rtc: true   # HL FMA 묶음2: 판단 노드가 승인
+      # HL FMA 9/7: false 면 경로상 필수 차선변경이 승인·실행 중일 때 외부요청이 승인 모듈로
+      # 승격되지 못해 우회가 영원히 불가능하다(시뮬 detour8 에서 확인). true 로 열어둔다.
+      enable_simultaneous_execution_as_approved_module: true
       enable_simultaneous_execution_as_candidate_module: true
 
     external_request_lane_change_right:
-      enable_rtc: false
-      enable_simultaneous_execution_as_approved_module: false
+      enable_rtc: true   # HL FMA 묶음2: 판단 노드가 승인
+      # HL FMA 9/7: false 면 경로상 필수 차선변경이 승인·실행 중일 때 외부요청이 승인 모듈로
+      # 승격되지 못해 우회가 영원히 불가능하다(시뮬 detour8 에서 확인). true 로 열어둔다.
+      enable_simultaneous_execution_as_approved_module: true
       enable_simultaneous_execution_as_candidate_module: true
 
     lane_change_left:
