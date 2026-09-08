@@ -129,7 +129,7 @@
 
         # detection area generation parameters
         detection_area:
-          static: false                                 # [-]
+          static: true                                  # HL FMA 9/9: false 면 탐지범위가 자차속도에 비례해, 정지 시 0 이 되어 회피 대상이 사라진다(교착). true 면 max_forward_distance 고정 사용
           min_forward_distance: 50.0                    # [m]
           max_forward_distance: 150.0                   # [m]
           backward_distance: 10.0                       # [m]
@@ -152,9 +152,9 @@
           # "auto"   : generate candidate path. if RTC is running as AUTO mode, the ego avoids it automatically.
           # "manual" : generate candidate path and wait operator approval even if RTC is running as AUTO mode.
           # "ignore" : never avoid it.
-          policy: "manual"                              # [-]
+          policy: "auto"                                # HL FMA 9/9: 내 차로 장기 정차 차량을 회피 대상으로 승격 (isNeverAvoidanceTarget 바이패스와 짝)
           condition:
-            th_stopped_time: 3.0                        # [s]
+            th_stopped_time: 0.5                        # HL FMA 9/9: stop_time 이 1.2s 부근에서 동결되는 현상 회피용 (원본 3.0)
             th_moving_distance: 1.0                     # [m]
           ignore_area:
             traffic_light:
