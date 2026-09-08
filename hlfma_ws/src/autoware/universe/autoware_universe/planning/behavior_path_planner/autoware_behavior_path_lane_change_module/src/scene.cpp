@@ -69,6 +69,13 @@ NormalLaneChange::NormalLaneChange(
   Direction direction)
 : LaneChangeBase(parameters, type, direction)
 {
+  // HL FMA: 방향별 로거로 바꿔 좌/우 로그를 구분한다. verbose 면 DEBUG 를 열어
+  // 이 모듈의 기존 판단 로그(37곳)가 전부 나온다 — 계측을 새로 심을 필요가 없다.
+  logger_ = utils::lane_change::getLogger(getModuleTypeStr(), direction_);
+  if (lane_change_parameters_ && lane_change_parameters_->verbose) {
+    logger_.set_level(rclcpp::Logger::Level::Debug);
+  }
+
   stop_watch_.tic(getModuleTypeStr());
   stop_watch_.tic("stop_time");
 }

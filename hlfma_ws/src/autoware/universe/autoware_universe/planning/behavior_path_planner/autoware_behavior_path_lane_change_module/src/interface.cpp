@@ -51,7 +51,8 @@ LaneChangeInterface::LaneChangeInterface(
   module_type_{std::move(module_type)}
 {
   module_type_->setTimeKeeper(getTimeKeeper());
-  logger_ = utils::lane_change::getLogger(module_type_->getModuleTypeStr());
+  logger_ = utils::lane_change::getLogger(
+    module_type_->getModuleTypeStr(), module_type_->getDirection());
 }
 
 void LaneChangeInterface::processOnExit()

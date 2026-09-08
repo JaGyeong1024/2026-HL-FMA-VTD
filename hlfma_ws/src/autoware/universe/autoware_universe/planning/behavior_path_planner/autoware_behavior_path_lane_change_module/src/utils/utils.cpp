@@ -696,6 +696,16 @@ rclcpp::Logger getLogger(const std::string & type)
   return rclcpp::get_logger("lane_change").get_child(type);
 }
 
+// HL FMA: 좌/우 모듈이 로거 이름을 공유하면(lane_change.NORMAL) 로그가 섞여 해석이 안 된다.
+// 방향을 자식 이름으로 붙여 lane_change.NORMAL.left / .right 로 나눈다.
+rclcpp::Logger getLogger(const std::string & type, const Direction direction)
+{
+  const auto side = direction == Direction::LEFT    ? "left"
+                    : direction == Direction::RIGHT ? "right"
+                                                    : "none";
+  return rclcpp::get_logger("lane_change").get_child(type).get_child(side);
+}
+
 Polygon2d get_ego_footprint(const Pose & ego_pose, const VehicleInfo & ego_info)
 {
   const auto base_to_front = ego_info.max_longitudinal_offset_m;

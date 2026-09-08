@@ -34,9 +34,17 @@
     Ctrl+C          start.sh 가 브리지·Autoware 를 함께 정리한다
     ./stop.sh       정리가 미진할 때
 
-## 녹화
+## 계측 (주행 기록)
 
-    ./record.sh <이름>    주행 기록 (meta 에 git_rev 가 남는다)
+    python3 tools/trace.py ~/hlfma/logs/trace_$(date +%m%d_%H%M%S).jsonl 200
+
+판단·제어·상태가 바뀔 때만 JSONL 한 줄씩 남긴다(한 판 수 MB).
+담기는 것: routing/operation_mode/MRM, 루트 preferred, **모듈 승인·후보 풀**,
+전 모듈 planning_factors(정지 사유와 거리), cooperate_status(safe 플래그),
+궤적 길이·최소속도, 근접 객체, 제어 명령, 방향지시등.
+
+    # lane_change 내부 판단까지 보려면 (요구 판정·후보 거절 사유·안전검사)
+    lane_change.param.yaml 의 verbose: true  → 로그가 lane_change.NORMAL.left/.right 로 나뉜다
 
 ## 하네스 (VTD 없이 검증, 1회 약 5분)
 
