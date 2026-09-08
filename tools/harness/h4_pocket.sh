@@ -12,9 +12,13 @@ for c in "${cases[@]}"; do
   note "lanelet 열: $seq"
   note "차선전환 ${lc}회, 최고속 $(mget "['max_speed_kmh']") km/h, 종료 $(cat "$OUT/final_state.txt")"
   hit=""; for p in $POCKET; do case " $seq " in *" $p "*) hit="$hit $p";; esac; done
+  # 판정은 반드시 '포켓 lanelet 을 실제로 지났는가'가 먼저다.
+  #   18858 만 보면 오판한다 — 교차로에서 lanelet 이 겹쳐 nearest 매칭이 튀어,
+  #   직진 차선(18965, turn_direction=straight)으로 통과해도 18858 이 열에 찍힌다
+  #   (2026-09-08 실측: 자차는 끝까지 A 중심선 0.03~0.56 m, 포켓과는 3.2 m 떨어져 있었다).
   if [ "$EGO_MOVED" = "0" ]; then :
+  elif [ -z "$hit" ]; then fail "포켓 미진입 — lanelet 열에 15194/14855/14611 없음"
   elif case " $seq " in *" 18858 "*) true;; *) false;; esac; then pass "포켓 경유 좌회전 완료 (포켓:$hit)"
-  elif [ -n "$hit" ]; then fail "포켓 진입($hit) 했으나 교차로 18858 미도달"
-  else fail "포켓 미진입 — lanelet 열에 15194/14855/14611 없음"; fi
+  else fail "포켓 진입($hit) 했으나 교차로 18858 미도달"; fi
   echo "== [$c] 결과: $OUT/result.txt"
 done
