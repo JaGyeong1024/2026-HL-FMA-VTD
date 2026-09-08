@@ -173,15 +173,6 @@ void NormalLaneChange::update_transient_data(const bool is_approved)
                 : calculation::calc_actual_prepare_duration(
                     common_data_ptr_, common_data_ptr_->get_ego_speed(), active_signal_duration);
 
-  // HL FMA 임시 검증: 깜빡이 타이머가 쌓여 준비 시간이 줄어드는지. 확인 후 삭제.
-  RCLCPP_WARN_THROTTLE(
-    logger_, clock_, 1000,
-    "[HLFMA-PREP] type=%d dir=%d v=%.2f 준비시간=%.2fs 깜빡이누적=%.2fs 준비거리=%.1fm",
-    static_cast<int>(common_data_ptr_->lc_type), static_cast<int>(direction_),
-    common_data_ptr_->get_ego_speed(), transient_data.lane_change_prepare_duration,
-    active_signal_duration,
-    transient_data.lane_change_prepare_duration * common_data_ptr_->get_ego_speed());
-
   std::tie(transient_data.lane_changing_length, transient_data.current_dist_buffer) =
     calculation::calc_lc_length_and_dist_buffer(common_data_ptr_, get_current_lanes());
 
@@ -265,22 +256,6 @@ void NormalLaneChange::updateLaneChangeStatus()
 
   // Update status
   status_.is_valid_path = found_valid_path;
-  // HL FMA 일괄 계측 A: 유효경로 여부 + 필요 길이 vs 가용 경로 길이
-  RCLCPP_WARN_THROTTLE(
-    logger_, clock_, 500,
-    "[HLFMA-A] type=%d dir=%d v=%.2f valid=%d 준비=%.2fs(%.1fm) 횡이동=%.1fm 필요=%.1fm "
-    "경로길이=%.1fm 종점까지=%.1fm",
-    static_cast<int>(common_data_ptr_->lc_type), static_cast<int>(direction_),
-    common_data_ptr_->get_ego_speed(), static_cast<int>(found_valid_path),
-    common_data_ptr_->transient_data.lane_change_prepare_duration,
-    common_data_ptr_->transient_data.lane_change_prepare_duration *
-      common_data_ptr_->get_ego_speed(),
-    common_data_ptr_->transient_data.lane_changing_length.min,
-    common_data_ptr_->transient_data.lane_change_prepare_duration *
-        common_data_ptr_->get_ego_speed() +
-      common_data_ptr_->transient_data.lane_changing_length.min,
-    motion_utils::calcArcLength(prev_module_output_.path.points),
-    common_data_ptr_->transient_data.dist_to_terminal_end);
   status_.is_safe = found_safe_path;
   status_.lane_change_path.path.header = getRouteHeader();
 }
@@ -478,8 +453,6 @@ BehaviorModuleOutput NormalLaneChange::getTerminalLaneChangePath() const
   const auto terminal_lc_path = compute_terminal_lane_change_path();
 
   if (!terminal_lc_path) {
-    // HL FMA 진단(임시): 후보 미생성 사유. 원인 규명 후 제거(todo0906 기술부채).
-    RCLCPP_WARN_THROTTLE(logger_, clock_, 1000, "[HLFMA] Terminal path not found.");
     return prev_module_output_;
   }
 
@@ -497,8 +470,6 @@ BehaviorModuleOutput NormalLaneChange::generateOutput()
 {
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
   if (!status_.is_valid_path) {
-    // HL FMA 진단(임시)
-    RCLCPP_WARN_THROTTLE(logger_, clock_, 1000, "[HLFMA] No valid path found.");
     insert_stop_point(get_current_lanes(), prev_module_output_.path);
     return prev_module_output_;
   }
@@ -1360,11 +1331,9 @@ bool NormalLaneChange::get_path_using_path_shifter(
       debug_metrics.lc_metrics.emplace_back(lc_metric, -1);
 
       const auto debug_print_lat = [&](const std::string & s) {
-        // HL FMA 일괄 계측 B: 후보별 채택/거절 사유
-        RCLCPP_WARN_THROTTLE(
-          logger_, clock_, 300, "[HLFMA-B] %s | v=%.2f lc_time=%.2f lat_acc=%.2f lc_len=%.2f",
-          s.c_str(), common_data_ptr_->get_ego_speed(), lc_metric.duration,
-          lc_metric.lat_accel, lc_metric.length);
+        RCLCPP_DEBUG(
+          logger_, "%s | lc_time: %.5f | lon_acc: %.5f | lat_acc: %.5f | lc_len: %.5f", s.c_str(),
+          lc_metric.duration, lc_metric.actual_lon_accel, lc_metric.lat_accel, lc_metric.length);
       };
 
       if (!check_length_diff(prep_metric.length, lc_metric.length, true)) {
@@ -1398,8 +1367,6 @@ bool NormalLaneChange::get_path_using_path_shifter(
     }
   }
 
-  // HL FMA 진단(임시)
-  RCLCPP_WARN_THROTTLE(logger_, clock_, 1000, "[HLFMA] No safety path found.");
   return false;
 }
 
@@ -1450,19 +1417,9 @@ bool NormalLaneChange::check_candidate_path_safety(
       candidate_path, ego_predicted_paths, target_objects,
       common_data_ptr_->lc_param_ptr->safety.rss_params_for_stuck,
       lane_change_debug_.collision_check_objects);
-    // HL FMA 진단(임시): 완화 RSS 적용 결과. 원인 규명 후 제거.
-    RCLCPP_WARN_THROTTLE(
-      logger_, clock_, 300, "[HLFMA-S] stuck RSS 적용 → safe=%d (막는 객체 후행=%d)",
-      safety_check_with_stuck_rss.is_safe, safety_check_with_stuck_rss.is_trailing_object);
     return safety_check_with_stuck_rss.is_safe;
   }
 
-  // HL FMA 진단(임시): 무엇이 unsafe 를 만드는가. stuck 이면 완화 RSS 로 재시도된다.
-  if (!safety_check_with_normal_rss.is_safe) {
-    RCLCPP_WARN_THROTTLE(
-      logger_, clock_, 300, "[HLFMA-S] normal RSS unsafe: ego_stuck=%d 막는객체_후행=%d v_prepare=%.2f",
-      is_stuck, safety_check_with_normal_rss.is_trailing_object, lc_start_velocity);
-  }
   return safety_check_with_normal_rss.is_safe;
 }
 
@@ -1890,43 +1847,10 @@ PathSafetyStatus NormalLaneChange::isLaneChangePathSafe(
       {ego_predicted_paths.front()}, collision_check_objects.trailing)) {
     const auto is_moving_object =
       ranges::any_of(*found_colliding_objects_opt, check_for_moving_objects);
-    // HL FMA 진단(임시): 후행 객체가 막는 경우. 원인 규명 후 제거.
-    std::string detail;
-    int n = 0;
-    for (const auto & o : *found_colliding_objects_opt) {
-      ++n;
-      if (n <= 4) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%.1fm/%.1fms ", o.dist_from_ego, o.initial_twist.linear.x);
-        detail += buf;
-      }
-    }
-    RCLCPP_WARN_THROTTLE(
-      logger_, clock_, 300, "[HLFMA-T] 후행 충돌 %d건 [%s] (이동객체=%d 후행풀 %zu ego_v=%.2f)", n,
-      detail.c_str(), static_cast<int>(is_moving_object), collision_check_objects.trailing.size(),
-      common_data_ptr_->get_ego_speed());
     return {!is_safe, is_moving_object};
   }
 
-  if (
-    const auto leading_collide_opt =
-      check_for_colliding_objects(ego_predicted_paths, collision_check_objects.leading)) {
-    // HL FMA 진단(임시): 어떤 선행 객체가 어느 거리에서 충돌 판정을 내는가. 원인 규명 후 제거.
-    std::string detail;
-    int n = 0;
-    for (const auto & o : *leading_collide_opt) {
-      ++n;
-      if (n <= 4) {
-        char buf[64];
-        snprintf(
-          buf, sizeof(buf), "%.1fm/%.1fms ", o.dist_from_ego, o.initial_twist.linear.x);
-        detail += buf;
-      }
-    }
-    RCLCPP_WARN_THROTTLE(
-      logger_, clock_, 300, "[HLFMA-C] 선행 충돌 %d건 [%s] (선행풀 %zu 후행풀 %zu ego_v=%.2f)", n,
-      detail.c_str(), collision_check_objects.leading.size(),
-      collision_check_objects.trailing.size(), common_data_ptr_->get_ego_speed());
+  if (check_for_colliding_objects(ego_predicted_paths, collision_check_objects.leading)) {
     return {!is_safe, !is_moving_object_behind_ego};
   }
 
