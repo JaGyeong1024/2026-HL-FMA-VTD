@@ -1890,6 +1890,21 @@ PathSafetyStatus NormalLaneChange::isLaneChangePathSafe(
       {ego_predicted_paths.front()}, collision_check_objects.trailing)) {
     const auto is_moving_object =
       ranges::any_of(*found_colliding_objects_opt, check_for_moving_objects);
+    // HL FMA 진단(임시): 후행 객체가 막는 경우. 원인 규명 후 제거.
+    std::string detail;
+    int n = 0;
+    for (const auto & o : *found_colliding_objects_opt) {
+      ++n;
+      if (n <= 4) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.1fm/%.1fms ", o.dist_from_ego, o.initial_twist.linear.x);
+        detail += buf;
+      }
+    }
+    RCLCPP_WARN_THROTTLE(
+      logger_, clock_, 300, "[HLFMA-T] 후행 충돌 %d건 [%s] (이동객체=%d 후행풀 %zu ego_v=%.2f)", n,
+      detail.c_str(), static_cast<int>(is_moving_object), collision_check_objects.trailing.size(),
+      common_data_ptr_->get_ego_speed());
     return {!is_safe, is_moving_object};
   }
 

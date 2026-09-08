@@ -276,7 +276,11 @@
           th_small_shift_length: 0.101                  # [m] FOR DEVELOPER
           soft_drivable_bound_margin: 0.3               # [m]
           hard_drivable_bound_margin: 0.3               # [m]
-          max_right_shift_length: 5.0                   # [m] FOR DEVELOPER
+          # HL FMA 9/8: 우측 상한 5.0 -> 8.0. 자차 차선(A)과 인접 차선(B)이 동시에 막힌 경우
+          #   두 차선 건너 C 까지 밀어야 하고, A 중심선 기준 약 6.4 m + 횡여유 = 7 m 가 필요하다.
+          #   5.0 이면 물리적으로 도달할 수 없어 회피 자체가 성립하지 않는다.
+          #   좌측은 그대로 둔다 — 좌측 8 m 는 대향 차로까지 침범할 수 있다. 되돌리려면 5.0
+          max_right_shift_length: 8.0                   # [m] FOR DEVELOPER
           max_left_shift_length: 5.0                    # [m] FOR DEVELOPER
           max_deviation_from_lane: 0.2                  # [m]
           # approve the next shift line after reaching this percentage of the current shift line length.
