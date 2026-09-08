@@ -98,6 +98,12 @@ class LanePlanner(Node):
         self.orig_preferred = None   # 최초로 받은 루트의 preferred (복귀 기준)
         self.demand_now = None       # 지금 적용 중인 요구
         self.demand_pending = None   # 재라우팅 가용해질 때까지 대기 중인 요구
+        # 진행 중인 한 수. 이걸 잡으면 끝날 때까지 요구를 바꾸지 않는다.
+        # 안 그러면 객체 속도 잔떨림·자차 가속으로 A* 해가 매 주기 바뀌고(A→B→C),
+        # 그때마다 change_route 를 새로 밀어 모듈이 하던 일을 리셋한다
+        # (2026-09-08 VTD 실주행: 같은 자차 위치에서 계획 4회·요구 3회·속도상한 2회).
+        self.committed = None        # (목표 lanelet, 그 demand)
+        self.inflight = False        # 서비스 응답 대기 중 — 겹쳐 쏘지 않는다
         self.pub_state = self.create_publisher(String, '/decision/state', 10)
 
         # 속도 상한: 현재 속도로 해가 없고 더 느리면 있으면, 그 속도를 걸어 계획을 성립시킨다.
@@ -369,6 +375,8 @@ class LanePlanner(Node):
         """preferred 만 교체한다. primitives 는 건드리지 않아 차선변경 가능성이 유지된다."""
         if not reset and demand == self.demand_now:
             return True
+        if self.inflight:
+            return False                 # 앞선 요청의 응답을 기다린다 (덮어쓰기 방지)
         if not self.reroute_ok or self.lc_running:
             # 실행 중인 차선변경이 끝난 뒤에 넣는다. 보류분은 매 주기 재시도한다.
             self.demand_pending = demand
@@ -385,15 +393,18 @@ class LanePlanner(Node):
                 LaneletPrimitive(id=int(v), primitive_type='lane') for v in demand]
         changed = [(i, a, b) for i, (a, b) in enumerate(zip(
             [sg.preferred_primitive.id for sg in self.route.segments], demand)) if a != b]
+        self.inflight = True
         fut = self.cli_pref.call_async(req)
 
         def done(f, changed=changed, reset=reset):
             # 응답을 반드시 확인한다. RTC 때 조용히 실패해 하루를 썼다(2026-09-08).
+            self.inflight = False
             try:
                 r = f.result()
             except Exception as e:
                 self.get_logger().error(f'set_preferred_primitive 예외: {e!r}')
                 self.demand_now = None
+                self.committed = None
                 return
             if r.status.success:
                 if reset:
@@ -406,6 +417,7 @@ class LanePlanner(Node):
                 self.get_logger().warning(
                     f'set_preferred_primitive 거부 code={r.status.code} "{r.status.message}"')
                 self.demand_now = None      # 조건이 바뀌는 폴링이므로 재시도는 정당
+                self.committed = None
 
         fut.add_done_callback(done)
         self.demand_now = demand
@@ -521,6 +533,17 @@ class LanePlanner(Node):
         lid = self.omap.nearest_lanelet(x, y, yaw)
         if lid is None:
             return
+        # 진행 중인 한 수가 있으면 도달할 때까지 요구를 바꾸지 않는다.
+        # 도달 판정은 자차 lanelet 이 목표이거나 그 후속인지로 본다.
+        if self.committed is not None:
+            goal_lane, held = self.committed
+            if lid == goal_lane or lid in self.omap.successors(goal_lane):
+                self.get_logger().info(f'한 수 완료: {goal_lane} 도달')
+                self.committed = None
+            else:
+                if self.demand_now != held:
+                    self.apply_demand(held)      # 덮어써졌으면 되돌린다
+                return
         ego_seg = next((i for i, s in enumerate(self.route.segments)
                         if any(p.id == lid for p in s.primitives)), None)
         if ego_seg is None:
@@ -573,6 +596,8 @@ class LanePlanner(Node):
         if self.orig_preferred is not None:
             demand, step = self.build_demand(path, changes)
             ok = self.apply_demand(demand)
+            if ok and step is not None:
+                self.committed = (step[1], list(demand))   # step=(from,to)
             self.publish_state(
                 ego_lane=lid, v=f'{v:.1f}', 남은변경=len(changes),
                 다음한칸=(f'{step[0]}→{step[1]}' if step else '없음'),
