@@ -15,7 +15,7 @@ Autoware의 제어 출력을 9B 패킷으로 돌려보낸다. 토픽 이름은 a
   더미 인지     /perception/obstacle_segmentation/pointcloud (빈 점군), /perception/occupancy_grid_map/map (전부 free)
                 — motion/behavior_velocity_planner의 필수 구독(코드에 고정)을 채우기 위한 임시안 (개발계획_0902 §4-1)
   이벤트        /vtd/respawn (std_msgs/Empty) — 위치 점프 감지 시
-  원본 패킷     /vtd/raw_rx (1109B), /vtd/raw_tx (9B) — ros2 bag 기록용 (tools/record.sh)
+  원본 패킷     /vtd/raw_rx (1109B), /vtd/raw_tx (9B) — 필요 시 ros2 bag 으로 따로 기록
 
 송신 CtrlPacket(9B @20Hz) ← /control/command/control_cmd, /control/command/turn_indicators_cmd
   워치독: 제어 명령이 watchdog_timeout 이상 끊기면 조향 유지 + failsafe_accel 로 감속

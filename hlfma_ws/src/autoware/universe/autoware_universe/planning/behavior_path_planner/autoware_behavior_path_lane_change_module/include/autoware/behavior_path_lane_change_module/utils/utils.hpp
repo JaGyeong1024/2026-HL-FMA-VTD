@@ -205,6 +205,8 @@ lanelet::ConstLanelets generateExpandedLanelets(
  */
 rclcpp::Logger getLogger(const std::string & type);
 
+rclcpp::Logger getLogger(const std::string & type, const Direction direction);
+
 /**
  * @brief Computes the current footprint of the ego vehicle based on its pose and size.
  *

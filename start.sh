@@ -91,12 +91,10 @@ mkdir -p "$HOME/hlfma/logs"
 RUN_TS="$(date +%m%d_%H%M%S)"
 BRIDGE_LOG="$HOME/hlfma/logs/bridge_${RUN_TS}.log"
 AW_LOG="$HOME/hlfma/logs/autoware_${RUN_TS}.log"
-# 노드별 ROS 로그(launch.log, 각 노드 stderr)를 실행 단위 디렉터리에 모음 → record.sh 가 통째로 복사
 export ROS_LOG_DIR="$HOME/hlfma/logs/ros_${RUN_TS}"
 mkdir -p "$ROS_LOG_DIR"
 ln -sfn "$BRIDGE_LOG" "$HOME/hlfma/logs/bridge_latest.log"
 ln -sfn "$AW_LOG" "$HOME/hlfma/logs/autoware_latest.log"
-# 실행 정보 매니페스트: record.sh 가 읽어 로그 위치·VTD 호스트를 안다
 cat > "$HOME/hlfma/logs/run_latest.env" <<EOF
 RUN_TS=$RUN_TS
 VTD_HOST=$VTD_HOST

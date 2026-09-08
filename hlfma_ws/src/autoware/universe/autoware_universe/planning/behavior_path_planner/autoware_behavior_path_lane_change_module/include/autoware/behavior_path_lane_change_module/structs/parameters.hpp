@@ -155,6 +155,9 @@ struct TerminalPathParameters
 
 struct Parameters
 {
+  // HL FMA: true 면 lane_change 로거를 DEBUG 로 연다(모듈이 이미 가진 판단 로그 37곳 출력).
+  bool verbose{false};
+
   TrajectoryParameters trajectory{};
   SafetyParameters safety{};
   CancelParameters cancel{};
