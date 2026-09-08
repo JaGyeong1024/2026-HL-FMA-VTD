@@ -26,12 +26,7 @@
         car:
           th_moving_speed: 1.0                          # [m/s]
           th_moving_time: 2.0                           # [s]
-          # HL FMA 9/8: 0.0 -> 15.0. 회피 대상마다 '나가는 시프트 + 돌아오는 시프트' 한 쌍이 따로
-          #   생성되고 병합된다. 0.0 이면 각 차 바로 뒤에서 복귀가 시작돼, 6~7 m 간격으로 늘어선
-          #   정지차 사이로 돌아오려다 다음 차에 막힌다(실측 h4_pocket_aonly_0908: right shift 후
-          #   8.8초 만에 left shift -> obstacle_stop). 차간 간격보다 큰 값을 주면 구간이 겹쳐
-          #   하나의 연속 회피로 병합된다. 되돌리려면 0.0
-          longitudinal_margin: 15.0                     # [m]
+          longitudinal_margin: 0.0                      # [m]
           lateral_margin:
             soft_margin: 0.5                            # [m]
             hard_margin: 0.2                            # [m]
@@ -42,12 +37,7 @@
         truck:
           th_moving_speed: 1.0
           th_moving_time: 2.0
-          # HL FMA 9/8: 0.0 -> 15.0. 회피 대상마다 '나가는 시프트 + 돌아오는 시프트' 한 쌍이 따로
-          #   생성되고 병합된다. 0.0 이면 각 차 바로 뒤에서 복귀가 시작돼, 6~7 m 간격으로 늘어선
-          #   정지차 사이로 돌아오려다 다음 차에 막힌다(실측 h4_pocket_aonly_0908: right shift 후
-          #   8.8초 만에 left shift -> obstacle_stop). 차간 간격보다 큰 값을 주면 구간이 겹쳐
-          #   하나의 연속 회피로 병합된다. 되돌리려면 0.0
-          longitudinal_margin: 15.0                     # [m]
+          longitudinal_margin: 0.0                      # [m]
           lateral_margin:
             soft_margin: 0.5
             hard_margin: 0.2
@@ -58,12 +48,7 @@
         bus:
           th_moving_speed: 1.0
           th_moving_time: 2.0
-          # HL FMA 9/8: 0.0 -> 15.0. 회피 대상마다 '나가는 시프트 + 돌아오는 시프트' 한 쌍이 따로
-          #   생성되고 병합된다. 0.0 이면 각 차 바로 뒤에서 복귀가 시작돼, 6~7 m 간격으로 늘어선
-          #   정지차 사이로 돌아오려다 다음 차에 막힌다(실측 h4_pocket_aonly_0908: right shift 후
-          #   8.8초 만에 left shift -> obstacle_stop). 차간 간격보다 큰 값을 주면 구간이 겹쳐
-          #   하나의 연속 회피로 병합된다. 되돌리려면 0.0
-          longitudinal_margin: 15.0                     # [m]
+          longitudinal_margin: 0.0                      # [m]
           lateral_margin:
             soft_margin: 0.5
             hard_margin: 0.2
@@ -74,12 +59,7 @@
         trailer:
           th_moving_speed: 1.0
           th_moving_time: 2.0
-          # HL FMA 9/8: 0.0 -> 15.0. 회피 대상마다 '나가는 시프트 + 돌아오는 시프트' 한 쌍이 따로
-          #   생성되고 병합된다. 0.0 이면 각 차 바로 뒤에서 복귀가 시작돼, 6~7 m 간격으로 늘어선
-          #   정지차 사이로 돌아오려다 다음 차에 막힌다(실측 h4_pocket_aonly_0908: right shift 후
-          #   8.8초 만에 left shift -> obstacle_stop). 차간 간격보다 큰 값을 주면 구간이 겹쳐
-          #   하나의 연속 회피로 병합된다. 되돌리려면 0.0
-          longitudinal_margin: 15.0                     # [m]
+          longitudinal_margin: 0.0                      # [m]
           lateral_margin:
             soft_margin: 0.5
             hard_margin: 0.2
@@ -197,10 +177,7 @@
           # "auto"   : generate candidate path. if RTC is running as AUTO mode, the ego avoids it automatically.
           # "manual" : generate candidate path and wait operator approval even if RTC is running as AUTO mode.
           # "ignore" : never avoid it.
-          # HL FMA 9/8: ignore 가 차선 내 정지차 회피를 막고 있었다(실측 IS_NOT_PARKING_OBJECT,
-          # shiftable ratio 0.03 vs 요구 0.8). 공도에선 불법주차 회피가 민감해 기본 ignore 로 보인다.
-          # 되돌리려면 ignore.
-          policy: "auto"                                  # [-]
+          policy: "ignore"                                  # [-]
           condition:
             th_road_border_distance: 0.8                  # [m] threshold distance from road border to parking vehicle side
 
@@ -276,11 +253,7 @@
           th_small_shift_length: 0.101                  # [m] FOR DEVELOPER
           soft_drivable_bound_margin: 0.3               # [m]
           hard_drivable_bound_margin: 0.3               # [m]
-          # HL FMA 9/8: 우측 상한 5.0 -> 8.0. 자차 차선(A)과 인접 차선(B)이 동시에 막힌 경우
-          #   두 차선 건너 C 까지 밀어야 하고, A 중심선 기준 약 6.4 m + 횡여유 = 7 m 가 필요하다.
-          #   5.0 이면 물리적으로 도달할 수 없어 회피 자체가 성립하지 않는다.
-          #   좌측은 그대로 둔다 — 좌측 8 m 는 대향 차로까지 침범할 수 있다. 되돌리려면 5.0
-          max_right_shift_length: 8.0                   # [m] FOR DEVELOPER
+          max_right_shift_length: 5.0                   # [m] FOR DEVELOPER
           max_left_shift_length: 5.0                    # [m] FOR DEVELOPER
           max_deviation_from_lane: 0.2                  # [m]
           # approve the next shift line after reaching this percentage of the current shift line length.
@@ -303,13 +276,7 @@
             enable: true                                # [-]
             buffer: 3.0                                 # [m]
           traffic_light:
-            # HL FMA 9/8: false 로 끈다. 이 신호등 복귀 데드라인 때문에 avoidance 가 정지차를 다 지나기
-            #   전에 원래 차선으로 복귀를 시작하고, 다음 정지차 앞에서 obstacle_stop 에 걸렸다
-            #   (실측 h4_pocket_aonly_0908_092848: t=28.9s "left shift" 직후 t=34.0s obstacle_stop).
-            #   로그의 "ego overran avoidance dead line. do nothing." 도 이것이다.
-            #   우리 경로는 교차로 직전이 좌회전 포켓이라 '원래 차선 복귀' 자체가 목적과 다르다.
-            #   되돌리려면 true.
-            enable: false                               # [-]
+            enable: true                               # [-]
             buffer: 3.0                                 # [m]
 
       # For cancel maneuver
