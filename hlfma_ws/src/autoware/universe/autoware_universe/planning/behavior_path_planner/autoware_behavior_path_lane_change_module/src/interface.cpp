@@ -56,7 +56,6 @@ LaneChangeInterface::LaneChangeInterface(
 
 void LaneChangeInterface::processOnExit()
 {
-  RCLCPP_WARN(getLogger(), "[HLFMA-R] reset:processOnExit (모듈 종료)");
   module_type_->resetParameters();
   debug_marker_.markers.clear();
   post_process_safety_status_ = {};
@@ -71,10 +70,6 @@ bool LaneChangeInterface::isExecutionRequested() const
   }
 
   if (auto err = module_type_->isLaneChangeRequired()) {
-    // HL FMA 진단(임시): 외부요청 우회가 왜 후보를 못 만드는지 실주행에서 읽기 위해.
-    // 원인 규명 후 제거할 것. todo0906 기술부채.
-    RCLCPP_WARN_THROTTLE(
-      getLogger(), *clock_, 1000, "[HLFMA] lane change not required: %s", err->c_str());
     interface_debug_.request_info = err.value();
     return false;
   }
@@ -255,7 +250,6 @@ bool LaneChangeInterface::canTransitSuccessState()
   }
 
   if (module_type_->hasFinishedLaneChange()) {
-    RCLCPP_WARN(getLogger(), "[HLFMA-R] reset:finished (차선변경 완료)");
     module_type_->resetParameters();
     log_debug_throttled("Lane change process has completed.");
     return true;
