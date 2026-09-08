@@ -26,7 +26,12 @@
         car:
           th_moving_speed: 1.0                          # [m/s]
           th_moving_time: 2.0                           # [s]
-          longitudinal_margin: 0.0                      # [m]
+          # HL FMA 9/8: 0.0 -> 15.0. 회피 대상마다 '나가는 시프트 + 돌아오는 시프트' 한 쌍이 따로
+          #   생성되고 병합된다. 0.0 이면 각 차 바로 뒤에서 복귀가 시작돼, 6~7 m 간격으로 늘어선
+          #   정지차 사이로 돌아오려다 다음 차에 막힌다(실측 h4_pocket_aonly_0908: right shift 후
+          #   8.8초 만에 left shift -> obstacle_stop). 차간 간격보다 큰 값을 주면 구간이 겹쳐
+          #   하나의 연속 회피로 병합된다. 되돌리려면 0.0
+          longitudinal_margin: 15.0                     # [m]
           lateral_margin:
             soft_margin: 0.5                            # [m]
             hard_margin: 0.2                            # [m]
@@ -37,7 +42,12 @@
         truck:
           th_moving_speed: 1.0
           th_moving_time: 2.0
-          longitudinal_margin: 0.0
+          # HL FMA 9/8: 0.0 -> 15.0. 회피 대상마다 '나가는 시프트 + 돌아오는 시프트' 한 쌍이 따로
+          #   생성되고 병합된다. 0.0 이면 각 차 바로 뒤에서 복귀가 시작돼, 6~7 m 간격으로 늘어선
+          #   정지차 사이로 돌아오려다 다음 차에 막힌다(실측 h4_pocket_aonly_0908: right shift 후
+          #   8.8초 만에 left shift -> obstacle_stop). 차간 간격보다 큰 값을 주면 구간이 겹쳐
+          #   하나의 연속 회피로 병합된다. 되돌리려면 0.0
+          longitudinal_margin: 15.0                     # [m]
           lateral_margin:
             soft_margin: 0.5
             hard_margin: 0.2
@@ -48,7 +58,12 @@
         bus:
           th_moving_speed: 1.0
           th_moving_time: 2.0
-          longitudinal_margin: 0.0
+          # HL FMA 9/8: 0.0 -> 15.0. 회피 대상마다 '나가는 시프트 + 돌아오는 시프트' 한 쌍이 따로
+          #   생성되고 병합된다. 0.0 이면 각 차 바로 뒤에서 복귀가 시작돼, 6~7 m 간격으로 늘어선
+          #   정지차 사이로 돌아오려다 다음 차에 막힌다(실측 h4_pocket_aonly_0908: right shift 후
+          #   8.8초 만에 left shift -> obstacle_stop). 차간 간격보다 큰 값을 주면 구간이 겹쳐
+          #   하나의 연속 회피로 병합된다. 되돌리려면 0.0
+          longitudinal_margin: 15.0                     # [m]
           lateral_margin:
             soft_margin: 0.5
             hard_margin: 0.2
@@ -59,7 +74,12 @@
         trailer:
           th_moving_speed: 1.0
           th_moving_time: 2.0
-          longitudinal_margin: 0.0
+          # HL FMA 9/8: 0.0 -> 15.0. 회피 대상마다 '나가는 시프트 + 돌아오는 시프트' 한 쌍이 따로
+          #   생성되고 병합된다. 0.0 이면 각 차 바로 뒤에서 복귀가 시작돼, 6~7 m 간격으로 늘어선
+          #   정지차 사이로 돌아오려다 다음 차에 막힌다(실측 h4_pocket_aonly_0908: right shift 후
+          #   8.8초 만에 left shift -> obstacle_stop). 차간 간격보다 큰 값을 주면 구간이 겹쳐
+          #   하나의 연속 회피로 병합된다. 되돌리려면 0.0
+          longitudinal_margin: 15.0                     # [m]
           lateral_margin:
             soft_margin: 0.5
             hard_margin: 0.2
@@ -279,7 +299,13 @@
             enable: true                                # [-]
             buffer: 3.0                                 # [m]
           traffic_light:
-            enable: true                                # [-]
+            # HL FMA 9/8: false 로 끈다. 이 신호등 복귀 데드라인 때문에 avoidance 가 정지차를 다 지나기
+            #   전에 원래 차선으로 복귀를 시작하고, 다음 정지차 앞에서 obstacle_stop 에 걸렸다
+            #   (실측 h4_pocket_aonly_0908_092848: t=28.9s "left shift" 직후 t=34.0s obstacle_stop).
+            #   로그의 "ego overran avoidance dead line. do nothing." 도 이것이다.
+            #   우리 경로는 교차로 직전이 좌회전 포켓이라 '원래 차선 복귀' 자체가 목적과 다르다.
+            #   되돌리려면 true.
+            enable: false                               # [-]
             buffer: 3.0                                 # [m]
 
       # For cancel maneuver

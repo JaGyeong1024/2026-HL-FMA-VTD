@@ -11,11 +11,14 @@
     slot1:
       - "start_planner"
     slot2:
+      # HL FMA 9/8: static_obstacle_avoidance 를 lane_change 아래로 내렸다.
+      #   위에 있으면 avoidance 가 후보로 뜨는 순간 lane_change_* 가 후보에서 축출된다(실측 0.7초).
+      #   포켓 진입은 lane_change_left 만 할 수 있으므로 그쪽이 우선이어야 한다.
       - "side_shift"
       - "avoidance_by_lane_change"
-      - "static_obstacle_avoidance"
       - "lane_change_left"
       - "lane_change_right"
+      - "static_obstacle_avoidance"
       - "external_request_lane_change_left"
       - "external_request_lane_change_right"
       - "bidirectional_traffic"
@@ -67,7 +70,8 @@
     static_obstacle_avoidance:
       enable_rtc: false
       enable_simultaneous_execution_as_approved_module: true
-      enable_simultaneous_execution_as_candidate_module: false
+      # HL FMA 9/8: false 면 avoidance 가 후보 풀을 독점해 lane_change_* 가 후보조차 못 된다. 되돌리려면 false
+      enable_simultaneous_execution_as_candidate_module: true
 
     avoidance_by_lane_change:
       enable_rtc: false
