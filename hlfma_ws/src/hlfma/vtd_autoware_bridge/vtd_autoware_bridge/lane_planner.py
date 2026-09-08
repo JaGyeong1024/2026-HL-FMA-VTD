@@ -27,6 +27,7 @@ from autoware_planning_msgs.srv import SetPreferredPrimitive
 from autoware_planning_msgs.msg import LaneletPrimitive
 from tier4_planning_msgs.msg import RerouteAvailability
 from std_msgs.msg import String
+from autoware_internal_debug_msgs.msg import StringStamped
 
 from .osm_map import OsmMap
 
@@ -80,6 +81,17 @@ class LanePlanner(Node):
             'output/is_reroute_available',
             lambda m: setattr(self, 'reroute_ok', m.availability), 1)
         self.reroute_ok = False
+        # 차선변경이 실행 중인 동안에는 루트를 바꾸지 않는다.
+        # is_reroute_available 만으로는 틈이 있다 — 실측 2026-09-08: lane_change_right 가
+        # RUNNING 인 중에 복귀 요구가 통과했고, 실행 중이던 모듈의 목표 차선이 preferred 에서
+        # 빠지면서 그 모듈이 승인 슬롯을 15.7초 붙들었다. 그동안 lane_change_left 는 후보로만
+        # 떠 있다가 승인을 못 받았고, 자차는 33 m 를 그냥 흘려보냈다.
+        self.lc_running = False
+        self.create_subscription(
+            StringStamped,
+            '/planning/scenario_planning/lane_driving/behavior_planning/'
+            'behavior_path_planner/debug/internal_state',
+            self.on_internal_state, 1)
         self.orig_preferred = None   # 최초로 받은 루트의 preferred (복귀 기준)
         self.demand_now = None       # 지금 적용 중인 요구
         self.demand_pending = None   # 재라우팅 가용해질 때까지 대기 중인 요구
@@ -101,6 +113,11 @@ class LanePlanner(Node):
         self.ev_key = None      # 마지막으로 계획한 시점의 이벤트 지문
         self.create_timer(0.1, self.tick)   # 판단 지연은 한 주기(100ms). 계산은 이벤트일 때만 한다.
         self.get_logger().info('lane_planner 시작 (A* + 단계 재라우팅)')
+
+    def on_internal_state(self, m):
+        """승인 풀에 lane_change 계열이 있으면 실행 중으로 본다."""
+        line = next((l for l in m.data.splitlines() if 'approved modules' in l), '')
+        self.lc_running = 'lane_change' in line
 
     def on_route(self, m):
         self.route = m
@@ -352,7 +369,8 @@ class LanePlanner(Node):
         """preferred 만 교체한다. primitives 는 건드리지 않아 차선변경 가능성이 유지된다."""
         if not reset and demand == self.demand_now:
             return True
-        if not self.reroute_ok:
+        if not self.reroute_ok or self.lc_running:
+            # 실행 중인 차선변경이 끝난 뒤에 넣는다. 보류분은 매 주기 재시도한다.
             self.demand_pending = demand
             return False
         if not self.cli_pref.service_is_ready():
@@ -432,7 +450,7 @@ class LanePlanner(Node):
             return
         # 보류된 요구 재시도. 저장만 하고 재시도하지 않으면, 첫 계획 때 재라우팅이 불가능한 경우
         # (engage 전 등) 그 요구가 영영 버려진다 — 실제로 그래서 요구가 늦게 적용됐다(2026-09-08).
-        if self.demand_pending is not None and self.reroute_ok:
+        if self.demand_pending is not None and self.reroute_ok and not self.lc_running:
             self.apply_demand(self.demand_pending)
         key = self.event_key()
         if key is not None and key == self.ev_key:
@@ -497,7 +515,8 @@ class LanePlanner(Node):
             self.publish_state(
                 ego_lane=lid, v=f'{v:.1f}', 남은변경=len(changes),
                 다음한칸=(f'{step[0]}→{step[1]}' if step else '없음'),
-                재라우팅=('적용' if ok else '보류(is_reroute_available=False)'))
+                재라우팅=('적용' if ok else
+                       ('보류(차선변경 실행 중)' if self.lc_running else '보류(재라우팅 불가)')))
 
         if changes:
             desc = ' → '.join(f'{f}→{t}' for f, t, _ in changes)
