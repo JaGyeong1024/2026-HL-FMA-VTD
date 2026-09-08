@@ -92,3 +92,42 @@ sudo ldconfig
 - 적용: 저장소 루트에서
   `patch -p1 < patches/lane_change_yaw_threshold.patch` 후
   `cd hlfma_ws && colcon build --packages-select autoware_behavior_path_lane_change_module`
+
+## avoidance_never_target_defer_to_ambiguous.patch
+
+- 대상: `autoware_behavior_path_static_obstacle_avoidance_module` 의 `isNeverAvoidanceTarget`.
+- 재현: 2026-09-09 시나리오 2, 자차로에 정차한 차량 2대(횡편차 -0.05 / -0.38 m)가
+  `IS_NOT_PARKING_OBJECT` 로 무조건 제외되어 회피 대상이 0건. 자차 (291.8, -6.2) 영구 교착.
+- 원인: `object.is_on_ego_lane` 블록이 "객체 차로 옆이 road_shoulder 가 아니면 절대 회피 금지" 를
+  하드 리턴한다. 파라미터가 없고, Autoware 자신의 `avoidance_for_ambiguous_vehicle` 정책
+  (주차인지 단순 정차인지 애매한 차량 처리)에 도달조차 못 한다.
+  맵에 road_shoulder 를 넣어도 다음 줄의 `is_disjoint_right_lane` 에서 다시 걸린다
+  (객체가 그 갓길 차로를 실제로 물고 있어야 하는데, 차로 정중앙에 서 있으므로 겹치지 않음).
+- 변경: 정지 시간 > `th_stopped_time` 이고 이동 거리 < `th_moving_distance` 이면 하드 리턴을
+  건너뛰고 ambiguous 정책이 판단하도록 넘긴다. 방향/시나리오 상수 없음.
+  `isCloseToStopFactor` 게이트에도 같은 조건을 적용했다.
+  `policy_ambiguous_vehicle: "ignore"` 로 두면 기존 거동과 완전히 동일 → 롤백은 파라미터 한 줄.
+- 짝이 되는 파라미터: `avoidance_for_ambiguous_vehicle.policy: manual -> auto`,
+  `condition.th_stopped_time: 3.0 -> 0.5`.
+  (0.5 인 이유: `object.stop_time` 이 1.2~2.8 s 부근에서 동결되는 현상 관측. 원인 미규명 — TODO)
+
+## avoidance_direction_by_available_space.patch
+
+- 대상: 같은 모듈의 `StaticObstacleAvoidanceModule::createObjectData`.
+- 재현: 위 패치로 회피 대상 등록에는 성공했으나 `necessity: true` 인 채
+  `INSUFFICIENT_DRIVABLE_SPACE` 로 회피 포기. 여전히 교착.
+- 원인: 회피 방향이 경로 대비 횡편차의 **부호만으로** 결정된다.
+  ```
+  object_data.direction = calc_lateral_deviation(...) > 0.0 ? LEFT : RIGHT;
+  ```
+  차단 차량은 차로 정중앙(-0.05 / -0.38 m)이라 부호가 음수 → RIGHT(객체가 우측)
+  → 자차는 **좌측으로** 회피 → `getRoadShoulderDistance` 가 좌측 경계만 측정.
+  실측: 좌측 여유 0.50~1.07 m / 우측 여유 3.52~7.27 m (필요값 2.386 m).
+  모듈이 보고한 `to_drivable_bound` 0.83 / 1.04 가 좌측 실측값과 일치해 확증.
+- 변경: 편차가 `threshold_distance_object_is_on_center`(1.0 m) 미만이면
+  주행가능 경계까지 여유가 넓은 쪽으로 회피 방향을 정한다.
+  갓길에 붙어 선 차량(편차 >= 임계값)은 기존 거동 유지.
+- 검증: 2026-09-09. `obstacle_stop.lateral_margin` 정상값 0.2 로 6대 봉쇄 통과.
+  (290.5,-2.7) v=5.91 -> (298.0,-24.6) v=7.06, 무정차. 이전에는 마진 0.05 에서만 통과했다.
+- 남은 문제: 통과 후 (306.2, -42.1) 에서 재정지. 이 시점 객체는 전부 OUT_OF_TARGET_AREA 로
+  회피와 무관 — 좌회전 차로 진입 문제로 추정.

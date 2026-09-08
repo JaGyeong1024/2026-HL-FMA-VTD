@@ -505,9 +505,46 @@ ObjectData StaticObstacleAvoidanceModule::createObjectData(
     parameters_->unstable_classification_time);
 
   // Calc lateral deviation from path to target object.
-  object_data.direction = calc_lateral_deviation(object_closest_pose, object_pose.position) > 0.0
-                            ? Direction::LEFT
-                            : Direction::RIGHT;
+  const auto lateral_deviation = calc_lateral_deviation(object_closest_pose, object_pose.position);
+  object_data.direction = lateral_deviation > 0.0 ? Direction::LEFT : Direction::RIGHT;
+
+  // HL FMA: 차로 한가운데 정차한 차량은 수 cm 편차의 부호만으로 회피 방향이 정해지고,
+  // 그 결과 여유가 없는 쪽이 선택될 수 있다(실측: 좌측 경계 0.83m / 우측 경계 7.26m 인데 좌측 선택
+  // -> getAvoidMargin() 이 nullopt -> INSUFFICIENT_DRIVABLE_SPACE 로 회피 포기).
+  // 편차가 threshold_distance_object_is_on_center 미만이면 주행가능 경계까지 여유가
+  // 넓은 쪽으로 비켜가도록 방향을 정한다. 갓길에 붙어 선 차량(편차가 임계값 이상)은
+  // 기존 거동을 그대로 유지한다.
+  // 주의: Direction::LEFT 는 "객체가 좌측에 있다" 이므로 자차는 우측으로 회피한다.
+  {
+    const auto distance_to_bound = [&object_pose](const std::vector<Point> & bound) {
+      auto min_distance = std::numeric_limits<double>::max();
+      const auto & p = object_pose.position;
+      for (size_t i = 1; i < bound.size(); ++i) {
+        const auto & a = bound.at(i - 1);
+        const auto & b = bound.at(i);
+        const auto dx = b.x - a.x;
+        const auto dy = b.y - a.y;
+        const auto len_sq = dx * dx + dy * dy;
+        const auto t =
+          (len_sq < 1e-9)
+            ? 0.0
+            : std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / len_sq, 0.0, 1.0);
+        min_distance =
+          std::min(min_distance, std::hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)));
+      }
+      return min_distance;
+    };
+
+    const auto is_near_centerline =
+      std::abs(lateral_deviation) < parameters_->threshold_distance_object_is_on_center;
+    const auto has_bounds = data.left_bound.size() > 1 && data.right_bound.size() > 1;
+
+    if (is_near_centerline && has_bounds) {
+      const auto to_left = distance_to_bound(data.left_bound);
+      const auto to_right = distance_to_bound(data.right_bound);
+      object_data.direction = (to_right > to_left) ? Direction::LEFT : Direction::RIGHT;
+    }
+  }
 
   return object_data;
 }

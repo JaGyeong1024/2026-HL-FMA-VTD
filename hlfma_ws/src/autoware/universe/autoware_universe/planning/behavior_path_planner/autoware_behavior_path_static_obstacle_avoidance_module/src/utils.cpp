@@ -810,7 +810,20 @@ bool isNeverAvoidanceTarget(
     }
   }
 
-  if (object.is_on_ego_lane) {
+  // HL FMA: 내 차로에 오래 정차한 차량은 교통이 아니라 장애물로 다시 판단하게 한다.
+  //
+  // 아래 is_on_ego_lane 블록은 "갓길에 댄 차가 아니면 절대 회피하지 않는다"는 무조건 게이트라,
+  // Autoware 가 이미 갖고 있는 ambiguous vehicle 정책(주차인지 단순 정차인지 애매한 차량 처리)에
+  // 도달조차 못 하게 만든다. 정지 시간/이동 거리 조건을 만족하면 하드 리턴을 건너뛰고
+  // isSatisfiedWithVehicleCondition() 뒤쪽의 ambiguous 정책이 판단하도록 넘긴다.
+  // policy_ambiguous_vehicle 가 "ignore" 이면 기존 거동과 완전히 동일하다.
+  const auto defer_to_ambiguous_policy =
+    parameters->policy_ambiguous_vehicle != "ignore" &&
+    object.stop_time > parameters->time_threshold_for_ambiguous_vehicle &&
+    calc_distance2d(object.init_pose, object.getPose()) <
+      parameters->distance_threshold_for_ambiguous_vehicle;
+
+  if (object.is_on_ego_lane && !defer_to_ambiguous_policy) {
     const auto right_lane =
       planner_data->route_handler->getRightLanelet(object.overhang_lanelet, true, true);
     if (right_lane.has_value() && isOnRight(object)) {
@@ -877,7 +890,8 @@ bool isNeverAvoidanceTarget(
   }
 
   if (isCloseToStopFactor(object, data, planner_data, parameters)) {
-    if (object.is_on_ego_lane && !object.is_parked) {
+    // 위와 같은 이유로, 오래 정차한 차량은 정지선/횡단보도 근처여도 ambiguous 정책에 맡긴다.
+    if (object.is_on_ego_lane && !object.is_parked && !defer_to_ambiguous_policy) {
       object.info = ObjectInfo::IS_NOT_PARKING_OBJECT;
       RCLCPP_DEBUG(
         rclcpp::get_logger(logger_namespace), "object is close to stop factor. never avoid it.");

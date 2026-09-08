@@ -68,8 +68,8 @@
 
         lateral_margin: # lateral margin between the obstacles and ego's footprint
           nominal:
-            default: 0.3
-            unknown: 0.3
+            default: 0.2                # HL FMA: 교착 재현용 정상값 (원본 0.3)
+            unknown: 0.2
             pointcloud: 0.3
           additional: # additional stop margin to the obstacle.
             wheel_off_track_scale: # scale factor for additional stop margin against ego's wheel off-track. Even if this value is set to 0.0, the planner considers the nominal wheel off-track.
