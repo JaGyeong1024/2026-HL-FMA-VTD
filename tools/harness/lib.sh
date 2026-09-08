@@ -56,7 +56,7 @@ capture_start() {           # 판정용 토픽 bag 기록 (선택 토픽만). $@
                 /control/command/control_cmd /control/trajectory_follower/control_cmd /control/command/turn_indicators_cmd /planning/mission_planning/route
                 /planning/scenario_planning/max_velocity /planning/trajectory
                 /planning/scenario_planning/lane_driving/behavior_planning/path_with_lane_id
-                /perception/object_recognition/objects /diagnostics_graph/status
+                /perception/object_recognition/objects /diagnostics_graph/status /decision/state
                 /planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/debug/internal_state
                 /api/fail_safe/mrm_state /system/emergency/hazard_status /system/fail_safe/mrm_state /rosout "$@")
   local extra; extra=$(timeout 15 ros2 topic list 2>/dev/null | grep -E "cooperate_status|planning_factors/" | tr '\n' ' ')

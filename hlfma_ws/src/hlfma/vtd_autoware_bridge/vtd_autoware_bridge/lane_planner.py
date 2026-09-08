@@ -22,9 +22,11 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from autoware_planning_msgs.msg import LaneletRoute
 from autoware_perception_msgs.msg import PredictedObjects
 from nav_msgs.msg import Odometry
-from tier4_rtc_msgs.msg import CooperateStatusArray, CooperateCommand, Command
-from tier4_rtc_msgs.srv import CooperateCommands
 from autoware_internal_planning_msgs.msg import VelocityLimit
+from autoware_planning_msgs.srv import SetPreferredPrimitive
+from autoware_planning_msgs.msg import LaneletPrimitive
+from tier4_planning_msgs.msg import RerouteAvailability
+from std_msgs.msg import String
 
 from .osm_map import OsmMap
 
@@ -40,7 +42,6 @@ class LanePlanner(Node):
         self.declare_parameter('map_osm', '')
         self.declare_parameter('lat_accel', 2.0)      # 차선변경 횡가속 [m/s^2]
         self.declare_parameter('plan_horizon', 250.0) # [m]
-        self.declare_parameter('publish', False)      # 1단계: 계획만
         osm = self.get_parameter('map_osm').value
         self.omap = OsmMap(osm, self.get_logger()) if osm else None
         self.lat_accel = float(self.get_parameter('lat_accel').value)
@@ -57,26 +58,26 @@ class LanePlanner(Node):
         self.create_subscription(Odometry, '/localization/kinematic_state', self.on_odom, 1)
         self.create_subscription(PredictedObjects, '/perception/object_recognition/objects',
                                  self.on_objs, 1)
-        # RTC: 계획의 첫 수가 우측이면 external_request_lane_change_right 를 승인한다.
-        # 실측(2026-09-08): 우측 후보는 안전 판정을 통과하지만 cmd=0 으로 승인자가 없어 실행되지 않았다.
-        self.declare_parameter('approve_rtc', True)
-        self.approve_rtc = bool(self.get_parameter('approve_rtc').value)
-        self.rtc_status = {}
-        for side in ('left', 'right'):
-            self.create_subscription(
-                CooperateStatusArray, f'/planning/cooperate_status/external_request_lane_change_{side}',
-                lambda m, s=side: self.rtc_status.__setitem__(s, m), 1)
-        # RTC 승인 서비스는 모듈마다 따로 만들어진다:
-        #   rtc_interface.cpp:142  cooperate_commands_namespace_ + "/" + name
-        # 접미사 없는 '/planning/cooperate_commands' 로 잡으면 service_is_ready() 가 영원히 false 라
-        # 승인이 한 번도 전송되지 않는다(2026-09-08 실측: 우측 후보 valid=1 인데 WAITING_APPROVAL 고착).
-        self.rtc_cli = {
-            side: self.create_client(
-                CooperateCommands,
-                f'/planning/cooperate_commands/external_request_lane_change_{side}')
-            for side in ('left', 'right')
-        }
-        self.approved_uuid = set()
+        # 단계 재라우팅: 다음 '한 칸'만 루트 preferred 로 요구하고, 완료되면 다음 단계로 넘어간다.
+        # 모듈은 남은 변경 전부가 종점 안에 들어가야 첫 변경을 시작하므로(calc_lc_length_and_dist_buffer),
+        # 두 칸을 한꺼번에 요구하면 첫 칸조차 시작하지 않는다(2026-09-08 실측).
+        # set_preferred_primitive 는 preferred 만 바꾸고 primitives·uuid 는 그대로 둔다.
+        # change_route 와 달리 check_reroute_safety 를 호출하지 않아
+        # "New route is not safe" 로 거부되지 않는다(mission_planner.cpp:384-420).
+        # reset=true 로 원래 경로 복원까지 지원한다(mission_planner 가 original_route_ 를 보관).
+        self.cli_pref = self.create_client(
+            SetPreferredPrimitive,
+            '/planning/mission_planning/mission_planner/set_preferred_primitive')
+        self.create_subscription(
+            RerouteAvailability,
+            '/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/'
+            'output/is_reroute_available',
+            lambda m: setattr(self, 'reroute_ok', m.availability), 1)
+        self.reroute_ok = False
+        self.orig_preferred = None   # 최초로 받은 루트의 preferred (복귀 기준)
+        self.demand_now = None       # 지금 적용 중인 요구
+        self.demand_pending = None   # 재라우팅 가용해질 때까지 대기 중인 요구
+        self.pub_state = self.create_publisher(String, '/decision/state', 10)
 
         # 속도 상한: 현재 속도로 해가 없고 더 느리면 있으면, 그 속도를 걸어 계획을 성립시킨다.
         self.declare_parameter('speed_candidates', [8.0, 6.0, 4.0, 3.0, 2.0])
@@ -93,9 +94,14 @@ class LanePlanner(Node):
 
         self.ev_key = None      # 마지막으로 계획한 시점의 이벤트 지문
         self.create_timer(0.1, self.tick)   # 판단 지연은 한 주기(100ms). 계산은 이벤트일 때만 한다.
-        self.get_logger().info('lane_planner 시작 (계획만 + RTC 승인)')
+        self.get_logger().info('lane_planner 시작 (A* + 단계 재라우팅)')
 
-    def on_route(self, m): self.route = m; self.last_key = None
+    def on_route(self, m):
+        self.route = m
+        self.last_key = None
+        if self.orig_preferred is None:
+            self.orig_preferred = [sg.preferred_primitive.id for sg in m.segments]
+            self.get_logger().info(f'원래 경로 보관: preferred {len(self.orig_preferred)} 세그먼트')
     def on_objs(self, m): self.objs = m
     def on_odom(self, m):
         p = m.pose.pose.position; q = m.pose.pose.orientation
@@ -287,60 +293,100 @@ class LanePlanner(Node):
         self.vlim_now = None
         self.get_logger().info('속도 상한 해제')
 
-    def side_of(self, src, tgt):
-        """src 기준 tgt 가 왼쪽인지 오른쪽인지. 세그먼트를 넘는 변경도 판정되도록 기하로 본다."""
-        try:
-            a = self.omap.lanelets[src]
-            b = self.omap.lanelets[tgt]
-        except Exception:
-            return None
-        ca, cb = a.center, b.center
-        if len(ca) < 2 or not cb:
-            return None
-        i = len(ca) // 2
-        hx, hy = ca[i + 1][0] - ca[i][0], ca[i + 1][1] - ca[i][1]
-        n = math.hypot(hx, hy)
-        if n < 1e-6:
-            return None
-        # 진행방향 기준 왼쪽 단위벡터
-        lx, ly = -hy / n, hx / n
-        j = len(cb) // 2
-        d = (cb[j][0] - ca[i][0]) * lx + (cb[j][1] - ca[i][1]) * ly
-        return 'left' if d > 0 else 'right'
+    # ---------------------------------------------------------------- 단계 재라우팅
+    def build_demand(self, path, changes):
+        """'다음 한 칸만' 요구하는 preferred 배열. 변경이 없으면 원래 preferred 그대로.
 
-    def send_rtc(self, side):
-        """해당 방향 external_request 후보를 승인한다. 이미 보낸 uuid 는 건너뛴다."""
-        msg = self.rtc_status.get(side)
-        cli = self.rtc_cli.get(side)
-        if msg is None or not msg.statuses or cli is None or not cli.service_is_ready():
-            # 조용히 반환하면 승인이 안 되는 것을 관측할 수 없다 — 이유를 남긴다.
-            why = ('상태 토픽 없음' if msg is None else
-                   '후보 없음' if not msg.statuses else '서비스 미준비')
-            self.get_logger().warning(f'RTC 승인 불가({side}): {why}', throttle_duration_sec=5.0)
-            return
-        reqs = []
-        for st in msg.statuses:
-            u = bytes(st.uuid.uuid)
-            if u in self.approved_uuid:
-                continue
-            if not st.safe:
+        changes[0] = (from, to) 가 다음 한 칸이다. to 가 속한 세그먼트부터는 to 의 후속 체인을
+        유지해 그 뒤로는 아무 변경도 요구하지 않는다. 모듈은 남은 변경 전부가 종점 안에 들어가야
+        첫 변경을 시작하므로(calc_lc_length_and_dist_buffer), 두 칸을 한꺼번에 요구하면 안 된다.
+
+        세그먼트 안에서 일어나는 변경(예: 15379->15414 는 둘 다 seg2)도 잡아야 하므로
+        세그먼트당 '마지막' lanelet 을 쓴다.
+        """
+        segs = self.route.segments
+        demand = list(self.orig_preferred)
+        if not changes:
+            return demand, None
+        f0, t0, _ = changes[0]
+
+        # 변경 지점까지: path 를 따라가며 세그먼트별 lanelet (마지막 것이 이긴다)
+        for lid, _ in path:
+            if lid == t0:
+                break
+            i = self.seg_index_of(lid)
+            if i is not None:
+                demand[i] = lid
+
+        # 변경 이후: to 의 후속 체인을 유지
+        cur = t0
+        start = self.seg_index_of(t0)
+        if start is None:
+            return demand, (f0, t0)
+        for i in range(start, len(segs)):
+            ids = [p.id for p in segs[i].primitives]
+            if cur not in ids:
+                break
+            demand[i] = cur
+            if i + 1 >= len(segs):
+                break
+            nxt = [x for x in self.omap.successors(cur) if x in [p.id for p in segs[i + 1].primitives]]
+            if not nxt:
+                break
+            cur = nxt[0]
+        return demand, (f0, t0)
+
+    def apply_demand(self, demand, reset=False):
+        """preferred 만 교체한다. primitives 는 건드리지 않아 차선변경 가능성이 유지된다."""
+        if not reset and demand == self.demand_now:
+            return True
+        if not self.reroute_ok:
+            self.demand_pending = demand
+            return False
+        if not self.cli_pref.service_is_ready():
+            self.get_logger().warning('set_preferred_primitive 서비스 미준비',
+                                      throttle_duration_sec=5.0)
+            return False
+        req = SetPreferredPrimitive.Request()
+        req.uuid = self.route.uuid
+        req.reset = reset
+        if not reset:
+            req.preferred_primitives = [
+                LaneletPrimitive(id=int(v), primitive_type='lane') for v in demand]
+        changed = [(i, a, b) for i, (a, b) in enumerate(zip(
+            [sg.preferred_primitive.id for sg in self.route.segments], demand)) if a != b]
+        fut = self.cli_pref.call_async(req)
+
+        def done(f, changed=changed, reset=reset):
+            # 응답을 반드시 확인한다. RTC 때 조용히 실패해 하루를 썼다(2026-09-08).
+            try:
+                r = f.result()
+            except Exception as e:
+                self.get_logger().error(f'set_preferred_primitive 예외: {e!r}')
+                self.demand_now = None
+                return
+            if r.status.success:
+                if reset:
+                    self.get_logger().info('원래 경로로 복원')
+                else:
+                    self.get_logger().info(
+                        f'단계 요구 반영: {len(changed)}개 세그먼트 '
+                        + ', '.join(f'seg{i}:{a}→{b}' for i, a, b in changed[:4]))
+            else:
                 self.get_logger().warning(
-                    f'RTC 후보가 unsafe 로 표시됨({side}) — 승인 보류', throttle_duration_sec=5.0)
-                continue
-            reqs.append(st)
-        if not reqs:
-            return
-        req = CooperateCommands.Request()
-        req.stamp = self.get_clock().now().to_msg()
-        for st in reqs:
-            cc = CooperateCommand()
-            cc.uuid = st.uuid
-            cc.module = st.module
-            cc.command.type = Command.ACTIVATE
-            req.commands.append(cc)
-            self.approved_uuid.add(bytes(st.uuid.uuid))
-        self.get_logger().info(f'RTC 승인 전송: {side} {len(req.commands)}건')
-        cli.call_async(req)
+                    f'set_preferred_primitive 거부 code={r.status.code} "{r.status.message}"')
+                self.demand_now = None      # 조건이 바뀌는 폴링이므로 재시도는 정당
+
+        fut.add_done_callback(done)
+        self.demand_now = demand
+        self.demand_pending = None
+        return True
+
+    def publish_state(self, **kw):
+        try:
+            self.pub_state.publish(String(data='; '.join(f'{k}={v}' for k, v in kw.items())))
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- tick
     def event_key(self):
@@ -364,6 +410,10 @@ class LanePlanner(Node):
     def tick(self):
         if self.route is None or self.ego is None or self.omap is None:
             return
+        # 보류된 요구 재시도. 저장만 하고 재시도하지 않으면, 첫 계획 때 재라우팅이 불가능한 경우
+        # (engage 전 등) 그 요구가 영영 버려진다 — 실제로 그래서 요구가 늦게 적용됐다(2026-09-08).
+        if self.demand_pending is not None and self.reroute_ok:
+            self.apply_demand(self.demand_pending)
         key = self.event_key()
         if key is not None and key == self.ev_key:
             return          # 이벤트 없음 → 재계획하지 않는다
@@ -411,12 +461,13 @@ class LanePlanner(Node):
         if key == self.last_key:
             return
         self.last_key = key
-        if changes and self.approve_rtc:
-            # 첫 수의 방향을 판단해 해당 external_request 를 승인한다.
-            f0, t0, _ = changes[0]
-            side = self.side_of(f0, t0)   # 세그먼트를 넘는 변경도 있으므로 기하로 판정한다
-            if side:
-                self.send_rtc(side)
+        if self.orig_preferred is not None:
+            demand, step = self.build_demand(path, changes)
+            ok = self.apply_demand(demand)
+            self.publish_state(
+                ego_lane=lid, v=f'{v:.1f}', 남은변경=len(changes),
+                다음한칸=(f'{step[0]}→{step[1]}' if step else '없음'),
+                재라우팅=('적용' if ok else '보류(is_reroute_available=False)'))
 
         if changes:
             desc = ' → '.join(f'{f}→{t}' for f, t, _ in changes)
