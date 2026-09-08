@@ -81,13 +81,22 @@
           longitudinal_distance_min_threshold: 1.5
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
-        parked:
+        parked:   # HL FMA 9/8 완화 (원래 -2.0 / 1.0 / 0.8 / 3.0)
+          # 정지 객체(v <= stopped_object_velocity_threshold)는 승인 전이면 전부 이 세트로 판정된다
+          # (scene.cpp:1957). 우리 장면의 정지차 6대가 전부 여기 걸린다.
+          # 실측(h4_pocket_ext2_0908): 목표 차선의 정지차 2대가 95~101 m 앞인데도 충돌 판정이 나
+          # v=13.9 에서 후보가 전멸했고, 4.3 m/s 까지 감속한 뒤에야 승인됐다. 그때는 이미 늦다.
+          # 원인은 등속 가정 — 차선변경이 끝나는 시점의 잔여 간격(약 40 m)에 76 m 를 요구했다.
+          # expected_rear_deceleration 은 자차 제동 가정이다. -2.0 은 실제 능력보다 보수적이라
+          # common.param.yaml 의 normal.min_acc(-3.5, limit -4.0)에 맞춘다. 나머지 셋은
+          # execution/cancel/stuck 과 동일하게 맞춘다.
+          # 실제 충돌 안전망은 이것이 아니라 motion_velocity_planner 의 obstacle_stop 이며 그대로 살아 있다.
           expected_front_deceleration: -1.0
-          expected_rear_deceleration: -2.0
-          rear_vehicle_reaction_time: 1.0
-          rear_vehicle_safety_time_margin: 0.8
+          expected_rear_deceleration: -3.5
+          rear_vehicle_reaction_time: 0.5
+          rear_vehicle_safety_time_margin: 0.2
           lateral_distance_max_threshold: 1.0
-          longitudinal_distance_min_threshold: 3.0
+          longitudinal_distance_min_threshold: 1.5
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
         cancel:   # HL FMA 9/8: execution 과 동일하게. 취소 판정이 더 빡빡하면 시작했다가 되돌아온다 (원래 1.5/0.8/1.0/2.5)

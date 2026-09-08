@@ -6,7 +6,8 @@ cases=("$@"); [ ${#cases[@]} -eq 0 ] && cases=($(cd "$ROOT/tools/harness/cases" 
 POCKET="15194 14855 14611"
 for c in "${cases[@]}"; do
   run_case "$c" || continue
-  seq=$(python3 -c "import json;print(' '.join(str(x) for x in json.load(open('$OUT/metrics.json')).get('lanelet_seq',[])))" 2>/dev/null)
+  # lanelet_seq 는 [시각, lanelet_id] 쌍의 배열이다. id 만 뽑는다(0908: 쌍 전체를 문자열화해 판정이 항상 실패했다).
+  seq=$(python3 -c "import json;print(' '.join(str(p[1]) for p in json.load(open('$OUT/metrics.json')).get('lanelet_seq',[])))" 2>/dev/null)
   lc=$(mget "['lane_changes']")
   note "lanelet 열: $seq"
   note "차선전환 ${lc}회, 최고속 $(mget "['max_speed_kmh']") km/h, 종료 $(cat "$OUT/final_state.txt")"
