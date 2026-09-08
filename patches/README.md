@@ -39,3 +39,51 @@ sudo ldconfig
 - 저장소 루트에서 `patch -p1 < patches/external_request_lane_change_non_preferred.patch`
   적용 후 `hlfma_ws`에서 `colcon build --packages-select autoware_behavior_path_lane_change_module`.
 - 우측 우회 후 좌회전까지의 시뮬레이터 통과 여부는 별도 주행 검증 대상이다.
+
+
+## lane_change_dist_buffer_degeneracy.patch
+
+- 대상: `autoware_behavior_path_lane_change_module` 의 `calculation.cpp`
+  (`calc_shift_intervals`, `calc_distance_buffer`)
+- 증상: 정체 우회 상황에서 차선변경 후보가 하나도 생성되지 않는다.
+  DEBUG 로그에 `Skip: prepare length out of expected range. length: 0.0,
+  threshold min: -32.25, max: -1.797e+308` 이 초당 수천 건 찍힌다.
+- 원인:
+  1. `calc_shift_intervals` 가 `current_lanes.back()` **하나만** 조회한다.
+     먼 구간의 preferred 가 진행 방향과 반대쪽이면
+     `getLateralIntervalsToPreferredLane` 이 빈 배열을 반환한다.
+  2. 그 빈 배열이 `calc_distance_buffer` 에서 `DBL_MAX` 로 바뀌고,
+     `scene.cpp` 의 `dist_to_terminal_start = dist_to_terminal_end - DBL_MAX`
+     가 `-DBL_MAX` 로 퇴화한다.
+  3. `max_length_threshold = -DBL_MAX` 이므로
+     `prepare_length > max_length_threshold` 가 항상 참 → 모든 후보 폐기.
+- 변경:
+  1. `calc_shift_intervals` 는 먼 쪽부터 자차 쪽으로 내려오며 첫 유효값을 사용한다.
+  2. `calc_distance_buffer` 는 빈 배열에서 `DBL_MAX` 대신 `0.0` 을 반환한다
+     (빈 배열 = 차선변경 불필요 = 필요 여유 0).
+- 성격: 안전 완화가 아니라 **퇴화값 방어**다. 실선·RSS·obstacle_stop 등
+  실제 안전 게이트는 그대로다.
+- 적용: 저장소 루트에서
+  `patch -p1 < patches/lane_change_dist_buffer_degeneracy.patch` 후
+  `cd hlfma_ws && colcon build --packages-select autoware_behavior_path_lane_change_module`
+- 검증 상태: 2026-09-08 적용, 주행 검증 진행 중.
+
+
+## lane_change_yaw_threshold.patch
+
+- 대상: `autoware_behavior_path_lane_change_module` 의 `utils/path.cpp`
+- 증상: 차선변경 경로가 앞 정지차를 스치고 지나가 회피가 되지 않는다.
+  전이 구간이 75 m 로 길어 자차가 통과하는 27 m 구간에서 횡변위가 0.2 m 밖에 안 된다.
+- 원인: `constexpr auto yaw_diff_th = deg2rad(5.0);` (path.cpp)
+  준비 구간과 전이 구간의 진행 방향 차이가 5도를 넘으면 후보를 폐기한다.
+  3.0 m 차로를 5도 이내로 건너려면 직선 34 m, S자 약 69 m 가 필요하다.
+  속도와 무관한 고정 상수라 저속 회피에서 지나치게 보수적이다.
+  차량 실제 한계는 `max_steer_angle 0.48 rad`(27.5도, 회전반경 5.65 m)로 여유가 크다.
+- 변경: 5.0 → 20.0 도.
+- 검증: `Excessive yaw difference` 거부 0건. 다른 파라미터(lat_acc 하한 상향)와 함께
+  실주행 횡변위 0.21 m → 1.17 m 로 개선 확인 (2026-09-08).
+- 남은 과제: 속도 비례로 바꾸는 것이 정석이다.
+  저속에서 20도, 고속에서 5도로 보간하면 안전 논리를 유지하며 필요한 곳만 완화된다.
+- 적용: 저장소 루트에서
+  `patch -p1 < patches/lane_change_yaw_threshold.patch` 후
+  `cd hlfma_ws && colcon build --packages-select autoware_behavior_path_lane_change_module`
