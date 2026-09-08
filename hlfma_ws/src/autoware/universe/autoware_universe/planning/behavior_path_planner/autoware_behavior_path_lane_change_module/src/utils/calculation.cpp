@@ -323,28 +323,6 @@ std::vector<double> calc_shift_intervals(
     }
   }
 
-  // HL FMA P1: on the preferred lane the intervals are empty (nothing to reach), which makes the
-  // minimum lane change length infinite and suppresses every candidate. An external request wants
-  // to leave the preferred lane, so use the lateral offset to the requested-side neighbor instead.
-  if (
-    intervals.empty() && common_data_ptr->lc_type == LaneChangeModuleType::EXTERNAL_REQUEST &&
-    direction != Direction::NONE) {
-    const auto & current = lanes.back();
-    const auto neighbor = direction == Direction::RIGHT
-                            ? route_handler_ptr->getRightLanelet(current)
-                            : route_handler_ptr->getLeftLanelet(current);
-    if (neighbor) {
-      const auto current_centerline = current.centerline();
-      const auto neighbor_centerline = neighbor->centerline();
-      if (!current_centerline.empty() && !neighbor_centerline.empty()) {
-        const auto curr_pt = current_centerline.front();
-        const auto next_pt = neighbor_centerline.front();
-        const auto dist = lanelet::geometry::distance2d(
-          lanelet::utils::to2D(curr_pt), lanelet::utils::to2D(next_pt));
-        intervals.push_back(direction == Direction::RIGHT ? -dist : dist);
-      }
-    }
-  }
 
   return intervals;
 }
