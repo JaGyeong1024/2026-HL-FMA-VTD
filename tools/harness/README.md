@@ -5,7 +5,8 @@
 - `place.py`    경로 CSV 기준으로 "시작점 전방 D m·횡 L m" 객체를 절대 좌표(mock `--obj-abs`)로 변환. 첫 정지선 거리 계산
 - `metrics.py`  mock trace CSV(스텝 단위)에서 정지거리·최대감속·재출발 시간·이동객체 최소거리·lanelet 열(차선변경) 계산
 - `cases/*.conf` 케이스 설정 (bash 로 source). ROUTE / MOCK_ARGS / RUN_SEC / 기대치
-- `h0_startup.sh` `h1_stop_restart.sh` `h2_detour.sh` `h3_lane_change.sh` `hA13_respawn.sh` 수정 단위별 실행기
+- `h0_startup.sh` `h1_stop_restart.sh` `h2_detour.sh` `h3_lane_change.sh` `h4_pocket.sh` `hA13_respawn.sh` 실행기
+- `reroute_preferred.py` 루트 preferred 를 손으로 교체(진단용). 런타임 단계 전환은 lane_planner 가 한다
 
 실행 (제어기 PC, 이 클론 루트에서)
     bash tools/harness/h1_stop_restart.sh                 # cases/h1_*.conf 전부
@@ -19,3 +20,11 @@
 - 포트 9910·ROS 도메인은 한 번에 한 케이스. 케이스당 스택 기동 ~90 s + 주행 RUN_SEC.
 - 판정 기준은 각 conf 의 EXPECT_* 로 표현. 수정 전 baseline 은 BASELINE_0907.md.
 - 이동객체/스케줄 시각은 `--clock move` 로 "ego 첫 이동 후 경과 초" 기준 (engage 시점 편차 무관).
+
+## 9/8 갱신
+
+- 기본 도메인 **43**(rviz.sh 와 동일). 다른 클론이 43 을 쓰는 중일 때만 `HARNESS_DOMAIN=53`.
+- `HOLD=1` — 주행이 끝나도 스택·mock 을 유지한다. `ROS_DOMAIN_ID=43 ./rviz.sh` 로 붙여서 관찰.
+- `DETOUR` 환경변수는 없어졌다(판단 노드 삭제). 회피 검증은 `LANE_PLAN=true`.
+- 기록 토픽에 `behavior_path_planner/debug/internal_state`(승인 풀 전이)와 `/decision/state` 추가.
+- `h2_free_left` 의 기대치(EXPECT_DETOUR=yes)는 삭제한 detour 노드 기준이라 **낡았다**. 지금은 FAIL 로 뜬다.
