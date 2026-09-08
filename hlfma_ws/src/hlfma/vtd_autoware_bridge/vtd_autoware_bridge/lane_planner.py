@@ -34,6 +34,12 @@ CELL = 2.0              # [m] 종방향 격자
 LC_PENALTY = 8.0        # 차선변경 1회의 추가 비용 [m 환산]
 LAT_SHIFT = 3.2         # [m] 차선 간격 (실측)
 OBJ_MARGIN = 6.0        # [m] 객체 앞뒤 여유 (차체 + 정지 여유)
+# 경로 차선을 벗어나 있는 동안 셀마다 무는 비용 [m 환산].
+# 이게 없으면 '거리 + 차선변경 횟수'만 보므로 언제 복귀하든 비용이 같아, A* 가 복귀를
+# 회랑 끝까지 미룬다. 그러면 마지막 세그먼트(17.9 m)에서 포켓 진입까지 하려다 자리가 없다
+# (실측 2026-09-08: 14925(B,seg4) → 14633(A,seg5) → 14611(P,seg5) 로 계획해 실패).
+# 막힌 셀은 애초에 통행 불가라 이 비용이 우회 자체를 막지는 않는다. 복귀 시점만 앞당긴다.
+OFF_ROUTE = 0.6
 
 
 class LanePlanner(Node):
@@ -193,6 +199,10 @@ class LanePlanner(Node):
         if target_idx is None:
             target_idx = len(corr) - 1
 
+        # 경로가 원래 가리키던 차선 집합. 여기를 벗어나 있으면 셀마다 OFF_ROUTE 를 문다.
+        on_route = set(self.orig_preferred or
+                       [sg.preferred_primitive.id for sg in self.route.segments])
+
         start = (start_lane, int(start_s // CELL))
         openq = [(0.0, 0.0, start, None)]
         best, came = {start: 0.0}, {}
@@ -206,22 +216,24 @@ class LanePlanner(Node):
             idx, j, ln = seg_of[lid]
             t_here = g / max(1.0, v)
             # 목표는 '완주'다. 대기열 뒤에 서는 것은 우회가 아니므로 회랑 끝 도달을 요구한다.
-            if idx == len(corr) - 1:
+            if idx == len(corr) - 1 and (not reach[idx] or lid in reach[idx]):
                 goal = node; break
             ncell = int(ln // CELL)
+            step = CELL + (0.0 if lid in on_route else OFF_ROUTE)
             # 직진
             if c + 1 <= ncell:
                 nn = (lid, c + 1)
-                if free(lid, c + 1, t_here) and g + CELL < best.get(nn, 1e18):
-                    best[nn] = g + CELL
-                    heapq.heappush(openq, (g + CELL, g + CELL, nn, node))
+                if free(lid, c + 1, t_here) and g + step < best.get(nn, 1e18):
+                    best[nn] = g + step
+                    heapq.heappush(openq, (g + step, g + step, nn, node))
             elif idx + 1 < len(corr):
                 for s2 in self.omap.successors(lid):
                     if s2 in seg_of:
                         nn = (s2, 0)
-                        if free(s2, 0, t_here) and g + CELL < best.get(nn, 1e18):
-                            best[nn] = g + CELL
-                            heapq.heappush(openq, (g + CELL, g + CELL, nn, node))
+                        s2step = CELL + (0.0 if s2 in on_route else OFF_ROUTE)
+                        if free(s2, 0, t_here) and g + s2step < best.get(nn, 1e18):
+                            best[nn] = g + s2step
+                            heapq.heappush(openq, (g + s2step, g + s2step, nn, node))
             # 차선변경. 이 맵은 lanelet 이 10~32m 로 짧아 변경 구간이 거의 항상 경계를 넘는다.
             # 원·목표 차선을 각각 후속을 따라 lc_cells 만큼 걸어가며 양쪽 모두 비어 있는지 본다.
             lanes = corr[idx][1]
@@ -382,6 +394,14 @@ class LanePlanner(Node):
         self.demand_pending = None
         return True
 
+    def restore_route(self):
+        """우회 요구를 걷고 원래 경로로 되돌린다. 이미 원래대로면 아무것도 하지 않는다."""
+        if self.orig_preferred is None or self.demand_now is None:
+            return
+        if self.demand_now == list(self.orig_preferred):
+            return
+        self.apply_demand(list(self.orig_preferred))
+
     def publish_state(self, **kw):
         try:
             self.pub_state.publish(String(data='; '.join(f'{k}={v}' for k, v in kw.items())))
@@ -428,6 +448,11 @@ class LanePlanner(Node):
             return
         corr = self.corridor(ego_seg)
         if len(corr) < 2:
+            # 회랑이 남지 않았다(마지막 다차선 구간에 들어섰다). 여기서 조용히 포기하면
+            # 우회로 바꿔 둔 요구가 그대로 남아 원래 경로(좌회전 포켓)로 못 돌아온다
+            # — 실측 2026-09-08: seg5 진입 후 재계획이 멈춰 포켓이 한 번도 요구되지 않았다.
+            # 남은 구간에는 계획할 것이 없으므로 원래 경로를 복원한다.
+            self.restore_route()
             return
         _, s0, _ = self.omap.project(lid, x, y)
         path, lc_len = self.plan(corr, lid, s0, max(v, 2.0))
@@ -446,12 +471,17 @@ class LanePlanner(Node):
         elif path is not None:
             self.clear_vlim()
         if path is None:
+            # 우회 시퀀스를 못 찾았다. 바꿔 둔 요구를 그대로 두면 원래 경로(예: 좌회전 포켓)로
+            # 영영 못 돌아온다 — 실측 2026-09-08: seg5 에서 계획이 실패한 뒤 포켓이 한 번도
+            # 요구되지 않아 직진 차선에서 정지선까지 갔다.
+            # 계획할 것이 없으면 경로대로 가는 것이 맞다. stock 모듈에 맡긴다.
+            self.restore_route()
             key = ('none', lid)
             if key != self.last_key:
                 self.last_key = key
                 self.get_logger().warning(
                     f'[계획 실패] 자차 {lid} 에서 목표까지 통행 가능한 시퀀스 없음 '
-                    f'(속도 {v:.1f} m/s, 차선변경 소요 {lc_len:.0f} m)')
+                    f'(속도 {v:.1f} m/s, 차선변경 소요 {lc_len:.0f} m) → 원래 경로로 복원')
             return
         changes = []
         for a, b in zip(path, path[1:]):
