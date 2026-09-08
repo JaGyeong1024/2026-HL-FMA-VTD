@@ -348,21 +348,10 @@ class LanePlanner(Node):
                 demand[i] = lid
 
         # 변경 이후: to 의 후속 체인을 유지
-        cur = t0
         start = self.seg_index_of(t0)
         if start is None:
             return demand, (f0, t0)
-        for i in range(start, len(segs)):
-            ids = [p.id for p in segs[i].primitives]
-            if cur not in ids:
-                break
-            demand[i] = cur
-            if i + 1 >= len(segs):
-                break
-            nxt = [x for x in self.omap.successors(cur) if x in [p.id for p in segs[i + 1].primitives]]
-            if not nxt:
-                break
-            cur = nxt[0]
+        self.follow_from(demand, start, t0)
         return demand, (f0, t0)
 
     def apply_demand(self, demand, reset=False):
@@ -412,13 +401,74 @@ class LanePlanner(Node):
         self.demand_pending = None
         return True
 
+    def follow_from(self, demand, seg_idx, lane):
+        """seg_idx 부터 lane 의 후속 체인을 demand 에 채운다. 그 뒤로는 아무 변경도 요구하지 않게 된다."""
+        segs = self.route.segments
+        cur = lane
+        for i in range(seg_idx, len(segs)):
+            ids = [p.id for p in segs[i].primitives]
+            if cur not in ids:
+                break
+            demand[i] = cur
+            if i + 1 >= len(segs):
+                break
+            nxt = [x for x in self.omap.successors(cur)
+                   if x in [p.id for p in segs[i + 1].primitives]]
+            if not nxt:
+                break
+            cur = nxt[0]
+        return demand
+
+    def step_toward(self, cur, goal, seg_idx):
+        """같은 세그먼트 안에서 cur 에서 goal 쪽으로 '한 칸'. 없으면 None."""
+        ids = [p.id for p in self.route.segments[seg_idx].primitives]
+        if cur == goal or cur not in ids or goal not in ids:
+            return None
+        for side in (0, 1):                      # 0=왼쪽, 1=오른쪽
+            first = self.omap.neighbors(cur)[side]
+            n, guard = cur, 0
+            while guard < 8:
+                nb = self.omap.neighbors(n)[side]
+                if nb is None or nb not in ids:
+                    break
+                if nb == goal:
+                    return first
+                n = nb
+                guard += 1
+        return None
+
     def restore_route(self):
-        """우회 요구를 걷고 원래 경로로 되돌린다. 이미 원래대로면 아무것도 하지 않는다."""
-        if self.orig_preferred is None or self.demand_now is None:
+        """우회 요구를 걷고 원래 경로로 되돌린다 — 단, **한 칸씩**.
+
+        원래 경로를 통째로 되돌리면, 자차가 두 칸 벗어나 있을 때(예: B 에 있는데 목표가
+        좌회전 포켓) 모듈에 두 칸을 한꺼번에 요구하게 된다. 그러면 남은 변경 전부가 종점 안에
+        들어가야 첫 변경을 시작하는 성질(calc_lc_length_and_dist_buffer) 때문에 첫 칸조차
+        시작하지 않는다 — 2026-09-08 실측으로 확인한 문제다.
+        그래서 자차 위치에서 원래 차선 쪽으로 한 칸만 요구하고, 그 뒤로는 그 차선의 후속을 따른다.
+        다음 주기에 다시 불려 한 칸 더 좁힌다.
+        """
+        if self.orig_preferred is None or self.demand_now is None or self.ego is None:
             return
-        if self.demand_now == list(self.orig_preferred):
+        orig = list(self.orig_preferred)
+        if self.demand_now == orig:
             return
-        self.apply_demand(list(self.orig_preferred))
+        x, y, yaw, _ = self.ego
+        lid = self.omap.nearest_lanelet(x, y, yaw)
+        i = self.seg_index_of(lid) if lid is not None else None
+        if lid is None or i is None:
+            self.apply_demand(orig)          # 자차 위치를 못 잡으면 통째로 (기존 동작)
+            return
+        goal = orig[i]
+        if lid == goal:
+            self.apply_demand(orig)          # 이미 원래 차선 위 — 나머지도 원래대로
+            return
+        step = self.step_toward(lid, goal, i)
+        if step is None:
+            self.apply_demand(orig)          # 이웃 관계로 판단 불가 → 통째로
+            return
+        demand = list(orig)
+        self.follow_from(demand, i, step)
+        self.apply_demand(demand)
 
     def publish_state(self, **kw):
         try:
