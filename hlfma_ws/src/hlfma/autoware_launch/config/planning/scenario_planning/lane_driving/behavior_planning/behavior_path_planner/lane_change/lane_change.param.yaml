@@ -3,13 +3,19 @@
     lane_change:
       time_limit: 50.0 # [ms]
       backward_lane_length: 200.0
-      backward_length_buffer_for_end_of_lane: 3.0 # [m]
+      backward_length_buffer_for_end_of_lane: 1.0 # [m]  # HL FMA 9/8 [빠른 판단] 3.0 -> 1.0
       backward_length_buffer_for_blocking_object: 3.0 # [m]
       backward_length_from_intersection: 5.0 # [m]
       enable_stopped_vehicle_buffer: true
 
       # turn signal
-      min_length_for_turn_signal_activation: 10.0 # [m]
+      # HL FMA 9/8 [빠른 판단 기본값] 10.0 -> 200.0
+      #   calc_prepare_durations(): dist_to_terminal_start >= (base_link2front + 이 값) 이면
+      #   준비시간 후보를 **딱 하나만** 시도한다. 그게 안 맞으면 후보가 아예 안 나온다.
+      #   업스트림도 이 검사를 의심한다 — "TODO(Azu) this check seems to cause scenario failures."
+      #   크게 잡아 항상 4.0->0 s 를 0.5 s 씩 9개 샘플링하게 한다. 후보가 많아져 훨씬 일찍 성립한다.
+      #   부작용: 방향지시등이 더 일찍 켜진다(채점 항목 13 에는 유리). 되돌리려면 10.0
+      min_length_for_turn_signal_activation: 200.0 # [m]
 
       # terminal path
       terminal_path:
@@ -32,8 +38,10 @@
         max_longitudinal_acc: 0.5   # HL FMA 9/7 단독 재적용: 저속 차선변경 길이의 ½·a·t² 항이 지배적이라
         # (2m/s 에서 앞 두 항 13m + 이 항 9m) 이 값을 줄이면 저속 LC 가 크게 짧아져 우회 후 복귀가 가능해진다.
         # 앞서 안전 판정이 깨진 것은 min_values 1.0 과 동시 변경 탓으로 보고 이번엔 단독 적용해 확인한다.
-        th_prepare_length_diff: 1.0
-        th_lane_changing_length_diff: 1.0
+        # HL FMA 9/8 [빠른 판단] 1.0 -> 0.3. 후보 간 길이 차가 이보다 작으면 건너뛴다 —
+        # 크면 시도 후보가 성기어 해를 놓친다. 되돌리려면 1.0
+        th_prepare_length_diff: 0.3
+        th_lane_changing_length_diff: 0.3
         min_lane_changing_velocity: 2.78
         lon_acc_sampling_num: 5
         lat_acc_sampling_num: 3
@@ -138,15 +146,28 @@
         prediction_time_resolution: 0.5
         th_incoming_object_yaw: 2.3562 # [rad]
         yaw_diff_threshold: 3.1416 # [rad]
-        check_current_lanes: false
+        # HL FMA 9/8 [빠른 판단] false -> true (코드 구조체 기본값도 true 다).
+        #   get_target_objects(): 이 값이 false 면 **자차 차선의 객체를 안전검사에 넣지 않는다**.
+        #   그러면 준비 구간이 앞 정지차를 관통해도 모듈이 모른 채 후보를 채택하고,
+        #   그 뒤 motion_velocity 의 obstacle_stop 이 벽을 세워 기동 도중에 멈춰버린다
+        #   (실측 2026-09-08: A->B 기동이 15.6초 RUNNING 고착, rviz 에서 경로가 정지차를 관통).
+        #   true 로 두면 앞차를 뚫는 후보가 거부되므로, 더 짧은 준비(= 더 일찍 꺾는) 후보를
+        #   고르게 된다. min_length_for_turn_signal_activation 을 키워 준비시간을 여러 개
+        #   샘플링하게 한 것과 세트다. 되돌리려면 false.
+        check_current_lanes: true
         check_other_lanes: false
         use_all_predicted_paths: false
 
       # lane change regulations
       regulation:
+        # HL FMA 9/8 [빠른 판단] intersection·traffic_light off.
+        #   is_near_regulatory_element(): max_prepare_length(54.4m) > 규제요소까지 거리 이면
+        #   차선변경을 통째로 차단한다. 우리 경로는 끝이 신호 교차로이고 좌회전 포켓 진입은
+        #   그 54.4 m 안에서 일어나야 한다 — 목적이 정면으로 충돌한다.
+        #   횡단보도는 남긴다(보행자 관련, 채점 항목 10·12). 되돌리려면 셋 다 true.
         crosswalk: true
-        intersection: true
-        traffic_light: true
+        intersection: false
+        traffic_light: false
 
       # ego vehicle stuck detection
       stuck_detection:
@@ -164,7 +185,7 @@
         unsafe_hysteresis_threshold: 1      # [/] HL FMA 9/8: GT 인지라 연속 확인이 불필요. 되돌리려면 5
         deceleration_sampling_num: 1        # [/] Used to sample the approved lane change path, specifically for checking safety against leading objects.
 
-      lane_change_finish_judge_buffer: 2.0      # [m]
+      lane_change_finish_judge_buffer: 1.0      # [m]  # HL FMA 9/8 [빠른 판단] 2.0 -> 1.0 (n회당 가산)
       finish_judge_lateral_threshold: 0.1        # [m]
       finish_judge_lateral_angle_deviation: 1.0 # [deg]
 

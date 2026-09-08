@@ -95,7 +95,8 @@ class LanePlanner(Node):
             '/planning/scenario_planning/lane_driving/behavior_planning/'
             'behavior_path_planner/debug/internal_state',
             self.on_internal_state, 1)
-        self.orig_preferred = None   # 최초로 받은 루트의 preferred (복귀 기준)
+        self.orig_preferred = None   # 현재 루트의 원래 preferred (복귀 기준)
+        self.route_uuid = None       # 루트가 바뀌면 보관본을 새로 잡는다
         self.demand_now = None       # 지금 적용 중인 요구
         self.demand_pending = None   # 재라우팅 가용해질 때까지 대기 중인 요구
         # 진행 중인 한 수. 이걸 잡으면 끝날 때까지 요구를 바꾸지 않는다.
@@ -129,11 +130,26 @@ class LanePlanner(Node):
         self.lc_running = 'lane_change' in line
 
     def on_route(self, m):
+        """루트가 바뀌면(리스폰 재주입 포함) 보관본과 진행 상태를 전부 새로 잡는다.
+
+        리스폰이 나면 route_node 가 change_route_points 로 경로를 다시 넣는데, 자차 위치가
+        달라져 세그먼트 수도 달라진다. 예전에는 orig_preferred 를 최초 한 번만 저장해서,
+        재주입 뒤 모든 요구가
+          "The size of preferred_primitives (21) is different from that of the current route"
+        로 거부됐다 — 판단이 통째로 죽는다(2026-09-08 VTD 실주행에서 확인).
+        """
+        new_uuid = bytes(m.uuid.uuid)
+        changed = (self.route is None) or (new_uuid != self.route_uuid)
         self.route = m
         self.last_key = None
-        if self.orig_preferred is None:
+        if changed:
+            self.route_uuid = new_uuid
             self.orig_preferred = [sg.preferred_primitive.id for sg in m.segments]
-            self.get_logger().info(f'원래 경로 보관: preferred {len(self.orig_preferred)} 세그먼트')
+            self.demand_now = None
+            self.demand_pending = None
+            self.committed = None
+            self.get_logger().info(
+                f'경로 갱신 → 보관본 재설정: preferred {len(self.orig_preferred)} 세그먼트')
     def on_objs(self, m): self.objs = m
     def on_odom(self, m):
         p = m.pose.pose.position; q = m.pose.pose.orientation

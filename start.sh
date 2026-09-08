@@ -158,13 +158,16 @@ n.create_subscription(OperationModeState, '/api/operation_mode/state',
 def spin(sec):
     t = time.time()
     while rclpy.ok() and time.time() - t < sec:
-        rclpy.spin_once(n, timeout_sec=0.1)
+        rclpy.spin_once(n, timeout_sec=0.02)
+
+# 서비스 클라이언트를 미리 만들어 둔다 — 조건이 맞자마자 바로 쏘기 위해.
+cli = n.create_client(ChangeOperationMode, '/api/operation_mode/change_to_autonomous')
 
 # 경로 SET 대기 (최대 120s, 콜드부트 여유). RouteState: 2=SET, 3=ARRIVED
 print('[engage] 경로 SET 대기...')
 t0 = time.time(); last = -5.0
 while rclpy.ok() and time.time() - t0 < 120:
-    spin(0.5)
+    spin(0.05)
     if st['route'] == 2:
         break
     el = time.time() - t0
@@ -179,13 +182,12 @@ if st['route'] != 2:
 # 자율주행 가능 대기 (최대 60s)
 t0 = time.time()
 while rclpy.ok() and not st['avail'] and time.time() - t0 < 60:
-    spin(0.5)
+    spin(0.05)
 if not st['avail']:
     print('[engage] 자율주행 가능 상태가 아니다 — 그래도 요청한다(사유를 응답에서 본다).',
           file=sys.stderr)
 
 print(f"[engage] routing=SET, is_autonomous_mode_available={st['avail']} → 서비스콜")
-cli = n.create_client(ChangeOperationMode, '/api/operation_mode/change_to_autonomous')
 if not cli.wait_for_service(timeout_sec=10.0):
     print('[engage] change_to_autonomous 서비스가 없다', file=sys.stderr)
     sys.exit(1)
