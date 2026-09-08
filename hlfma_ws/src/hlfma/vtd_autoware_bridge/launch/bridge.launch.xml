@@ -36,7 +36,7 @@
 
 <!-- 차선 그래프 A* 계획기 (1단계: 계획만 로그, 발행 없음) -->
 
-<arg name="lane_plan" default="false"/>
+<arg name="lane_plan" default="true"/>
 
 <node pkg="vtd_autoware_bridge" exec="lane_planner" name="lane_planner"
 
