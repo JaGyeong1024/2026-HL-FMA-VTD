@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-export DETOUR=${DETOUR:-false}   # 묶음 1·3 단독 검증: 판단 노드 끔
 # 묶음 1 하네스: 정지·감속·재출발. usage: bash tools/harness/h1_stop_restart.sh [케이스…]  (기본: h1_* 전부)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; source "$(dirname "${BASH_SOURCE[0]}")/run_case.sh"
 cases=("$@"); [ ${#cases[@]} -eq 0 ] && cases=($(cd "$ROOT/tools/harness/cases" && ls h1_*.conf | sed 's/.conf$//'))

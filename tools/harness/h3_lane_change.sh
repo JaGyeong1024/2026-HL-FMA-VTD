@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-export DETOUR=${DETOUR:-false}   # 묶음 1·3 단독 검증: 판단 노드 끔
 # 묶음 3 하네스: 경로상 필수 차선변경. usage: bash tools/harness/h3_lane_change.sh [케이스…]  (기본: h3_* 전부)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; source "$(dirname "${BASH_SOURCE[0]}")/run_case.sh"
 cases=("$@"); [ ${#cases[@]} -eq 0 ] && cases=($(cd "$ROOT/tools/harness/cases" && ls h3_*.conf | sed 's/.conf$//'))

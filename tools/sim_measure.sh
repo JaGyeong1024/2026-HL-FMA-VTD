@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # 시뮬(VTD) 실주행 계측 — 시뮬 PC 는 건드리지 않고 제어기에서 연결·주행·기록만 한다.
 # usage: bash tools/sim_measure.sh <태그> [주행초=300]
-#   env: DOMAIN(기본 53, 다른 클론과 격리) DETOUR(기본 false) ROUTE(기본 route_config.yaml)
+#   env: DOMAIN(기본 53, 다른 클론과 격리) ROUTE(기본 route_config.yaml)
 # 산출: ~/hlfma/logs/sim/<태그>_<시각>/ — bag/(계측 토픽), autoware.log, bridge.log, ready.txt, engage.txt, meta.txt
 set -o pipefail
 TAG="${1:?태그를 지정하세요}"; RUN_SEC="${2:-300}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$HOME/hlfma/logs/sim/${TAG}_$(date +%m%d_%H%M%S)"; mkdir -p "$OUT"
 export ROS_DOMAIN_ID="${DOMAIN:-53}"
-export DETOUR="${DETOUR:-false}"
 export LANE_SEQ="${LANE_SEQ:-false}"
 export LANE_PLAN="${LANE_PLAN:-false}"
 source /opt/ros/jazzy/setup.bash; source "$ROOT/hlfma_ws/install/setup.bash"
 note() { echo "  $*" | tee -a "$OUT/result.txt"; }
-echo "== [$TAG] 로그: $OUT  (ROS_DOMAIN_ID=$ROS_DOMAIN_ID, DETOUR=$DETOUR, LANE_SEQ=$LANE_SEQ)" | tee -a "$OUT/result.txt"
+echo "== [$TAG] 로그: $OUT  (ROS_DOMAIN_ID=$ROS_DOMAIN_ID, LANE_SEQ=$LANE_SEQ)" | tee -a "$OUT/result.txt"
 
 # 1) 사전 확인 — VTD 연결·CSV·맵
 timeout 3 nc -z 192.168.50.11 9910 || { note "[중단] VTD 9910 미연결"; exit 1; }
@@ -21,7 +20,7 @@ ROUTE="${ROUTE:-$(sed -n 's/^csv_path:[[:space:]]*//p' "$HOME/hlfma/route/route_
 [ -f "$ROUTE" ] || { note "[중단] CSV 없음 $ROUTE"; exit 1; }
 pgrep -f "$ROOT/hlfma_ws/install/vtd_autoware_bridge" >/dev/null && { note "[중단] 이 디렉터리 스택이 이미 실행 중"; exit 1; }
 { echo "route=$ROUTE"; echo "git=$(git -C "$ROOT" rev-parse --short HEAD)"; echo "dirty=$(git -C "$ROOT" status --porcelain | wc -l)";
-  echo "map_md5=$(md5sum "$ROOT/map/lanelet2_map.osm" | cut -d' ' -f1)"; echo "domain=$ROS_DOMAIN_ID detour=$DETOUR run_sec=$RUN_SEC";
+  echo "map_md5=$(md5sum "$ROOT/map/lanelet2_map.osm" | cut -d' ' -f1)"; echo "domain=$ROS_DOMAIN_ID run_sec=$RUN_SEC";
   echo "start=$(date -Iseconds)"; } > "$OUT/meta.txt"
 note "route=$(basename "$ROUTE") git=$(git -C "$ROOT" rev-parse --short HEAD)"
 
@@ -78,7 +77,7 @@ TOPICS=(/localization/kinematic_state /planning/trajectory /control/command/cont
         /api/operation_mode/state /api/routing/state /system/emergency/hazard_status
         /api/fail_safe/mrm_state /vtd/respawn /vtd/raw_rx /rosout
         /planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/output/is_reroute_available)
-EXTRA=$(ros2 topic list 2>/dev/null | grep -E "planning_factors/|cooperate_status/|^/detour/|avoidance_debug_message_array|behavior_path_planner/debug/internal_state|behavior_path_planner/debug/static_obstacle_avoidance$" | tr '\n' ' ')
+EXTRA=$(ros2 topic list 2>/dev/null | grep -E "planning_factors/|cooperate_status/|avoidance_debug_message_array|behavior_path_planner/debug/internal_state|behavior_path_planner/debug/static_obstacle_avoidance$" | tr '\n' ' ')
 ros2 bag record --node-name "rec_${TAG}_$(date +%H%M%S)" -o "$OUT/bag" ${TOPICS[*]} $EXTRA \
     > "$OUT/bag_record.log" 2>&1 < /dev/null &
 BAG_PID=$!
