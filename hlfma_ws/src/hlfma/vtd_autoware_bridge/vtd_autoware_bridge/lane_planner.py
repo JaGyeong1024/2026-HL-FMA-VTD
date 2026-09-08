@@ -52,6 +52,9 @@ class LanePlanner(Node):
         osm = self.get_parameter('map_osm').value
         self.omap = OsmMap(osm, self.get_logger()) if osm else None
         self.lat_accel = float(self.get_parameter('lat_accel').value)
+        # 모듈의 준비시간 가정 [s]. 깜빡이 누적 전 1.0 s 로 보수적으로 본다(누적되면 0.5 s).
+        self.declare_parameter('lc_prepare_s', 1.0)
+        self.lc_prepare_s = float(self.get_parameter('lc_prepare_s').value)
         self.horizon = float(self.get_parameter('plan_horizon').value)
 
         self.route = None
@@ -199,7 +202,15 @@ class LanePlanner(Node):
         for idx, (i, lanes, ln) in enumerate(corr):
             for j, l in enumerate(lanes):
                 seg_of[l] = (idx, j, ln)
-        lc_len = max(9.0, v * 2.0 * math.sqrt(LAT_SHIFT / self.lat_accel))  # 하한 실측 8.88m
+        # 차선변경 1회에 필요한 종방향 길이. **모듈이 실제로 쓰는 값과 맞춰야 한다.**
+        #   모듈: 준비거리(prepare_duration x v) + 횡이동거리
+        #   준비시간은 깜빡이 누적으로 max_prepare_duration(4.0s) 에서 min(0.5s) 까지 줄어들고,
+        #   횡이동은 실측 7.6 m 로 일정했다([HLFMA-A], 2026-09-08).
+        #   이전 모델 v*2.0*sqrt(LAT_SHIFT/lat_accel) = 2.53v 는 v=13.9 에서 35 m 를 요구했는데
+        #   모듈의 실제 요구는 12 m 였다 — 3배 과대평가다. 그 탓에 "이 속도로는 안 된다"고
+        #   잘못 판단해 4.8 m/s 상한을 걸었고, 저속이 다시 기동을 늦추는 악순환이 됐다.
+        #   깜빡이가 아직 안 쌓인 초반을 감안해 준비시간을 1.0 s 로 보고 여유 3 m 를 둔다.
+        lc_len = max(9.0, self.lc_prepare_s * v + LAT_SHIFT * 2.4 + 3.0)
         lc_cells = max(1, int(math.ceil(lc_len / CELL)))
 
         def free(lid, c, t):
