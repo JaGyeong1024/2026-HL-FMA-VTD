@@ -1,0 +1,16 @@
+diff --git a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/path.cpp b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/path.cpp
+index b2ac257..5d440a7 100644
+--- a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/path.cpp
++++ b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/path.cpp
+@@ -512,7 +512,10 @@ LaneChangePath construct_candidate_path(
+     throw std::logic_error("Intersect no lane change lines.");
+   }
+ 
+-  constexpr auto yaw_diff_th = autoware_utils::deg2rad(5.0);
++  // HL FMA 9/8 실험B: 5도는 속도와 무관한 고정값이라 저속 회피에서 지나치게 보수적이다.
++  // 3.0m 차로를 5도로 건너려면 직선 34m, S자 68m 가 필요해 정체 우회 구간에 들어가지 않는다.
++  // 20도면 직선 8.2m, S자 약 16m. 차량 최대 조향각 0.48rad(27.5도, 회전반경 5.65m) 안이다.
++  constexpr auto yaw_diff_th = autoware_utils::deg2rad(20.0);
+   if (
+     const auto yaw_diff_opt =
+       exceed_yaw_threshold(prepare_segment, shifted_path.path, yaw_diff_th)) {
