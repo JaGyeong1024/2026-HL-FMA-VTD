@@ -297,6 +297,22 @@ std::vector<double> calc_shift_intervals(
 
   auto intervals = route_handler_ptr->getLateralIntervalsToPreferredLane(lanes.back(), direction);
 
+  // HL FMA 9/8: back() 하나만 보면 '목표 차선에서 멀어졌다가 돌아오는' 우회를 표현할 수 없다.
+  //   차선열 끝의 preferred 가 좌회전 포켓(왼쪽)이면, 우측 방향은 오른쪽으로 아무리 걸어도
+  //   preferred 를 못 만나 빈 벡터가 되고 필요 길이가 DBL_MAX 가 되어 후보가 전멸한다
+  //   (실측 h4_lc_only_0908: preferred 를 B 로 바꿔도 dir=2 가 계속 무한대).
+  //   그래서 back() 이 비면 자차 쪽으로 되짚어 오며 첫 유효 구간을 쓴다. back() 이 유효하면
+  //   기존과 동일하게 동작한다. 되돌리려면 이 블록을 지우면 된다.
+  if (intervals.empty() && lanes.size() > 1) {
+    for (auto it = std::next(lanes.rbegin()); it != lanes.rend(); ++it) {
+      auto near_intervals = route_handler_ptr->getLateralIntervalsToPreferredLane(*it, direction);
+      if (!near_intervals.empty()) {
+        intervals = std::move(near_intervals);
+        break;
+      }
+    }
+  }
+
   // HL FMA P1: on the preferred lane the intervals are empty (nothing to reach), which makes the
   // minimum lane change length infinite and suppresses every candidate. An external request wants
   // to leave the preferred lane, so use the lateral offset to the requested-side neighbor instead.

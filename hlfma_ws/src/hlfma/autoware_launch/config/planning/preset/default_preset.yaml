@@ -8,7 +8,7 @@ launch:
   # behavior path modules
   - arg:
       name: launch_static_obstacle_avoidance
-      default: "true"    # HL FMA 9/8: 다시 켠다. 정지차를 실제로 비켜간 유일한 모듈이다(횡 -2.71 m 실측).
+      default: "false"    # HL FMA 9/8: 다시 켠다. 정지차를 실제로 비켜간 유일한 모듈이다(횡 -2.71 m 실측).
       #   끈 이유는 기능이 아니라 중재였다 — slot2 우선순위가 lane_change 위이고
       #   candidate 동시실행이 false 라 lane_change_* 를 후보에서 축출했다.
       #   그래서 scene_module_manager.param.yaml 에서 우선순위를 lane_change 아래로 내리고
