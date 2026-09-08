@@ -2,7 +2,7 @@
 # 주행 기록: VTD 이더넷 원본(pcap) + 네트워크 상태 + 실행 로그를 한 폴더에 모은다. (bag 은 선택)
 #
 # 사용:  ./record.sh [태그]     → <repo>/test/<YYYYMMDD_HHMMSS>[_태그]/
-#        Ctrl+C 로 종료. 시작 전에 ./start_autonomous.sh 가 떠 있어야 로그가 복사된다.
+#        Ctrl+C 로 종료. 시작 전에 ./start.sh 가 떠 있어야 로그가 복사된다.
 #        기본으로 ros2 bag 에 /vtd/raw_rx /vtd/raw_tx 도 기록한다.
 #        BAG=0 ./record.sh      → bag 없이 pcap·네트워크·로그만
 #        ALL=1 ./record.sh      → bag 에 전 토픽 기록 (용량 큼, 타이밍 문제 증거 보존용)
@@ -14,7 +14,7 @@
 #   net/start.txt end.txt   ip addr/route/link 통계, ethtool, ss -tnpi, nstat, ping
 #   net/ss_vtd.log          VTD TCP 소켓 rtt/retrans/cwnd 1초 샘플링
 #   logs/           bridge.log autoware.log ros/(노드별 로그·launch.log) record.log
-#   meta.txt        시각·호스트·git rev·ROS 환경·start_autonomous.sh 실행 정보(run_latest.env)
+#   meta.txt        시각·호스트·git rev·ROS 환경·start.sh 실행 정보(run_latest.env)
 #   bag/            /vtd/raw_rx /vtd/raw_tx (ALL=1 이면 전 토픽, BAG=0 이면 없음)
 set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,14 +32,14 @@ LOG="$OUT/logs/record.log"
 log() { echo "[record $(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 log "→ $OUT   (Ctrl+C 로 종료)"
 
-# ── 실행 정보 (start_autonomous.sh 가 남긴 매니페스트) ─────────────
+# ── 실행 정보 (start.sh 가 남긴 매니페스트) ─────────────
 RUN_ENV="$HOME/hlfma/logs/run_latest.env"
 VTD_HOST=192.168.50.11; BRIDGE_LOG=""; AW_LOG=""; ROS_LOG_DIR_RUN=""
 if [ -f "$RUN_ENV" ]; then
   # shellcheck disable=SC1090
   source "$RUN_ENV"; ROS_LOG_DIR_RUN="$ROS_LOG_DIR"
 else
-  log "경고: $RUN_ENV 없음 — start_autonomous.sh 가 안 떠 있거나 구버전. 로그 복사 생략"
+  log "경고: $RUN_ENV 없음 — start.sh 가 안 떠 있거나 구버전. 로그 복사 생략"
 fi
 {
   echo "record_start=$(date -Is)"; echo "host=$(hostname)"; echo "user=$USER"
