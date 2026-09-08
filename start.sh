@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# HL FMA — 한 번에 기동+출발: 브리지 + Autoware 기동 후 경로 SET·자율주행 가능 확인 → engage (start_hlfma.sh 호출)
+# HL FMA — 기동부터 출발까지 한 번에.
+#   브리지 + Autoware 기동 → 경로 주입 → 경로 SET 대기 → 자율주행 가능 대기 → engage 서비스콜
 #
 # usage:
-#   ./start_autonomous.sh                     # 실기: VTD 192.168.50.11 (대회장·연구실 동일 IP)
-#   ./start_autonomous.sh mock                # 시뮬 PC 없이: 별도 터미널에서 python3 mock_vtd.py 를 먼저 띄울 것
-#   ./start_autonomous.sh psim                # Autoware 내장 planning_simulator (브리지 없음, 맵·플래닝만)
-#   ./start_autonomous.sh <host>              # 다른 VTD 호스트
+#   ./start.sh                     # 실기: VTD 192.168.50.11 (대회장·연구실 동일 IP)
+#   ./start.sh mock                # 시뮬 PC 없이: 별도 터미널에서 python3 mock_vtd.py 를 먼저 띄울 것
+#   ./start.sh psim                # Autoware 내장 planning_simulator (브리지 없음, 맵·플래닝만)
+#   ./start.sh <host>              # 다른 VTD 호스트
 #
-#   기본 흐름:  터미널1 ./start_autonomous.sh  (기동 → 경로 SET → engage 까지 자동. rviz 는 별도 터미널 ./rviz.sh)
-#   수동 출발:  ENGAGE=false ./start_autonomous.sh  →  확인 후 터미널2 ./start_hlfma.sh
+#   기본 흐름:  터미널1 ./start.sh  (기동 → 경로 SET → engage 까지 자동. rviz 는 별도 터미널 ./rviz.sh)
+#   기동만:     ENGAGE=false ./start.sh
 #
 # 환경변수 (선택):
-#   ENGAGE=false                   기동만 하고 출발(engage)은 사람이 ./start_hlfma.sh 로 (기본 true)
+#   ENGAGE=false                   기동만 하고 출발은 사람이 (기본 true)
+#   LANE_PLAN=true                 판단 노드(lane_planner) 기동 — 정지차 회피에 필요 (기본 false)
 #   ROUTE_CSV=/path/to/route.csv   경로 자동 주입 (route_node). 기본: $HOME/hlfma/route/route_config.yaml 의 csv_path
 #   ROUTE_CSV=none                 경로 주입 안 함 (rviz 2D Goal Pose 수동)
 #   AUTO_ENGAGE=true               (구) route_node 가 SET 직후 즉시 engage. 자율주행 가능 여부를 안 기다리므로 기본 false 유지
@@ -133,12 +135,77 @@ setsid ros2 launch autoware_launch autoware.launch.xml \
 AW_PID=$!
 echo "[autoware] log=$AW_LOG  ros_log_dir=$ROS_LOG_DIR"
 
-# 출발: 경로 SET → 자율주행 가능 → engage. 실패하면 로그에 남고 Autoware 는 계속 떠 있음(수동 ./start_hlfma.sh 가능)
+# 출발: 경로 SET → 자율주행 가능 → engage.
+# 실패해도 Autoware 는 계속 떠 있다(로그 확인 후 수동 서비스콜 가능).
 if [ "${ENGAGE:-true}" != "false" ]; then
   ENGAGE_LOG="$HOME/hlfma/logs/engage_${RUN_TS}.log"
-  ( "$ROOT/start_hlfma.sh" 2>&1 | tee "$ENGAGE_LOG" ) &
+  ( python3 - <<'PY' 2>&1 | tee "$ENGAGE_LOG"
+import sys, time, rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from autoware_adapi_v1_msgs.msg import RouteState, OperationModeState
+from autoware_adapi_v1_msgs.srv import ChangeOperationMode
+
+rclpy.init(); n = Node('start_engage')
+latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                     durability=DurabilityPolicy.TRANSIENT_LOCAL)
+st = {'route': None, 'avail': None, 'mode': None}
+n.create_subscription(RouteState, '/api/routing/state',
+                      lambda m: st.update(route=m.state), latched)
+n.create_subscription(OperationModeState, '/api/operation_mode/state',
+                      lambda m: st.update(avail=m.is_autonomous_mode_available, mode=m.mode), latched)
+
+def spin(sec):
+    t = time.time()
+    while rclpy.ok() and time.time() - t < sec:
+        rclpy.spin_once(n, timeout_sec=0.1)
+
+# 경로 SET 대기 (최대 120s, 콜드부트 여유). RouteState: 2=SET, 3=ARRIVED
+print('[engage] 경로 SET 대기...')
+t0 = time.time(); last = -5.0
+while rclpy.ok() and time.time() - t0 < 120:
+    spin(0.5)
+    if st['route'] == 2:
+        break
+    el = time.time() - t0
+    if el - last >= 5:
+        last = el
+        print(f"  t={el:.0f}s routing={st['route']} avail={st['avail']} (2=SET)")
+if st['route'] != 2:
+    print(f"[engage] 경로가 SET(2) 이 아님: state={st['route']}. 브리지 로그를 확인하세요.",
+          file=sys.stderr)
+    sys.exit(1)
+
+# 자율주행 가능 대기 (최대 60s)
+t0 = time.time()
+while rclpy.ok() and not st['avail'] and time.time() - t0 < 60:
+    spin(0.5)
+if not st['avail']:
+    print('[engage] 자율주행 가능 상태가 아니다 — 그래도 요청한다(사유를 응답에서 본다).',
+          file=sys.stderr)
+
+print(f"[engage] routing=SET, is_autonomous_mode_available={st['avail']} → 서비스콜")
+cli = n.create_client(ChangeOperationMode, '/api/operation_mode/change_to_autonomous')
+if not cli.wait_for_service(timeout_sec=10.0):
+    print('[engage] change_to_autonomous 서비스가 없다', file=sys.stderr)
+    sys.exit(1)
+fut = cli.call_async(ChangeOperationMode.Request())
+t0 = time.time()
+while rclpy.ok() and not fut.done() and time.time() - t0 < 15:
+    rclpy.spin_once(n, timeout_sec=0.1)
+r = fut.result()
+if r is None:
+    print('[engage] 서비스 응답 없음', file=sys.stderr)
+    sys.exit(1)
+print(f"[engage] success={r.status.success} code={r.status.code} '{r.status.message}'")
+spin(3)
+print(f"[engage] operation mode={st['mode']} (2=AUTONOMOUS)")
+print('[engage] 정지: ./stop.sh')
+n.destroy_node(); rclpy.shutdown()
+PY
+  ) &
   echo "[engage] 자동 출발 대기 중 (log=$ENGAGE_LOG). 취소: ENGAGE=false 로 재기동"
 else
-  echo "[engage] ENGAGE=false — 출발은 ./start_hlfma.sh 로"
+  echo "[engage] ENGAGE=false — 기동만 함. 출발은 수동 서비스콜로."
 fi
 wait "$AW_PID"

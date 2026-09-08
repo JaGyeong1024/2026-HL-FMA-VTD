@@ -26,7 +26,7 @@ note "route=$(basename "$ROUTE") git=$(git -C "$ROOT" rev-parse --short HEAD)"
 
 # 2) 스택 기동 (engage 는 사람이 아니라 이 스크립트가, 준비 확인 후)
 cd "$ROOT"
-ENGAGE=false ROUTE_CSV="$ROUTE" ./start_autonomous.sh > "$OUT/autoware.log" 2>&1 < /dev/null &
+ENGAGE=false ROUTE_CSV="$ROUTE" ./start.sh > "$OUT/autoware.log" 2>&1 < /dev/null &
 STACK_PID=$!
 cleanup() {
   trap - EXIT INT TERM

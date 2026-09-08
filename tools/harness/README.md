@@ -1,7 +1,7 @@
 # tools/harness — 수정 단위별 E2E 하네스 (시뮬 PC 없이, mock VTD 기반)
 
 구성 (원커맨드 마법 없음: 설정 파일 + 독립 단계)
-- `lib.sh`      공통 단계: 로그 디렉터리, mock 기동, 스택 기동(start_autonomous.sh mock), 준비 대기, engage, 캡처, 종료
+- `lib.sh`      공통 단계: 로그 디렉터리, mock 기동, 스택 기동(start.sh mock), 준비 대기, engage, 캡처, 종료
 - `place.py`    경로 CSV 기준으로 "시작점 전방 D m·횡 L m" 객체를 절대 좌표(mock `--obj-abs`)로 변환. 첫 정지선 거리 계산
 - `metrics.py`  mock trace CSV(스텝 단위)에서 정지거리·최대감속·재출발 시간·이동객체 최소거리·lanelet 열(차선변경) 계산
 - `cases/*.conf` 케이스 설정 (bash 로 source). ROUTE / MOCK_ARGS / RUN_SEC / 기대치

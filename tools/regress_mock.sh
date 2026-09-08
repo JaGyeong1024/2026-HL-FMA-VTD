@@ -22,7 +22,7 @@ export LD_LIBRARY_PATH="$HOME/acados/lib:${LD_LIBRARY_PATH:-}"
 pass=0; fail=0
 check() { if [ "$2" = "1" ]; then echo "  [PASS] $1"; pass=$((pass+1)); else echo "  [FAIL] $1"; fail=$((fail+1)); fi; }
 cleanup() {
-  # start_autonomous.sh 의 종료 훅이 자기 프로세스 그룹만 정리한다 (다른 클론 스택은 안 건드림)
+  # start.sh 의 종료 훅이 자기 프로세스 그룹만 정리한다 (다른 클론 스택은 안 건드림)
   kill -INT $AW_PID 2>/dev/null; for i in $(seq 1 30); do kill -0 $AW_PID 2>/dev/null || break; sleep 0.5; done
   kill -9 $AW_PID 2>/dev/null; kill $MOCK_PID 2>/dev/null
 }
@@ -37,7 +37,7 @@ sleep 1
 
 echo "== Autoware + 브리지 기동 (rviz 없음, route=$ROUTE) =="
 cd "$ROOT"
-RVIZ=false ROUTE_CSV="$ROUTE" AUTO_ENGAGE=false ./start_autonomous.sh mock > "$OUT/autoware.log" 2>&1 &
+RVIZ=false ROUTE_CSV="$ROUTE" AUTO_ENGAGE=false ./start.sh mock > "$OUT/autoware.log" 2>&1 &
 AW_PID=$!
 echo "  노드 안정화 대기 90s"; sleep 90
 

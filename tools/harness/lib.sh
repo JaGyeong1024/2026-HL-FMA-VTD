@@ -25,7 +25,7 @@ mock_start() {              # $@ = mock_vtd.py 인자. trace 는 자동
 stack_start() {             # $1=route csv. engage 는 하지 않음(ENGAGE=false). 스크립트를 직접 백그라운드로 (서브셸 금지: pid 가 스크립트여야 INT 로 정리 훅이 돈다)
   ROUTE="$1"
   pushd "$ROOT" > /dev/null
-  ENGAGE=false ROUTE_CSV="$ROUTE" ./start_autonomous.sh mock > "$OUT/autoware.log" 2>&1 < /dev/null &
+  ENGAGE=false ROUTE_CSV="$ROUTE" ./start.sh mock > "$OUT/autoware.log" 2>&1 < /dev/null &
   STACK_PID=$!; popd > /dev/null
   echo "$STACK_PID" > "$OUT/stack.pid"; note "stack pid $STACK_PID route=$ROUTE"
 }
