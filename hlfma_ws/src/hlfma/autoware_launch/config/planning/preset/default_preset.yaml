@@ -8,12 +8,15 @@ launch:
   # behavior path modules
   - arg:
       name: launch_static_obstacle_avoidance
-      default: "false"    # HL FMA 9/8: 다시 켠다. 정지차를 실제로 비켜간 유일한 모듈이다(횡 -2.71 m 실측).
-      #   끈 이유는 기능이 아니라 중재였다 — slot2 우선순위가 lane_change 위이고
-      #   candidate 동시실행이 false 라 lane_change_* 를 후보에서 축출했다.
-      #   그래서 scene_module_manager.param.yaml 에서 우선순위를 lane_change 아래로 내리고
-      #   candidate 동시실행을 열었다. 역할 분담: avoidance=정지차 비켜가기, lane_change_left=포켓 진입.
-      #   되돌리려면 "false".
+      default: "false"    # HL FMA 9/8 최종: 끈 채로 간다. 회피는 lane_change 로만 한다.
+      #   이 모듈로도 회피는 되지만(횡 -2.71 m 실측) 라우팅 그래프를 안 보므로 실선을 넘는다
+      #   — 채점 항목 6(실선 차로변경) -3. 실측으로 15719|15750(solid) 을 넘었다.
+      #   lane_change 는 실선을 넘지 않고 방향지시등도 정상이라 그쪽으로 간다.
+      #   다시 켜려면 "true". 그때는 아래 파라미터들이 함께 살아난다:
+      #     target_object.*.longitudinal_margin 15.0 / max_right_shift_length 8.0 /
+      #     return_dead_line.traffic_light false / ambiguous·parking policy auto
+      #   또한 scene_module_manager 의 slot2 우선순위(lane_change 아래)와 candidate 동시실행 true 가
+      #   반드시 함께여야 한다 — 위에 두면 lane_change_* 를 후보에서 축출한다(실측 0.7초).
 
   - arg:
       name: launch_avoidance_by_lane_change_module
