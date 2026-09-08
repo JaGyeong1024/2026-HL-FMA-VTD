@@ -303,7 +303,17 @@ std::vector<double> calc_shift_intervals(
   //   (실측 h4_lc_only_0908: preferred 를 B 로 바꿔도 dir=2 가 계속 무한대).
   //   그래서 back() 이 비면 자차 쪽으로 되짚어 오며 첫 유효 구간을 쓴다. back() 이 유효하면
   //   기존과 동일하게 동작한다. 되돌리려면 이 블록을 지우면 된다.
-  if (intervals.empty() && lanes.size() > 1) {
+  //   가드: back() 이 이미 preferred 면 '변경이 필요 없어서' 빈 구간이 나온 것이다. 그 경우에 되짚어
+  //   가면 앞쪽 세그먼트에서 없는 요구를 주워 불필요한 차선변경을 만들 수 있다.
+  //   preferred 가 반대 방향이라 빈 경우에만 폴백한다.
+  const auto back_is_preferred = [&]() {
+    const auto preferred = route_handler_ptr->getPreferredLanelets();
+    return std::any_of(preferred.begin(), preferred.end(), [&](const auto & l) {
+      return l.id() == lanes.back().id();
+    });
+  };
+
+  if (intervals.empty() && lanes.size() > 1 && !back_is_preferred()) {
     for (auto it = std::next(lanes.rbegin()); it != lanes.rend(); ++it) {
       auto near_intervals = route_handler_ptr->getLateralIntervalsToPreferredLane(*it, direction);
       if (!near_intervals.empty()) {

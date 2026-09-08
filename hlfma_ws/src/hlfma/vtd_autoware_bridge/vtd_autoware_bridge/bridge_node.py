@@ -167,6 +167,14 @@ class VtdAutowareBridge(Node):
         self.prev = None
         self.vx_f = self.wz_f = self.ax_f = self.prev_vx = 0.0
         self.max_plausible_speed = 30.0   # [m/s] 이보다 크면 추정 이상으로 보고 버린다
+        # [m/s^2] 한 스텝의 속도 변화 한계. dt 가 패킷 '도착 시각' 기반이라 도착이 몰리면
+        # (누락 뒤 2배 이동 ÷ 짧은 dt) 로 과대 속도가 나온다 — 실측(9/8): pose 가 약 4개마다
+        # 하나씩 규칙적으로 누락되고 그때 55~60 km/h 스파이크가 0.2~0.6초 지속됐다.
+        # 차량 한계는 common.param.yaml limit 의 max_acc 2.0 / min_acc -4.0 이므로 여유를 둬 6.0.
+        self.max_accel_step = 6.0
+        # 리스폰 리셋 직후 한 샘플은 위 제한을 건너뛴다. 리셋으로 추정이 0 이 됐는데 차는
+        # 실제로 움직이는 경우, 제한이 걸리면 재획득이 0.3 m/s 씩만 되어 느려진다.
+        self.vel_reacquire = True
         self.steer_rep = 0.0
         self.last_pose = None          # (x, y, z, yaw) 더미 인지·로그용
         self.obj_hist = {}             # id -> (t, x, y, heading, speed)
@@ -249,6 +257,7 @@ class VtdAutowareBridge(Node):
             if jump > self.jump_reset_dist:
                 self.get_logger().warning(f'위치 점프 {jump:.1f}m → 리스폰 판정, 추정기 리셋')
                 self.vx_f = self.wz_f = self.ax_f = self.prev_vx = 0.0
+                self.vel_reacquire = True
                 self.obj_hist.clear()
                 self.obj_accel.clear()
                 self.flash = {'lanelet': None, 'stopped_since': None, 'go': False}
@@ -264,6 +273,17 @@ class VtdAutowareBridge(Node):
                     self.get_logger().warning(
                         f'속도 추정 이상 {v:.1f} m/s (dt={dt*1000:.1f}ms) → 무시')
                     v = self.vx_f
+                # 물리적으로 가능한 가속으로 제한. 위 max_plausible_speed 는 극단값만 걸러
+                # 60 km/h 대 스파이크는 그대로 통과했다(30 m/s = 108 km/h).
+                step = self.max_accel_step * dt
+                v_clamped = v if self.vel_reacquire \
+                    else min(max(v, self.vx_f - step), self.vx_f + step)
+                self.vel_reacquire = False
+                if abs(v_clamped - v) > 0.5:
+                    self.get_logger().warning(
+                        f'속도 변화 제한 {v:.1f}→{v_clamped:.1f} m/s '
+                        f'(dt={dt*1000:.1f}ms, 한계 {step:.2f} m/s)', throttle_duration_sec=2.0)
+                v = v_clamped
                 a = 0.35
                 self.vx_f += a * (v - self.vx_f)
                 self.wz_f += a * (wrap(st.heading - self.prev[3]) / dt - self.wz_f)
