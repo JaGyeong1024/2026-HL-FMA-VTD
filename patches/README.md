@@ -79,7 +79,12 @@ sudo ldconfig
   3.0 m 차로를 5도 이내로 건너려면 직선 34 m, S자 약 69 m 가 필요하다.
   속도와 무관한 고정 상수라 저속 회피에서 지나치게 보수적이다.
   차량 실제 한계는 `max_steer_angle 0.48 rad`(27.5도, 회전반경 5.65 m)로 여유가 크다.
-- 변경: 5.0 → 20.0 도.
+- 변경: 고정값을 **속도 비례**로 교체했다.
+    R_geom = wheel_base / tan(max_steer_angle)        (저속: 조향각 한계, 5.65 m)
+    R_dyn  = v^2 / a_lat_max                          (고속: 횡가속도 한계)
+    yaw_th = clamp(input_path_interval / max(R_geom, R_dyn), 1도, interval/R_geom)
+  속도별 상한: 2.6 m/s 이하 20.3도 / 5.2 m/s 5.1도 / 8.8 m/s 1.8도 / 11.5 m/s 1.0도
+  원래 고정 5도는 약 5.2 m/s 기준값이었다.
 - 검증: `Excessive yaw difference` 거부 0건. 다른 파라미터(lat_acc 하한 상향)와 함께
   실주행 횡변위 0.21 m → 1.17 m 로 개선 확인 (2026-09-08).
 - 남은 과제: 속도 비례로 바꾸는 것이 정석이다.
