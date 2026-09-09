@@ -247,6 +247,22 @@ class BlockedRouteDetour(Node):
         self.clear_pub.publish(msg)
         self.limit_active = False
 
+    def regulatory_ahead_m(self):
+        """다음 규제요소(신호등/교차로/횡단보도/정지선)까지 최단 거리. 없으면 None.
+
+        HL FMA 9/10 계측용. 우회를 시작할 때 '복귀할 자리가 남았는가'를 판단하려면
+        종점까지 거리가 필요하다. 지금은 기록만 하고 판단에는 쓰지 않는다.
+        """
+        best = None
+        for message in self.regulatory_factors.values():
+            for factor in getattr(message, 'factors', []) or []:
+                d = getattr(factor, 'distance', None)
+                if d is None or d < 0.0:
+                    continue
+                if best is None or d < best:
+                    best = d
+        return best
+
     def safe_choices(self, keys, blocker=None):
         now = time.monotonic()
         choices = []
@@ -321,7 +337,23 @@ class BlockedRouteDetour(Node):
             choices = self.safe_choices(('left', 'right'), b)
         if not choices:
             return
-        clear, key, st = max(choices, key=lambda x: x[0])
+        # HL FMA 9/10: 우회 방향을 '여유가 가장 큰 쪽'이 아니라 '노선이 요구하는 쪽'을
+        #   우선으로 고른다. 반대쪽으로 우회하면 우회 거리와 복귀 거리가 더해져 종점 전에
+        #   돌아오지 못한다(0910_065425 실측: 우회 시작 시점 가용 100.6m, 우회에 64m,
+        #   복귀 3홉에 39~48m 필요 -> 3홉을 활주로 6.1m 남기고 시작해 후보가 안 나옴).
+        #   노선이 요구하는 방향은 route_left / route_right 후보 중 살아 있는 쪽이다.
+        #   같은 쪽 후보가 안전 조건을 이미 통과한 경우에만 우선하므로, 그쪽이 막혀 있으면
+        #   기존대로 여유가 큰 쪽으로 간다. 되돌리려면 route_dir/preferred 블록을 지운다.
+        route_dir = None
+        for side in ('left', 'right'):
+            if self.fresh('status_route_' + side, now) and self.status.get('route_' + side):
+                route_dir = side
+                break
+        preferred = [c for c in choices if route_dir is not None and c[1] == route_dir]
+        if preferred:
+            self.get_logger().info(
+                f'DETOUR 방향 선호: 노선이 {route_dir} 을 요구하므로 그쪽으로 우회한다')
+        clear, key, st = max(preferred or choices, key=lambda x: x[0])
         cli = self.rtc_clients[key]
         if not cli.service_is_ready():
             return
