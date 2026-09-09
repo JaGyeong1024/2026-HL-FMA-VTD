@@ -32,6 +32,7 @@
 #include <limits>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -718,6 +719,20 @@ std::optional<size_t> getOverlappedLaneletId(const std::vector<DrivableLanes> & 
         continue;
       }
       if (overlaps(lanes.at(i), lanes.at(j))) {
+        // HL FMA 9/10 계측: 어떤 entry 쌍이 순환으로 판정됐는지 남긴다. 원인 파악용.
+        auto clock{rclcpp::Clock{RCL_ROS_TIME}};
+        std::stringstream ss;
+        ss << "DA_CUT i=" << i << " j=" << j << " n=" << lanes.size() << " ids_i=[";
+        for (const auto id : entry_ids.at(i)) ss << id << ",";
+        ss << "] ids_j=[";
+        for (const auto id : entry_ids.at(j)) ss << id << ",";
+        ss << "] shared=" << (std::any_of(
+                                entry_ids.at(i).begin(), entry_ids.at(i).end(),
+                                [&](const auto id) { return entry_ids.at(j).count(id) > 0; })
+                                ? "yes"
+                                : "no");
+        RCLCPP_WARN_STREAM_THROTTLE(
+          rclcpp::get_logger("behavior_path_planner").get_child("utils"), clock, 500, ss.str());
         return j;
       }
     }
@@ -732,6 +747,15 @@ std::vector<DrivableLanes> cutOverlappedLanes(
   const auto overlapped_lanelet_idx = getOverlappedLaneletId(lanes);
   if (!overlapped_lanelet_idx) {
     return lanes;
+  }
+
+  {
+    // HL FMA 9/10 계측: 주행가능영역과 경로가 함께 잘리는 순간을 기록한다.
+    auto clock{rclcpp::Clock{RCL_ROS_TIME}};
+    RCLCPP_WARN_STREAM_THROTTLE(
+      rclcpp::get_logger("behavior_path_planner").get_child("utils"), clock, 500,
+      "DA_TRUNC lanes " << lanes.size() << " -> " << *overlapped_lanelet_idx << ", path points "
+                        << path.points.size());
   }
 
   std::vector<DrivableLanes> shorten_lanes{lanes.begin(), lanes.begin() + *overlapped_lanelet_idx};
