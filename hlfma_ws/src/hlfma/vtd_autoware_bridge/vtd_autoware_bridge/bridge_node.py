@@ -194,7 +194,7 @@ class VtdAutowareBridge(Node):
         self.rx_thread.start()
 
         self.create_timer(1.0 / float(g('ctrl_rate_hz')), self.tx_tick)
-        self.create_timer(1.0, self.init_state_tick)
+        self.create_timer(0.2, self.init_state_tick)
         self.create_timer(float(g('report_period')), self.report_tick)
         self.get_logger().info(f'브리지 시작: VTD {self.host}:{self.port}, state4_go={self.state4_go}, '
                                f'ego_z={"0" if self.ego_z_zero else "raw"}')

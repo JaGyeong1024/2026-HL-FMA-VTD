@@ -22,6 +22,7 @@ setup(
             'bridge_node = vtd_autoware_bridge.bridge_node:main',
             'route_node = vtd_autoware_bridge.route_node:main',
             'lane_planner = vtd_autoware_bridge.lane_planner:main',
+            'blocked_route_detour = vtd_autoware_bridge.blocked_route_detour:main',
         ],
     },
 )
