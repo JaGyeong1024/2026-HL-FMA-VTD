@@ -24,7 +24,9 @@
 
     # constraints to be observed
     limit:
-      min_acc: -4.0         # min deceleration limit [m/ss] (HL FMA 9/4: 보행자 급출현 -2.5로는 정지거리 32.2m > 가용 30.3m. 패킷 한계 -6.0)
+      # HL FMA 9/10: 비상 경로가 -5.5 를 내므로 한계를 패킷 상한(-6.0)까지 연다.
+      #   normal.min_acc(-1.0)은 그대로 — 평상 주행은 부드럽게, 비상시에만 밟는다.
+      min_acc: -6.0         # min deceleration limit [m/ss] (HL FMA 9/4: 보행자 급출현 -2.5로는 정지거리 32.2m > 가용 30.3m. 패킷 한계 -6.0)
       max_acc: 1.0          # max acceleration limit [m/ss]
       min_jerk: -1.5        # min jerk limit [m/sss]
       max_jerk: 1.5         # max jerk limit [m/sss]
