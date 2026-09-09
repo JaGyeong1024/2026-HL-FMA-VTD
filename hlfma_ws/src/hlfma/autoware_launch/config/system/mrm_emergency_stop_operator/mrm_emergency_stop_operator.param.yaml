@@ -1,5 +1,7 @@
 /**:
   ros__parameters:
     update_rate: 30
-    target_acceleration: -2.5
-    target_jerk: -1.5
+    # HL FMA 9/10: MRM 비상정지도 풀 브레이크로 (gate emergency_acceleration 과 세트).
+    #   되돌리려면 -2.5 / -1.5
+    target_acceleration: -5.5
+    target_jerk: -5.0
