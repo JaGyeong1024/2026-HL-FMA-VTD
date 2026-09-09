@@ -311,6 +311,12 @@ protected:
   mutable std::optional<rclcpp::Time> signal_activation_time_{std::nullopt};
 
   rclcpp::Logger logger_ = utils::lane_change::getLogger(getModuleTypeStr());
+  // HL FMA 9/10: 한 사이클 후보 생성 실패로 진행 중인 차선변경 출력을 버리지 않도록
+  //   마지막으로 유효했던 출력을 보관한다. 시간 상한과 자차 이탈 검사로 낡은 경로를
+  //   계속 따라가지 않게 한다. 되돌리려면 이 두 멤버를 지운다.
+  BehaviorModuleOutput last_valid_output_{};
+  std::optional<rclcpp::Time> last_valid_output_time_{};
+
   mutable rclcpp::Clock clock_{RCL_ROS_TIME};
 
   mutable std::shared_ptr<autoware_utils::TimeKeeper> time_keeper_;
