@@ -40,6 +40,25 @@ def _pt(p):
     return p.pose, getattr(p, 'longitudinal_velocity_mps', 0.0), []
 
 
+HALF_W = 0.943   # 아이오닉6 차폭 1.886 / 2
+
+def ego_clearance(msg, ego):
+    """자차 중심 -> 좌/우 주행가능 경계 최단거리 [m].
+    HALF_W(0.943) 보다 작으면 차체가 경계를 물고 있다.
+    차선변경 완료 판정이 '자차 중심점'만 보므로(scene.cpp has_passed_end_pose),
+    풋프린트가 아직 원래 차선에 걸친 채 그 차선이 영역에서 빠질 수 있다."""
+    if not ego:
+        return None
+    lb = list(getattr(msg, 'left_bound', []) or [])
+    rb = list(getattr(msg, 'right_bound', []) or [])
+    if len(lb) < 2 or len(rb) < 2:
+        return None
+    xy = (ego[0], ego[1])
+    l = min(math.dist((p.x, p.y), xy) for p in lb)
+    r = min(math.dist((p.x, p.y), xy) for p in rb)
+    return [round(l, 2), round(r, 2)]
+
+
 def bound_width(msg):
     """주행가능영역 폭 [m]. 자차 근처(앞 0/10/20/30 m)에서 좌우 경계 간 거리.
     left_bound / right_bound 는 Path·PathWithLaneId 에만 있다."""
@@ -189,8 +208,10 @@ class Trace(Node):
     def summarize(self, name, short, m):
         if short in ('Trajectory', 'Path', 'PathWithLaneId'):
             _bw = bound_width(m)
+            _ec = ego_clearance(m, self.ego)
             _r = pts_summary(m.points)
             if _bw: _r['bound_w'] = _bw
+            if _ec: _r['ego_clear'] = _ec
             return _r
         if short == 'Path' and hasattr(m, 'poses'):
             return pts_summary(m.poses)
