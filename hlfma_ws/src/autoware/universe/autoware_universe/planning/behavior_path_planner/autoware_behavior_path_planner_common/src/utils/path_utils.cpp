@@ -534,6 +534,20 @@ BehaviorModuleOutput getReferencePath(
     shorten_lanes, dp.drivable_area_left_bound_offset, dp.drivable_area_right_bound_offset,
     dp.drivable_area_types_to_skip);
 
+  // HL FMA 9/10 판단추적: 기준경로는 successor 만 따라가므로, 노선이 차선변경을 요구하는
+  //   지점에서 끊긴다. 그 길이와 차로열을 남긴다. 이 값이 갑자기 짧아지면 차선변경 모듈이
+  //   그 사이클에 경로를 못 채운 것이다.
+  {
+    std::string ids;
+    for (const auto & ll : drivable_lanelets) {
+      ids += std::to_string(ll.id());
+      ids += " ";
+    }
+    RCLCPP_DEBUG(
+      rclcpp::get_logger("path_utils"), "PLAN_REF 기준경로 %zu점 차로열=[%s]",
+      reference_path.points.size(), ids.c_str());
+  }
+
   BehaviorModuleOutput output;
   output.path = reference_path;
   output.reference_path = reference_path;

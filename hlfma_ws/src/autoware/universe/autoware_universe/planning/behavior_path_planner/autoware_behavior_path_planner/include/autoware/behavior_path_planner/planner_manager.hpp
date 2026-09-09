@@ -578,6 +578,12 @@ private:
   std::shared_ptr<SceneModuleVisitor> debug_msg_ptr_;
 
   mutable std::optional<BehaviorModuleOutput> last_valid_reference_path_;
+
+  // HL FMA 9/10: 차선변경이 대기 중인 사이클에 모듈이 경로를 내놓지 못하면 출력이
+  //   기준경로 토막으로 떨어진다. 그 토막을 발행하지 않도록 직전의 온전한 출력을 보관한다.
+  //   되돌리려면 이 두 멤버와 run() 의 PM_HOLD 블록을 지운다.
+  BehaviorModuleOutput last_full_output_{};
+  std::optional<rclcpp::Time> last_full_output_time_{};
 };
 }  // namespace autoware::behavior_path_planner
 
