@@ -633,6 +633,13 @@ std::vector<lane_change::TrajectoryGroup> generate_frenet_candidates(
       continue;
     }
     if (target_lane_reference_path.points.empty()) {
+      // HL FMA 9/10 계측: 여기가 로그 없는 continue 라 'Generated 0 candidate paths' 의
+      //   원인이 보이지 않았다(0910_055823 t=63.2).
+      RCLCPP_DEBUG(
+        get_logger(),
+        "Reject: 대상 차로 기준경로가 비었다. max_lc_len=%.2f dist_to_end_from_lc_start=%.2f "
+        "prep_len=%.2f",
+        max_lane_changing_length, dist_to_end_from_lc_start, metric.length);
       continue;
     }
 
@@ -660,6 +667,8 @@ std::vector<lane_change::TrajectoryGroup> generate_frenet_candidates(
       init_sampling_parameters(common_data_ptr, metric, initial_state, reference_spline);
 
     if (!sampling_parameters_opt) {
+      // HL FMA 9/10 계측: 위와 같은 이유로 로그를 남긴다.
+      RCLCPP_DEBUG(get_logger(), "Reject: 샘플링 파라미터를 만들지 못했다.");
       continue;
     }
 
