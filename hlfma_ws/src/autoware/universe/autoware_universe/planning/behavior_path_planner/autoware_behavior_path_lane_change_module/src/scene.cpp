@@ -69,13 +69,6 @@ NormalLaneChange::NormalLaneChange(
   Direction direction)
 : LaneChangeBase(parameters, type, direction)
 {
-  // HL FMA: 방향별 로거로 바꿔 좌/우 로그를 구분한다. verbose 면 DEBUG 를 열어
-  // 이 모듈의 기존 판단 로그(37곳)가 전부 나온다 — 계측을 새로 심을 필요가 없다.
-  logger_ = utils::lane_change::getLogger(getModuleTypeStr(), direction_);
-  if (lane_change_parameters_ && lane_change_parameters_->verbose) {
-    logger_.set_level(rclcpp::Logger::Level::Debug);
-  }
-
   stop_watch_.tic(getModuleTypeStr());
   stop_watch_.tic("stop_time");
 }
@@ -382,15 +375,11 @@ TurnSignalInfo NormalLaneChange::get_current_turn_signal_info() const
     return get_terminal_turn_signal_info();
   }
 
-  // HL FMA 9/8: 타이머를 여기서 시작한다. 아래 !is_valid_path 분기도 깜빡이를 실제로 켜는데
-  // (get_turn_signal 을 반환한다) 그 시간을 세지 않아 active_signal_duration 이 영구히 0 이었고,
-  // 그래서 prepare 가 max_prepare_duration(4.0s) 에 고정됐다. 유효 경로가 없는 동안에도 깜빡이는
-  // 켜져 있으므로(실측: turn=2 가 100s 이상 지속) 그 시간을 세는 것이 설계 의도에 맞다.
-  set_signal_activation_time();
-
   if (!status_.is_valid_path) {
     return get_turn_signal(getEgoPose(), prev_path.back().point.pose);
   }
+
+  set_signal_activation_time();
 
   return get_turn_signal(getEgoPose(), getLaneChangePath().info.lane_changing_end);
 }
@@ -460,6 +449,7 @@ BehaviorModuleOutput NormalLaneChange::getTerminalLaneChangePath() const
   const auto terminal_lc_path = compute_terminal_lane_change_path();
 
   if (!terminal_lc_path) {
+    RCLCPP_DEBUG(logger_, "Terminal path not found. Returning previous module's path as output.");
     return prev_module_output_;
   }
 
@@ -477,6 +467,7 @@ BehaviorModuleOutput NormalLaneChange::generateOutput()
 {
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
   if (!status_.is_valid_path) {
+    RCLCPP_DEBUG(logger_, "No valid path found. Returning previous module's path as output.");
     insert_stop_point(get_current_lanes(), prev_module_output_.path);
     return prev_module_output_;
   }
@@ -735,7 +726,7 @@ std::optional<PathWithLaneId> NormalLaneChange::extendPath()
     target_lanes, dist_to_end_of_path, dist_to_target_pose);
 }
 
-void NormalLaneChange::resetParameters(const bool keep_signal_timer)
+void NormalLaneChange::resetParameters()
 {
   is_abort_path_approved_ = false;
   is_abort_approval_requested_ = false;
@@ -744,11 +735,7 @@ void NormalLaneChange::resetParameters(const bool keep_signal_timer)
   status_ = LaneChangeStatus();
   unsafe_hysteresis_count_ = 0;
   lane_change_debug_.reset();
-  // 유효 경로가 없다는 이유로 타이머를 지우면 영원히 누적되지 않는다(한 판에 3800회 관측).
-  // 모듈 종료·차선변경 완료에서만 지운다.
-  if (!keep_signal_timer) {
-    set_signal_activation_time(true);
-  }
+  set_signal_activation_time(true);
 
   RCLCPP_DEBUG(logger_, "reset all flags and debug information.");
 }
@@ -1285,8 +1272,10 @@ bool NormalLaneChange::get_path_using_path_shifter(
       return lc_diff > lane_change_parameters_->trajectory.th_lane_changing_length_diff;
     };
 
+  std::string rejection_reason = "No prepare samples";
   for (const auto & prep_metric : prepare_metrics) {
     const auto debug_print = [&](const std::string & s) {
+      rejection_reason = s;
       RCLCPP_DEBUG(
         logger_, "%s | prep_time: %.5f | lon_acc: %.5f | prep_len: %.5f", s.c_str(),
         prep_metric.duration, prep_metric.actual_lon_accel, prep_metric.length);
@@ -1323,6 +1312,14 @@ bool NormalLaneChange::get_path_using_path_shifter(
     debug_metrics.max_prepare_length = common_data_ptr_->transient_data.dist_to_terminal_start;
     const auto lane_changing_metrics = get_lane_changing_metrics(
       prepare_segment, prep_metric, shift_length, dist_to_next_regulatory_element, debug_metrics);
+    if (lane_changing_metrics.empty()) {
+      rejection_reason = "No shift sample fits: available_length=" +
+        std::to_string(debug_metrics.max_lane_changing_length) +
+        "m prepare_length=" + std::to_string(prep_metric.length) +
+        "m shift=" + std::to_string(shift_length) +
+        "m/s velocity=" + std::to_string(prep_metric.velocity);
+    }
+
 
     // set_prepare_velocity must only be called after computing lane change metrics, as lane change
     // metrics rely on the prepare segment's original velocity as max_path_velocity.
@@ -1338,6 +1335,7 @@ bool NormalLaneChange::get_path_using_path_shifter(
       debug_metrics.lc_metrics.emplace_back(lc_metric, -1);
 
       const auto debug_print_lat = [&](const std::string & s) {
+        rejection_reason = s;
         RCLCPP_DEBUG(
           logger_, "%s | lc_time: %.5f | lon_acc: %.5f | lat_acc: %.5f | lc_len: %.5f", s.c_str(),
           lc_metric.duration, lc_metric.actual_lon_accel, lc_metric.lat_accel, lc_metric.length);
@@ -1374,6 +1372,14 @@ bool NormalLaneChange::get_path_using_path_shifter(
     }
   }
 
+  if (getModuleType() == LaneChangeModuleType::EXTERNAL_REQUEST) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, clock_, 2000,
+      "DETOUR reject direction=%d prepare_samples=%zu candidate_paths=%zu regulatory_distance=%.2f: %s",
+      static_cast<int>(getDirection()), prepare_metrics.size(), candidate_paths.size(),
+      dist_to_next_regulatory_element, rejection_reason.c_str());
+  }
+  RCLCPP_DEBUG(logger_, "No safety path found.");
   return false;
 }
 

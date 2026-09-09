@@ -51,8 +51,7 @@ LaneChangeInterface::LaneChangeInterface(
   module_type_{std::move(module_type)}
 {
   module_type_->setTimeKeeper(getTimeKeeper());
-  logger_ = utils::lane_change::getLogger(
-    module_type_->getModuleTypeStr(), module_type_->getDirection());
+  logger_ = utils::lane_change::getLogger(module_type_->getModuleTypeStr());
 }
 
 void LaneChangeInterface::processOnExit()
@@ -194,8 +193,7 @@ BehaviorModuleOutput LaneChangeInterface::planWaitingApproval()
     updateRTCStatus(
       std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest(), false,
       State::WAITING_FOR_EXECUTION);
-    // HL FMA 9/8: 깜빡이 타이머는 유지한다(true). 여기서 지우면 prepare 가 영영 안 줄어든다.
-    module_type_->resetParameters(true);
+    module_type_->resetParameters();
     return out;
   }
 

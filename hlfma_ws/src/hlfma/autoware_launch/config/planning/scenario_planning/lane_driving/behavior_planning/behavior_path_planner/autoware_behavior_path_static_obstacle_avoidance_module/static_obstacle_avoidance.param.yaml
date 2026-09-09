@@ -1,8 +1,3 @@
-# 주의(9/8): 이 모듈은 현재 default_preset.yaml 에서 꺼져 있다.
-#   켜면 slot2 우선순위가 lane_change 위이고 후보 독점(candidate 동시실행 false)이라
-#   lane_change_* 가 승인 풀에 오르지 못한다. 아래 policy 설정들은 그동안 비활성이다.
-#   다시 켜려면 preset 을 true 로 하고 scene_module_manager.param.yaml 에서 우선순위를
-#   lane_change 아래로 내린 뒤 candidate 동시실행을 열 것. 근거: docs/대회정보/todo0908.md §2-1
 # see AvoidanceParameters description in avoidance_module_data.hpp for description.
 /**:
   ros__parameters:
@@ -15,11 +10,11 @@
       # "current_lane"           : use only current lane. this module doesn't use adjacent lane to avoid object.
       # "same_direction_lane"    : this module uses same direction lane to avoid object if need.
       # "opposite_direction_lane": this module uses both same direction and opposite direction lane.
-      use_lane_type: "same_direction_lane_changeable"
+      use_lane_type: "same_direction_lane"              # HL FMA: 같은 방향 차로까지 허용 (반대차로는 금지 = 중앙선 침범 -6 방어)
       # drivable area setting
-      use_intersection_areas: false
-      use_hatched_road_markings: false
-      use_freespace_areas: false
+      use_intersection_areas: false     # HL FMA: 교차로 여유공간 이탈 금지
+      use_hatched_road_markings: false  # HL FMA: 사선지대 침범 금지
+      use_freespace_areas: false        # HL FMA: 자유공간 이탈 금지
 
       # avoidance is performed for the object type with true
       target_object:
@@ -37,7 +32,7 @@
         truck:
           th_moving_speed: 1.0
           th_moving_time: 2.0
-          longitudinal_margin: 0.0                      # [m]
+          longitudinal_margin: 0.0
           lateral_margin:
             soft_margin: 0.5
             hard_margin: 0.2
@@ -48,7 +43,7 @@
         bus:
           th_moving_speed: 1.0
           th_moving_time: 2.0
-          longitudinal_margin: 0.0                      # [m]
+          longitudinal_margin: 0.0
           lateral_margin:
             soft_margin: 0.5
             hard_margin: 0.2
@@ -59,7 +54,7 @@
         trailer:
           th_moving_speed: 1.0
           th_moving_time: 2.0
-          longitudinal_margin: 0.0                      # [m]
+          longitudinal_margin: 0.0
           lateral_margin:
             soft_margin: 0.5
             hard_margin: 0.2
@@ -134,7 +129,7 @@
 
         # detection area generation parameters
         detection_area:
-          static: false                                 # [-]
+          static: true                                  # HL FMA 9/9: false 면 탐지범위가 자차속도에 비례해, 정지 시 0 이 되어 회피 대상이 사라진다(교착). true 면 max_forward_distance 고정 사용
           min_forward_distance: 50.0                    # [m]
           max_forward_distance: 150.0                   # [m]
           backward_distance: 10.0                       # [m]
@@ -157,16 +152,15 @@
           # "auto"   : generate candidate path. if RTC is running as AUTO mode, the ego avoids it automatically.
           # "manual" : generate candidate path and wait operator approval even if RTC is running as AUTO mode.
           # "ignore" : never avoid it.
-          policy: "auto"                                # [-] HL FMA 9/8: manual 은 후보만 만들고
-          # 승인을 기다린다(RTC AUTO 여도). 차선 내 정지차를 자동으로 피하려면 auto. 되돌리려면 manual
+          policy: "auto"                                # HL FMA 9/9: 내 차로 장기 정차 차량을 회피 대상으로 승격 (isNeverAvoidanceTarget 바이패스와 짝)
           condition:
-            th_stopped_time: 3.0                        # [s]
+            th_stopped_time: 0.5                        # HL FMA 9/9: stop_time 이 1.2s 부근에서 동결되는 현상 회피용 (원본 3.0)
             th_moving_distance: 1.0                     # [m]
           ignore_area:
             traffic_light:
-              front_distance: 20.0                      # [m]
+              front_distance: 5.0                      # [m]
             crosswalk:
-              front_distance: 20.0                      # [m]
+              front_distance: 5.0                      # [m]
               behind_distance: 0.0                      # [m]
           wait_and_see:
             target_behaviors: ["MERGING", "DEVIATING"]  # [-]
@@ -177,7 +171,7 @@
           # "auto"   : generate candidate path. if RTC is running as AUTO mode, the ego avoids it automatically.
           # "manual" : generate candidate path and wait operator approval even if RTC is running as AUTO mode.
           # "ignore" : never avoid it.
-          policy: "ignore"                                  # [-]
+          policy: "ignore"                                # [-]
           condition:
             th_road_border_distance: 0.8                  # [m] threshold distance from road border to parking vehicle side
 
@@ -276,7 +270,7 @@
             enable: true                                # [-]
             buffer: 3.0                                 # [m]
           traffic_light:
-            enable: true                               # [-]
+            enable: true                                # [-]
             buffer: 3.0                                 # [m]
 
       # For cancel maneuver

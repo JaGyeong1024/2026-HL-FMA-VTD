@@ -138,8 +138,7 @@ LCParamPtr LaneChangeModuleManager::set_params(rclcpp::Node * node, const std::s
       *node, parameter("safety_check.lane_expansion.right_offset"));
 
     // collision check
-    p.verbose = get_or_declare_parameter<bool>(*node, parameter("verbose"));
-  p.safety.collision_check.check_current_lane =
+    p.safety.collision_check.check_current_lane =
       get_or_declare_parameter<bool>(*node, parameter("collision_check.check_current_lanes"));
     p.safety.collision_check.check_other_lanes =
       get_or_declare_parameter<bool>(*node, parameter("collision_check.check_other_lanes"));

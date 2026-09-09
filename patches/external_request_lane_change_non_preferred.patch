@@ -1,0 +1,107 @@
+diff --git a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/scene.cpp b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/scene.cpp
+index f486160..f695bdd 100644
+--- a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/scene.cpp
++++ b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/scene.cpp
+@@ -1272,8 +1272,10 @@ bool NormalLaneChange::get_path_using_path_shifter(
+       return lc_diff > lane_change_parameters_->trajectory.th_lane_changing_length_diff;
+     };
+ 
++  std::string rejection_reason = "No prepare samples";
+   for (const auto & prep_metric : prepare_metrics) {
+     const auto debug_print = [&](const std::string & s) {
++      rejection_reason = s;
+       RCLCPP_DEBUG(
+         logger_, "%s | prep_time: %.5f | lon_acc: %.5f | prep_len: %.5f", s.c_str(),
+         prep_metric.duration, prep_metric.actual_lon_accel, prep_metric.length);
+@@ -1310,6 +1312,14 @@ bool NormalLaneChange::get_path_using_path_shifter(
+     debug_metrics.max_prepare_length = common_data_ptr_->transient_data.dist_to_terminal_start;
+     const auto lane_changing_metrics = get_lane_changing_metrics(
+       prepare_segment, prep_metric, shift_length, dist_to_next_regulatory_element, debug_metrics);
++    if (lane_changing_metrics.empty()) {
++      rejection_reason = "No shift sample fits: available_length=" +
++        std::to_string(debug_metrics.max_lane_changing_length) +
++        "m prepare_length=" + std::to_string(prep_metric.length) +
++        "m shift=" + std::to_string(shift_length) +
++        "m/s velocity=" + std::to_string(prep_metric.velocity);
++    }
++
+ 
+     // set_prepare_velocity must only be called after computing lane change metrics, as lane change
+     // metrics rely on the prepare segment's original velocity as max_path_velocity.
+@@ -1325,6 +1335,7 @@ bool NormalLaneChange::get_path_using_path_shifter(
+       debug_metrics.lc_metrics.emplace_back(lc_metric, -1);
+ 
+       const auto debug_print_lat = [&](const std::string & s) {
++        rejection_reason = s;
+         RCLCPP_DEBUG(
+           logger_, "%s | lc_time: %.5f | lon_acc: %.5f | lat_acc: %.5f | lc_len: %.5f", s.c_str(),
+           lc_metric.duration, lc_metric.actual_lon_accel, lc_metric.lat_accel, lc_metric.length);
+@@ -1361,6 +1372,13 @@ bool NormalLaneChange::get_path_using_path_shifter(
+     }
+   }
+ 
++  if (getModuleType() == LaneChangeModuleType::EXTERNAL_REQUEST) {
++    RCLCPP_WARN_THROTTLE(
++      logger_, clock_, 2000,
++      "DETOUR reject direction=%d prepare_samples=%zu candidate_paths=%zu regulatory_distance=%.2f: %s",
++      static_cast<int>(getDirection()), prepare_metrics.size(), candidate_paths.size(),
++      dist_to_next_regulatory_element, rejection_reason.c_str());
++  }
+   RCLCPP_DEBUG(logger_, "No safety path found.");
+   return false;
+ }
+diff --git a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/utils.cpp b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/utils.cpp
+index 2d2e361..b1750fa 100644
+--- a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/utils.cpp
++++ b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/utils.cpp
+@@ -135,6 +135,13 @@ lanelet::ConstLanelets get_target_neighbor_lanes(
+   const RouteHandler & route_handler, const lanelet::ConstLanelets & current_lanes,
+   const LaneChangeModuleType & type)
+ {
++  // External requests may detour away from the preferred lane before reaching it.
++  // Their target lane is still selected through the routing graph, and the normal
++  // lane-change path validity and collision checks remain in force.
++  if (type == LaneChangeModuleType::EXTERNAL_REQUEST) {
++    return current_lanes;
++  }
++
+   lanelet::ConstLanelets neighbor_lanes;
+ 
+   for (const auto & current_lane : current_lanes) {
+diff --git a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/test/test_lane_change_scene.cpp b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/test/test_lane_change_scene.cpp
+index 0166f60..679fad0 100644
+--- a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/test/test_lane_change_scene.cpp
++++ b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/test/test_lane_change_scene.cpp
+@@ -15,6 +15,7 @@
+ #include "autoware/behavior_path_lane_change_module/manager.hpp"
+ #include "autoware/behavior_path_lane_change_module/scene.hpp"
+ #include "autoware/behavior_path_lane_change_module/structs/data.hpp"
++#include "autoware/behavior_path_lane_change_module/utils/utils.hpp"
+ #include "autoware/behavior_path_planner_common/data_manager.hpp"
+ #include "autoware_test_utils/autoware_test_utils.hpp"
+ #include "autoware_test_utils/mock_data_parser.hpp"
+@@ -272,3 +273,24 @@ TEST_F(TestNormalLaneChange, testGetPathWhenValid)
+ 
+   ASSERT_TRUE(lc_status.is_valid_path);
+ }
++
++
++TEST_F(TestNormalLaneChange, externalRequestNeighborsIncludeNonPreferredCurrentLane)
++{
++  normal_lane_change_->update_lanes(false);
++  const auto & current_lanes = normal_lane_change_->get_current_lanes();
++  const auto & route_handler = *planner_data_->route_handler;
++  ASSERT_FALSE(current_lanes.empty());
++  bool has_non_preferred = false;
++  for (const auto & lane : current_lanes) {
++    has_non_preferred |= route_handler.getNumLaneToPreferredLane(lane) != 0;
++  }
++  ASSERT_TRUE(has_non_preferred);
++  const auto neighbors =
++    autoware::behavior_path_planner::utils::lane_change::get_target_neighbor_lanes(
++      route_handler, current_lanes, LaneChangeModuleType::EXTERNAL_REQUEST);
++  ASSERT_EQ(neighbors.size(), current_lanes.size());
++  for (size_t i = 0; i < current_lanes.size(); ++i) {
++    EXPECT_EQ(neighbors[i].id(), current_lanes[i].id());
++  }
++}

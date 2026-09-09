@@ -11,14 +11,11 @@
     slot1:
       - "start_planner"
     slot2:
-      # HL FMA 9/8: static_obstacle_avoidance 를 lane_change 아래로 내렸다.
-      #   위에 있으면 avoidance 가 후보로 뜨는 순간 lane_change_* 가 후보에서 축출된다(실측 0.7초).
-      #   포켓 진입은 lane_change_left 만 할 수 있으므로 그쪽이 우선이어야 한다.
       - "side_shift"
       - "avoidance_by_lane_change"
+      - "static_obstacle_avoidance"
       - "lane_change_left"
       - "lane_change_right"
-      - "static_obstacle_avoidance"
       - "external_request_lane_change_left"
       - "external_request_lane_change_right"
       - "bidirectional_traffic"
@@ -29,26 +26,22 @@
       - "dynamic_obstacle_avoidance"
 
     external_request_lane_change_left:
-      enable_rtc: true   # HL FMA 묶음2: 판단 노드가 승인
-      # HL FMA 9/7: false 면 경로상 필수 차선변경이 승인·실행 중일 때 외부요청이 승인 모듈로
-      # 승격되지 못해 우회가 영원히 불가능하다(시뮬 detour8 에서 확인). true 로 열어둔다.
-      enable_simultaneous_execution_as_approved_module: true
+      enable_rtc: true
+      enable_simultaneous_execution_as_approved_module: true  # HL FMA 9/9: false 면 승인 풀에 들어가는 순간 static_obstacle_avoidance 를 포함한 다른 모든 모듈이 getRequestModules 에서 제외된다(planner_manager.cpp:517)
       enable_simultaneous_execution_as_candidate_module: true
 
     external_request_lane_change_right:
-      enable_rtc: true    # HL FMA 9/9: blocked_route_detour 가 승인. 자동승인이면 mandatory 와 싸워 경로가 진동한다(실측 21:03)
-      # HL FMA 9/7: false 면 경로상 필수 차선변경이 승인·실행 중일 때 외부요청이 승인 모듈로
-      # 승격되지 못해 우회가 영원히 불가능하다(시뮬 detour8 에서 확인). true 로 열어둔다.
-      enable_simultaneous_execution_as_approved_module: true
+      enable_rtc: true
+      enable_simultaneous_execution_as_approved_module: true  # HL FMA 9/9: false 면 승인 풀에 들어가는 순간 static_obstacle_avoidance 를 포함한 다른 모든 모듈이 getRequestModules 에서 제외된다(planner_manager.cpp:517)
       enable_simultaneous_execution_as_candidate_module: true
 
     lane_change_left:
-      enable_rtc: false
+      enable_rtc: true  # blocked_route_detour approves clear route/return candidates
       enable_simultaneous_execution_as_approved_module: true
       enable_simultaneous_execution_as_candidate_module: true
 
     lane_change_right:
-      enable_rtc: false
+      enable_rtc: true  # blocked_route_detour approves clear route/return candidates
       enable_simultaneous_execution_as_approved_module: true
       enable_simultaneous_execution_as_candidate_module: true
 
@@ -70,12 +63,15 @@
     static_obstacle_avoidance:
       enable_rtc: false
       enable_simultaneous_execution_as_approved_module: true
-      # HL FMA 9/8: false 면 avoidance 가 후보 풀을 독점해 lane_change_* 가 후보조차 못 된다. 되돌리려면 false
+      # HL FMA 9/9: false 면 slot2 의 lane_change_* 가 먼저 후보로 들어갔을 때
+      # 회피 모듈이 executable_modules 에 합류하지 못해 평가조차 되지 않는다
+      # (planner_manager.cpp:713). 좌회전 우선차로 때문에 lane_change_left 가
+      # 상시 후보로 떠 있어 회피가 영구 굶주림 상태가 된다.
       enable_simultaneous_execution_as_candidate_module: true
 
     avoidance_by_lane_change:
       enable_rtc: false
-      enable_simultaneous_execution_as_approved_module: false
+      enable_simultaneous_execution_as_approved_module: true  # HL FMA 9/9: false 면 승인 풀에 들어가는 순간 static_obstacle_avoidance 를 포함한 다른 모든 모듈이 getRequestModules 에서 제외된다(planner_manager.cpp:517)
       enable_simultaneous_execution_as_candidate_module: false
 
     dynamic_obstacle_avoidance:
