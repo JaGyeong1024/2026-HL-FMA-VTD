@@ -63,5 +63,5 @@
         lat_shift_th: 0.5
         forward_shift_th: 1.0
         backward_shift_th: 0.1
-        handling_type: 2  # handling types are defined in common planning validator parameters
-        override_error_diag: false # {OVERRIDE}
+        handling_type: 0  # {OVERRIDE: HL FMA - 정상 회피 기동이 lat_shift_th 0.5m 를 넘어 소프트스톱->MRM 을 유발}
+        override_error_diag: true # {OVERRIDE: HL FMA - ERROR 로 올리면 진단그래프가 autonomous 를 불가로 만들어 MRM 이 걸린다}
