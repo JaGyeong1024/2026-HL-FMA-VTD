@@ -40,6 +40,32 @@ def _pt(p):
     return p.pose, getattr(p, 'longitudinal_velocity_mps', 0.0), []
 
 
+def bound_width(msg):
+    """주행가능영역 폭 [m]. 자차 근처(앞 0/10/20/30 m)에서 좌우 경계 간 거리.
+    left_bound / right_bound 는 Path·PathWithLaneId 에만 있다."""
+    lb = list(getattr(msg, 'left_bound', []) or [])
+    rb = list(getattr(msg, 'right_bound', []) or [])
+    if len(lb) < 2 or len(rb) < 2:
+        return None
+    pts = getattr(msg, 'points', [])
+    if not pts:
+        return None
+    def at(i):
+        p = pts[min(i, len(pts) - 1)]
+        q = p.point.pose.position if hasattr(p, 'point') else p.pose.position
+        return (q.x, q.y)
+    def nearest(seq, xy):
+        return min(math.dist((p.x, p.y), xy) for p in seq)
+    out = []
+    step = max(1, int(len(pts) / 30))          # 점 간격 ~1m 가정 → 0/10/20/30m 근사
+    for i in (0, step * 10, step * 20, step * 30):
+        if i >= len(pts):
+            break
+        xy = at(i)
+        out.append(round(nearest(lb, xy) + nearest(rb, xy), 2))
+    return out
+
+
 def pts_summary(pts):
     """경로/궤적 한 개를 요약. stop_d = 앞쪽 정지점까지 거리 = 가상벽 위치."""
     n = len(pts)
@@ -162,7 +188,10 @@ class Trace(Node):
     # ---------------- 타입별 요약
     def summarize(self, name, short, m):
         if short in ('Trajectory', 'Path', 'PathWithLaneId'):
-            return pts_summary(m.points)
+            _bw = bound_width(m)
+            _r = pts_summary(m.points)
+            if _bw: _r['bound_w'] = _bw
+            return _r
         if short == 'Path' and hasattr(m, 'poses'):
             return pts_summary(m.poses)
 
