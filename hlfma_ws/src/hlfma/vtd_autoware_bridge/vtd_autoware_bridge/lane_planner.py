@@ -53,7 +53,15 @@ class LanePlanner(Node):
         self.omap = OsmMap(osm, self.get_logger()) if osm else None
         self.lat_accel = float(self.get_parameter('lat_accel').value)
         # 모듈의 준비시간 가정 [s]. 깜빡이 누적 전 1.0 s 로 보수적으로 본다(누적되면 0.5 s).
-        self.declare_parameter('lc_prepare_s', 1.0)
+        # 2026-09-09 오프라인 전수탐색(4416조합, tools 없이 plan() 직접 호출):
+        #   이 값만이 해의 존재를 결정한다. 성공률 1.0→8% / 0.6→29% / 0.3→50% / 0.0→92%.
+        #   LC_PENALTY·OFF_ROUTE·plan_horizon 은 성공률에 영향이 없었다(64%/64%, 61/61/68%).
+        #   lc_len = lc_prepare_s*v + LAT_SHIFT*2.4 + 3.0 이므로 0.0 이어도 상수항 10.7m 가 남고,
+        #   이는 9/8 실측 '모듈의 실제 요구 12m' 와 맞는다. 1.0 은 v=13.7 에서 24m 로 2배 과대평가였다.
+        #   (min_length_for_turn_signal_activation 400 으로 준비시간 샘플링이 복원되고
+        #    check_current_lanes=true 로 앞차를 뚫는 긴 준비 후보가 거절되므로, 모듈은 실제로
+        #    짧은 준비를 고른다 — 계획기 모델도 거기에 맞춘다.) 되돌리려면 1.0
+        self.declare_parameter('lc_prepare_s', 0.0)
         self.lc_prepare_s = float(self.get_parameter('lc_prepare_s').value)
         self.horizon = float(self.get_parameter('plan_horizon').value)
 
@@ -257,15 +265,11 @@ class LanePlanner(Node):
             e = occ.get((lid, c))
             return e is None or e > t + 1.0
 
-        # 목표: '통과'가 아니라 '올바른 차선 사슬에 진입'. 대기열이 정지선까지 차 있으면
-        # 끝까지 통과하는 경로는 원래 없다. 뒤에서부터 좁혀진 첫 세그먼트에 들어가면 성공이다.
-        target_idx = None
-        for k, (i, lanes, ln) in enumerate(corr):
-            if reach[k] and set(reach[k]) != set(lanes):
-                target_idx = k
-                break
-        if target_idx is None:
-            target_idx = len(corr) - 1
+        # (삭제됨) 예전 목표 조건 '뒤에서부터 좁혀진 첫 세그먼트 진입'.
+        # 2026-09-09 오프라인 전수탐색으로 확인: 이 조건은 어떤 파라미터에서도 성공률 0% 다.
+        # 시나리오2 에서 reach[target_idx] = {15194} 인데, 거기 도달하려면 정지차가 있는
+        # 15207(s=3.3)·15220(s=9.9) 을 통과해야 해서 원리적으로 불가능하다.
+        # 계산만 하고 쓰이지 않는 죽은 코드였고, 되살리면 안 된다.
 
         # 경로가 원래 가리키던 차선 집합. 여기를 벗어나 있으면 셀마다 OFF_ROUTE 를 문다.
         on_route = set(self.orig_preferred or
@@ -331,8 +335,8 @@ class LanePlanner(Node):
             self.get_logger().warning('[계획진단] ' + ' | '.join(rows))
             self.get_logger().warning(
                 '[계획진단] 회랑 %d세그(horizon %.0fm), 탐색노드 %d개, LC소요 %.0fm, '
-                '목표=마지막세그(idx %d) / 미사용 target_idx=%d'
-                % (len(corr), self.horizon, len(best), lc_len, len(corr)-1, target_idx))
+                '목표=마지막세그(idx %d)'
+                % (len(corr), self.horizon, len(best), lc_len, len(corr)-1))
             return None, lc_len
         path, n = [], goal
         while n is not None:
