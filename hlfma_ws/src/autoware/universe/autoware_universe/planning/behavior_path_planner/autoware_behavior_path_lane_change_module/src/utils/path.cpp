@@ -117,6 +117,23 @@ PathWithLaneId get_reference_path_from_target_lane(
   const auto lane_changing_reference_path =
     route_handler.getCenterLinePath(target_lanes, s_start, s_end);
 
+  // HL FMA 9/10: 위 검사는 호 좌표 추정치(s_end - s_start)로 하지만, getCenterLinePath 가
+  //   실제로 돌려주는 경로 길이는 그와 같다는 보장이 없다(중심선 리샘플·내부 클램프).
+  //   그래서 검사를 통과하고도 아래 보존 키(lane_changing_length)가 경로 밖이 되어
+  //   std::invalid_argument("query_keys is out of base_keys") 가 던져진다
+  //   (0910_053444 주행에서 16회). 실제 길이로 다시 검사한다.
+  //   되돌리려면 이 블록을 지운다.
+  double actual_length = 0.0;
+  for (auto it = lane_changing_reference_path.points.begin();
+       it != lane_changing_reference_path.points.end() &&
+       std::next(it) != lane_changing_reference_path.points.end();
+       ++it) {
+    actual_length += autoware_utils::calc_distance2d(*it, *std::next(it));
+  }
+  if (actual_length + epsilon < lane_changing_length) {
+    return PathWithLaneId();
+  }
+
   return autoware::behavior_path_planner::utils::resamplePathWithSpline(
     lane_changing_reference_path, resample_interval, true, {0.0, lane_changing_length});
 }
@@ -574,7 +591,14 @@ std::vector<lane_change::TrajectoryGroup> generate_frenet_candidates(
   const auto & current_lanes = common_data_ptr->lanes_ptr->current;
   const auto & target_lanes = common_data_ptr->lanes_ptr->target;
   const auto direction = common_data_ptr->direction;
-  const auto current_lane_boundary = get_linestring_bound(current_lanes, direction);
+  // HL FMA 9/10: check_out_of_bound_paths 는 후보가 경계에 '닿지 않으면'(disjoint) 탈락시킨다.
+  //   경계선이 current_lanes 끝에서 끊기면 정상 후보도 폐기된다. 로컬 패치
+  //   trim_preferred_after_alternative 가 current_lanes 꼬리를 자르므로 특히 잘 발생한다
+  //   (0910_053444 t=62.3~ 'Path footprint exceeds target lane boundary' 연속).
+  //   경계 판정용으로만 차로열을 연장한다. 계획 대상 차로는 그대로다.
+  //   되돌리려면 extendLanes 를 빼고 current_lanes 를 그대로 넘긴다.
+  const auto current_lane_boundary = get_linestring_bound(
+    utils::extendLanes(common_data_ptr->route_handler_ptr, current_lanes), direction);
 
   for (const auto & metric : prep_metrics) {
     PathWithLaneId prepare_segment;

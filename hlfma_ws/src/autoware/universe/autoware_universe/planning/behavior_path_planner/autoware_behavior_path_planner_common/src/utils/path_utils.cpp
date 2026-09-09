@@ -490,7 +490,42 @@ BehaviorModuleOutput getReferencePath(
     p.backward_path_length + p.input_path_interval);
 
   const auto drivable_lanelets = getLaneletsFromPath(reference_path, route_handler);
-  const auto drivable_lanes = generateDrivableLanes(drivable_lanelets);
+  // HL FMA 9/10: 기본 주행가능영역은 '지금 경로가 지나는 차로' 뿐이라, 노선상 가야 할
+  //   차로(선호 차로)가 아직 영역 안에 없다. 다차로 복귀 중 마지막 홉의 후보가
+  //   현재차로 경계를 넘지 못한 것으로 판정돼 계속 폐기되는 원인이 된다.
+  //   경로 차로의 좌/우로 걸어가며 '노선에 속한' 차로만 같은 entry 에 붙여 노선 쪽을 열어 둔다.
+  //   entry 를 새로 추가하지 않고 기존 entry 를 넓히기만 하므로 종방향 순서가 유지되고
+  //   cutOverlappedLanes 의 순환 오탐을 늘리지 않는다.
+  //   되돌리려면 아래 for 블록을 지운다.
+  auto drivable_lanes = generateDrivableLanes(drivable_lanelets);
+  for (size_t i = 0; i < drivable_lanelets.size(); ++i) {
+    const auto widen = [&](const bool to_left) {
+      lanelet::ConstLanelets chain;
+      auto neighbor = to_left ? route_handler->getLeftLanelet(drivable_lanelets.at(i), false, false)
+                              : route_handler->getRightLanelet(drivable_lanelets.at(i), false, false);
+      for (size_t step = 0; step < 4 && neighbor; ++step) {
+        if (!route_handler->isRouteLanelet(*neighbor)) {
+          break;
+        }
+        chain.push_back(*neighbor);
+        neighbor = to_left ? route_handler->getLeftLanelet(*neighbor, false, false)
+                           : route_handler->getRightLanelet(*neighbor, false, false);
+      }
+      if (chain.empty()) {
+        return;
+      }
+      if (to_left) {
+        drivable_lanes.at(i).left_lane = chain.back();
+      } else {
+        drivable_lanes.at(i).right_lane = chain.back();
+      }
+      chain.pop_back();
+      drivable_lanes.at(i).middle_lanes.insert(
+        drivable_lanes.at(i).middle_lanes.end(), chain.begin(), chain.end());
+    };
+    widen(true);
+    widen(false);
+  }
 
   const auto & dp = planner_data->drivable_area_expansion_parameters;
 
