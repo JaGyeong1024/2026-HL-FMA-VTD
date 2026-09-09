@@ -18,7 +18,7 @@
 
   <!-- 정지 차량군 우회: 일반/외부요청 LC 승인 중재 및 우회 대기 접근 속도 제한. -->
   <node pkg="vtd_autoware_bridge" exec="blocked_route_detour" name="blocked_route_detour" output="screen">
-    <param name="hold_distance_m" value="45.0"/>
+    <param name="hold_distance_m" value="26.0"/>  <!-- HL FMA 9/10: 45.0 -> 26.0, 근거는 노드 주석 -->
     <param name="approach_speed_mps" value="4.0"/>
   </node>
 
