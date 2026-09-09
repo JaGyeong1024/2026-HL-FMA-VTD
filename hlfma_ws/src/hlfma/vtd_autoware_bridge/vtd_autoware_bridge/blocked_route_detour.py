@@ -337,23 +337,12 @@ class BlockedRouteDetour(Node):
             choices = self.safe_choices(('left', 'right'), b)
         if not choices:
             return
-        # HL FMA 9/10: 우회 방향을 '여유가 가장 큰 쪽'이 아니라 '노선이 요구하는 쪽'을
-        #   우선으로 고른다. 반대쪽으로 우회하면 우회 거리와 복귀 거리가 더해져 종점 전에
-        #   돌아오지 못한다(0910_065425 실측: 우회 시작 시점 가용 100.6m, 우회에 64m,
-        #   복귀 3홉에 39~48m 필요 -> 3홉을 활주로 6.1m 남기고 시작해 후보가 안 나옴).
-        #   노선이 요구하는 방향은 route_left / route_right 후보 중 살아 있는 쪽이다.
-        #   같은 쪽 후보가 안전 조건을 이미 통과한 경우에만 우선하므로, 그쪽이 막혀 있으면
-        #   기존대로 여유가 큰 쪽으로 간다. 되돌리려면 route_dir/preferred 블록을 지운다.
-        route_dir = None
-        for side in ('left', 'right'):
-            if self.fresh('status_route_' + side, now) and self.status.get('route_' + side):
-                route_dir = side
-                break
-        preferred = [c for c in choices if route_dir is not None and c[1] == route_dir]
-        if preferred:
-            self.get_logger().info(
-                f'DETOUR 방향 선호: 노선이 {route_dir} 을 요구하므로 그쪽으로 우회한다')
-        clear, key, st = max(preferred or choices, key=lambda x: x[0])
+        # HL FMA 9/10: 우회 방향을 노선 요구 방향으로 우선하려 했으나 되돌렸다.
+        #   근거로 쓴 route_left / route_right RTC 후보는 우회가 끝난 뒤에야 생겨서,
+        #   우회를 결정하는 시점에는 존재하지 않는다(0910_071212: 방향 선호 0회 발동).
+        #   제대로 하려면 path_with_lane_id 의 lane_id 열과 지도로 '앞으로 어느 쪽
+        #   몇 칸을 가야 하는지'를 직접 계산해야 한다.
+        clear, key, st = max(choices, key=lambda x: x[0])
         cli = self.rtc_clients[key]
         if not cli.service_is_ready():
             return
