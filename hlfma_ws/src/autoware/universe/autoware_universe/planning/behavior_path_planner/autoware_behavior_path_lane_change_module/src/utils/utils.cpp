@@ -239,6 +239,40 @@ std::vector<DrivableLanes> generateDrivableLanes(
     if (!walk_to_target(true)) {
       walk_to_target(false);
     }
+
+    // HL FMA 9/10: combineDrivableAreaInfo 는 이름과 달리 합집합이 아니다. 결과의 길이·순서를
+    //   첫 인자(모듈 자기 선언)가 정하므로, 앞 단계(차선추종)에서 노선 차로를 넓혀 놔도
+    //   차선변경 모듈이 승인돼 있는 동안은 이 2차로 선언이 골격이 된다. 그래서 우회 후
+    //   복귀 중에 앞쪽 주행가능영역이 1차로로 남았다(0910_054853 t=56.6 bw=[16.0,2.86,3.22]).
+    //   여기서도 '노선에 속한' 좌/우 차로까지 같은 entry 를 넓힌다. 넓히기만 하므로
+    //   entry 수와 종방향 순서는 그대로다. 되돌리려면 아래 widen_to_route 블록을 지운다.
+    const auto widen_to_route = [&](const bool to_left) {
+      const auto & outer = to_left ? drivable_lanes.at(i).left_lane : drivable_lanes.at(i).right_lane;
+      lanelet::ConstLanelets chain;
+      auto neighbor = to_left ? route_handler.getLeftLanelet(outer, false, false)
+                              : route_handler.getRightLanelet(outer, false, false);
+      for (size_t step = 0; step < 4 && neighbor; ++step) {
+        if (!route_handler.isRouteLanelet(*neighbor)) {
+          break;
+        }
+        chain.push_back(*neighbor);
+        neighbor = to_left ? route_handler.getLeftLanelet(*neighbor, false, false)
+                           : route_handler.getRightLanelet(*neighbor, false, false);
+      }
+      if (chain.empty()) {
+        return;
+      }
+      if (to_left) {
+        drivable_lanes.at(i).left_lane = chain.back();
+      } else {
+        drivable_lanes.at(i).right_lane = chain.back();
+      }
+      chain.pop_back();
+      drivable_lanes.at(i).middle_lanes.insert(
+        drivable_lanes.at(i).middle_lanes.end(), chain.begin(), chain.end());
+    };
+    widen_to_route(true);
+    widen_to_route(false);
   }
 
   for (size_t i = current_lc_idx + 1; i < lane_change_lanes.size(); ++i) {

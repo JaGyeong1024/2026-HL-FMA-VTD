@@ -48,7 +48,10 @@
       # trajectory generation near terminal using frenet planner
       frenet:
         enable: true
-        use_entire_remaining_distance: false
+        use_entire_remaining_distance: true  # HL FMA 9/10: false 였다. 우회로 거리를 쓰고 나면
+                           #   복귀 마지막 홉 시점에 대상 차로 잔여 길이가 모자라
+                           #   frenet 후보가 0개가 됐다(0910_055823 t=63.2 Generated 0).
+                           #   남은 거리를 전부 쓰게 한다. 되돌리려면 false.
         th_yaw_diff: 40.0  # HL FMA 9/10: 25.0 에서 상향. 25.17/25.03 deg 로 0.2도 차이로
                            #   복귀 마지막 홉 후보가 전부 폐기됐다(0910_053444 t=62.0).
                            #   다차로 복귀 중에는 자차가 비스듬한 것이 정상이다. 되돌리려면 25.0.
