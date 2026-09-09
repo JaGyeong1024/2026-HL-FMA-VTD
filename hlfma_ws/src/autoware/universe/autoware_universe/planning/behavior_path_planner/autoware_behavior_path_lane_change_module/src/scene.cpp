@@ -254,6 +254,14 @@ void NormalLaneChange::updateLaneChangeStatus()
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
   const auto [found_valid_path, found_safe_path] = getSafePath(status_.lane_change_path);
 
+  // HL FMA 9/10 판단추적: 이번 사이클의 차선변경 판단 결과.
+  //   is_valid_path 가 false 면 generateOutput 이 직전 모듈 경로(기준경로 토막)를 돌려준다.
+  RCLCPP_DEBUG(
+    logger_, "LC_JUDGE valid=%d safe=%d 후보경로점=%zu 현재차로=%zu 목표차로=%zu",
+    static_cast<int>(found_valid_path), static_cast<int>(found_safe_path),
+    status_.lane_change_path.path.points.size(), get_current_lanes().size(),
+    get_target_lanes().size());
+
   // Update status
   status_.is_valid_path = found_valid_path;
   status_.is_safe = found_safe_path;
@@ -638,6 +646,13 @@ void NormalLaneChange::insert_stop_point_on_current_lanes(
   });
 
   const auto terminal_stop_reason = status_.is_valid_path ? "no safe path" : "no valid path";
+  // HL FMA 9/10 판단추적: 어디에 왜 정지점을 꽂는지. dist_to_terminal_start 는 남은 차선변경을
+  //   위해 예약된 시작 한계, dist_to_last_fit_width 는 차폭이 안 맞아지는 지점이다.
+  RCLCPP_DEBUG(
+    logger_, "LC_STOP 사유=%s 정지거리=%.2f (terminal_start=%.2f 자차원차로내=%d)",
+    terminal_stop_reason, dist_to_terminal_stop, dist_to_terminal_start,
+    static_cast<int>(utils::isEgoWithinOriginalLane(
+      common_data_ptr_->lanes_polygon_ptr->current, getEgoPose(), *bpp_param_ptr)));
   if (
     filtered_objects_.current_lane.empty() ||
     !lane_change_parameters_->enable_stopped_vehicle_buffer) {

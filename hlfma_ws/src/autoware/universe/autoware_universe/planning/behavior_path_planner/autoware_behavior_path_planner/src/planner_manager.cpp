@@ -19,6 +19,8 @@
 #include "autoware/behavior_path_planner_common/utils/utils.hpp"
 
 #include <autoware/lanelet2_utils/nn_search.hpp>
+#include <autoware/motion_utils/trajectory/trajectory.hpp>
+#include <autoware_utils/geometry/geometry.hpp>
 #include <magic_enum.hpp>
 
 #include <boost/scope_exit.hpp>
@@ -202,11 +204,85 @@ BehaviorModuleOutput PlannerManager::run(const std::shared_ptr<PlannerData> & da
     m->publishRTCStatus();
     m->publish_planning_factors();
   });
+  // HL FMA 9/10: 기준경로는 successor 만 따라가므로, 노선이 차선변경을 요구하는 지점에서
+  //   끊긴다(예: 14633 -> 14611). 차선변경 모듈이 그 사이클에 경로를 못 내놓으면 이 토막이
+  //   그대로 발행된다. 노선 위에 있지만 불완전한 경로다.
+  //   실측(0910_075318): 경로가 306m <-> 18~45m 로 9회 왕복했고 그때마다 감속과 자세
+  //   흐트러짐이 누적됐다. 직전의 온전한 출력을 짧은 시간 동안 유지한다.
+  //   유지하는 동안에는 보관 시각을 갱신하지 않으므로 상한이 실제로 동작한다.
+  //   자차가 보관 경로에서 벗어나면 유지하지 않는다.
+  //   되돌리려면 이 블록과 헤더의 두 멤버를 지운다.
+  {
+    constexpr double hold_duration_s = 1.5;       // 실측 최대 튐의 약 2배
+    constexpr double hold_lateral_limit_m = 2.0;  // 자차가 보관 경로에서 이만큼 벗어나면 미유지
+    constexpr double shrink_ratio = 0.5;          // 직전의 절반 미만으로 줄면 토막으로 본다
+    const auto arc_length = [](const auto & points) {
+      double s = 0.0;
+      for (size_t i = 1; i < points.size(); ++i) {
+        s += autoware_utils::calc_distance2d(
+          points.at(i - 1).point.pose.position, points.at(i).point.pose.position);
+      }
+      return s;
+    };
+    auto & out = result_output.valid_output;
+    const auto now = clock_.now();
+    bool held = false;
+    if (last_full_output_time_ && last_full_output_.path.points.size() > 1) {
+      const double held_len = arc_length(last_full_output_.path.points);
+      const double cur_len = arc_length(out.path.points);
+      const double age = (now - *last_full_output_time_).seconds();
+      if (cur_len < held_len * shrink_ratio && age >= 0.0 && age <= hold_duration_s) {
+        const double lateral = std::abs(autoware::motion_utils::calcLateralOffset(
+          last_full_output_.path.points, data->self_odometry->pose.pose.position));
+        if (std::isfinite(lateral) && lateral <= hold_lateral_limit_m) {
+          RCLCPP_DEBUG(
+            logger_, "PM_HOLD 불완전 출력 대신 직전 경로 유지 (%.1f -> %.1f m, age=%.2fs, lat=%.2fm)",
+            held_len, cur_len, age, lateral);
+          out = last_full_output_;
+          held = true;
+        }
+      }
+    }
+    if (!held && out.path.points.size() > 1) {
+      last_full_output_ = out;
+      last_full_output_time_ = now;
+    }
+  }
+
   // resample the path prior to generating the drivable area
   result_output.valid_output.path = utils::resamplePathWithSpline(
     result_output.valid_output.path, data->parameters.output_path_interval,
     keep_input_points(getSceneModuleStatus()));
   generateCombinedDrivableArea(result_output.valid_output, data);
+
+  // HL FMA 9/10 판단추적: 최종적으로 무엇이 나갔는지. 길이, 차로열, 첫 정지점 거리.
+  {
+    const auto & pts = result_output.valid_output.path.points;
+    double len = 0.0;
+    double stop_d = -1.0;
+    std::string ids;
+    int64_t prev_id = -1;
+    for (size_t i = 0; i < pts.size(); ++i) {
+      if (i > 0) {
+        len += autoware_utils::calc_distance2d(
+          pts.at(i - 1).point.pose.position, pts.at(i).point.pose.position);
+      }
+      if (stop_d < 0.0 && pts.at(i).point.longitudinal_velocity_mps < 0.1) {
+        stop_d = len;
+      }
+      if (!pts.at(i).lane_ids.empty() && pts.at(i).lane_ids.front() != prev_id) {
+        prev_id = pts.at(i).lane_ids.front();
+        if (ids.size() < 80) {
+          ids += std::to_string(prev_id);
+          ids += " ";
+        }
+      }
+    }
+    RCLCPP_DEBUG(
+      logger_, "PLAN_OUT 최종 %zu점 %.1fm 정지점=%.1fm 차로열=[%s]", pts.size(), len, stop_d,
+      ids.c_str());
+  }
+
   return result_output.valid_output;
 }
 
@@ -812,6 +888,23 @@ std::pair<SceneModulePtr, BehaviorModuleOutput> SubPlannerManager::runRequestMod
    */
   updateCandidateModules(executable_modules, module_ptr);
 
+  // HL FMA 9/10 판단추적: 어떤 모듈이 요청했고, 동시실행 필터에서 누가 남았고,
+  //   최종적으로 누가 뽑혔는지(그리고 승인대기인지)를 남긴다.
+  {
+    const auto names = [](const auto & v) {
+      std::string s;
+      for (const auto & m : v) { s += m->name(); s += " "; }
+      return s.empty() ? std::string("-") : s;
+    };
+    RCLCPP_DEBUG(
+      rclcpp::get_logger("planner_manager"),
+      "PLAN_REQ 요청=[%s] 실행가능=[%s] 대기=[%s] 이미승인=[%s] 선택=%s(%s) 경로점=%zu",
+      names(sorted_request_modules).c_str(), names(executable_modules).c_str(),
+      names(waiting_approved_modules).c_str(), names(already_approved_modules).c_str(),
+      module_ptr->name().c_str(), module_ptr->isWaitingApproval() ? "승인대기" : "승인",
+      results.at(module_ptr->name()).path.points.size());
+  }
+
   return std::make_pair(module_ptr, results.at(module_ptr->name()));
 }
 
@@ -995,6 +1088,10 @@ SlotOutput SubPlannerManager::propagateFull(
     const auto request_modules = getRequestModules(approved_module_output, deleted_modules);
     if (request_modules.empty()) {
       // there is no module that needs to be launched
+      RCLCPP_DEBUG(
+        rclcpp::get_logger("planner_manager"),
+        "PLAN_SLOT 요청 모듈 없음 -> 승인체인 출력 그대로 (경로점=%zu)",
+        approved_module_output.path.points.size());
       return SlotOutput{
         approved_module_output, isAnyCandidateExclusive(), is_failed_approved_slot,
         is_waiting_approved_slot};
@@ -1005,6 +1102,10 @@ SlotOutput SubPlannerManager::propagateFull(
 
     if (!highest_priority_module) {
       // there is no need to launch new module
+      RCLCPP_DEBUG(
+        rclcpp::get_logger("planner_manager"),
+        "PLAN_SLOT 최우선 후보 없음 -> 승인체인 출력 그대로 (경로점=%zu)",
+        approved_module_output.path.points.size());
       return SlotOutput{
         approved_module_output, isAnyCandidateExclusive(), is_failed_approved_slot,
         is_waiting_approved_slot};
@@ -1016,7 +1117,7 @@ SlotOutput SubPlannerManager::propagateFull(
       //   어느 모듈이 얼마나 짧은 경로로 덮어쓰는지 남긴다. 판정되면 이 로그는 지운다.
       RCLCPP_DEBUG(
         rclcpp::get_logger("planner_manager"),
-        "PATH_SWAP by %s: approved %zu pts -> candidate %zu pts",
+        "PLAN_SLOT 승인대기 후보(%s) 경로 채택: 승인체인 %zu점 -> 후보 %zu점",
         highest_priority_module->name().c_str(), approved_module_output.path.points.size(),
         candidate_module_output.path.points.size());
       // there is no need to launch new module
@@ -1025,6 +1126,10 @@ SlotOutput SubPlannerManager::propagateFull(
         is_waiting_approved_slot};
     }
 
+    RCLCPP_DEBUG(
+      rclcpp::get_logger("planner_manager"),
+      "PLAN_SLOT 승인 전이: %s 를 승인 풀에 추가, 그 경로 채택 (%zu점)",
+      highest_priority_module->name().c_str(), candidate_module_output.path.points.size());
     output_path = candidate_module_output;
     addApprovedModule(highest_priority_module);
     clearCandidateModules();
