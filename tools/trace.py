@@ -110,16 +110,20 @@ def pts_summary(pts):
             vmin = v
         if stop_d is None and v < 0.1:
             stop_d = round(s, 1)
-        for lid in lids:
-            if not lanes or lanes[-1] != lid:
-                lanes.append(lid)
+        # HL FMA 9/10: 차선변경 경로의 점은 출발/목표 차로 id 를 둘 다 단다. 직전 하나와만
+        #   비교하면 [14633,14611] 을 단 점이 연속될 때 14633,14611,14633,... 로 찍혀
+        #   경로가 두 차로를 왕복하는 것처럼 보인다(실제 아님). 점 단위 id 집합을 만들고
+        #   연속 중복만 접는다.
+        key = tuple(sorted(lids))
+        if key and (not lanes or lanes[-1] != key):
+            lanes.append(key)
     first_pose, _, _ = _pt(pts[0])
     out = {'n': n, 'len': round(s, 1), 'vmin': round(vmin, 1),
            'end': [round(prev[0], 1), round(prev[1], 1)]}
     if stop_d is not None:
         out['stop_d'] = stop_d
     if lanes:
-        out['lanes'] = lanes[:10]
+        out['lanes'] = [list(k) for k in lanes[:10]]
     return out
 
 
