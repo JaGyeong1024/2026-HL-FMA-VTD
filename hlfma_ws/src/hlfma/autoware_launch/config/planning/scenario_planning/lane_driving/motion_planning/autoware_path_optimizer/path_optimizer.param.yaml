@@ -8,11 +8,11 @@
 
       debug:
         # flag to publish
-        enable_pub_debug_marker: true           # publish debug marker
-        enable_pub_extra_debug_marker: true    # publish extra debug marker
+        enable_pub_debug_marker: false           # publish debug marker
+        enable_pub_extra_debug_marker: false    # publish extra debug marker
 
         # flag to show
-        enable_debug_info: true
+        enable_debug_info: false
         enable_calculation_time_info: false
 
     common:

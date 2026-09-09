@@ -104,6 +104,11 @@ class LanePlanner(Node):
         # 그때마다 change_route 를 새로 밀어 모듈이 하던 일을 리셋한다
         # (2026-09-08 VTD 실주행: 같은 자차 위치에서 계획 4회·요구 3회·속도상한 2회).
         self.committed = None        # (목표 lanelet, 그 demand)
+        # 약속할 당시 '비어 있다고 보고' 계획에 넣은 차선들. GT 인지 범위(80 m) 밖의
+        # 정지차는 계획 시점에 안 보인다 — 이 중 하나가 나중에 막히면 약속을 깬다.
+        # 차량들은 순차적으로 시야에 들어오므로, 다음 한 수의 목표 차선만 보면
+        # 계획 뒤쪽 차선이 늦게 드러나는 경우를 놓친다. 계획 전체를 본다.
+        self.committed_free_lanes = frozenset()
         self.inflight = False        # 서비스 응답 대기 중 — 겹쳐 쏘지 않는다
         self.pub_state = self.create_publisher(String, '/decision/state', 10)
 
@@ -148,8 +153,15 @@ class LanePlanner(Node):
             self.demand_now = None
             self.demand_pending = None
             self.committed = None
+            self.committed_free_lanes = frozenset()
             self.get_logger().info(
                 f'경로 갱신 → 보관본 재설정: preferred {len(self.orig_preferred)} 세그먼트')
+            # A* 회랑은 corridor() 가 route primitives 로만 만든다. 우측 차선이
+            # 여기 없으면 우회 해가 원리적으로 없다 — 실제 범위를 한 번 찍어 확정한다.
+            for i, sg in enumerate(m.segments):
+                ids = [p.id for p in sg.primitives]
+                self.get_logger().info(
+                    f'  세그먼트 primitives seg{i}: {ids} (preferred {sg.preferred_primitive.id})')
     def on_objs(self, m): self.objs = m
     def on_odom(self, m):
         p = m.pose.pose.position; q = m.pose.pose.orientation
@@ -191,7 +203,7 @@ class LanePlanner(Node):
         return sets
 
     # ---------------------------------------------------------------- 점유
-    def blocked(self, corr):
+    def blocked(self, corr=None):
         """{(lanelet, cell): 가장 이른 점유 시각}. 정지 객체는 t=0."""
         occ = {}
         if self.objs is None:
@@ -215,6 +227,12 @@ class LanePlanner(Node):
                     if key not in occ or t < occ[key]:
                         occ[key] = t
         return occ
+
+    def blocked_lane_ids(self):
+        """정지 객체(t<=0)가 점유한 lanelet 집합. 약속 파기 판단용."""
+        if self.objs is None or self.omap is None:
+            return frozenset()
+        return frozenset(l for (l, _c), t in self.blocked().items() if t <= 0.0)
 
     # ---------------------------------------------------------------- A*
     def plan(self, corr, start_lane, start_s, v):
@@ -300,6 +318,21 @@ class LanePlanner(Node):
                     best[nn] = cost
                     heapq.heappush(openq, (cost, cost, nn, node))
         if goal is None:
+            # 진단: 회랑의 어느 차선 어느 구간이 정지 객체로 막혀 사슬이 끊겼는가.
+            # 목표 조건이 '회랑 끝 도달'이므로, 한 군데만 끊겨도 전체가 실패한다.
+            rows = []
+            for k, (i, lanes, ln) in enumerate(corr[:6]):
+                cells = []
+                for l in lanes:
+                    cs = sorted(c for (ll, c), tt in occ.items() if ll == l and tt <= 0.0)
+                    cells.append('%d%s' % (l, '' if not cs else
+                                 '<%.0f~%.0f막힘>' % (cs[0]*CELL, cs[-1]*CELL)))
+                rows.append('seg%d[%s]reach=%s' % (i, ' '.join(cells), sorted(reach[k])))
+            self.get_logger().warning('[계획진단] ' + ' | '.join(rows))
+            self.get_logger().warning(
+                '[계획진단] 회랑 %d세그(horizon %.0fm), 탐색노드 %d개, LC소요 %.0fm, '
+                '목표=마지막세그(idx %d) / 미사용 target_idx=%d'
+                % (len(corr), self.horizon, len(best), lc_len, len(corr)-1, target_idx))
             return None, lc_len
         path, n = [], goal
         while n is not None:
@@ -556,6 +589,18 @@ class LanePlanner(Node):
             if lid == goal_lane or lid in self.omap.successors(goal_lane):
                 self.get_logger().info(f'한 수 완료: {goal_lane} 도달')
                 self.committed = None
+            elif self.committed_free_lanes & self.blocked_lane_ids():
+                # 계획에 넣을 당시 비어 있던 차선이 새로 보인 정지 객체로 막혔다.
+                # 그대로 지키면 막힌 차선으로 들어간다 — 즉시 재계획한다.
+                # (실측 2026-09-09: 계획 3회가 전부 출발 lanelet 16249 에서 났고,
+                #  정지차는 200 m 앞이라 안 보였다. 보인 뒤에도 약속 때문에 재계획이
+                #  막혀 막힌 차선으로 계속 갔다.)
+                hit = sorted(self.committed_free_lanes & self.blocked_lane_ids())
+                self.get_logger().warning(
+                    f'약속 파기: 계획 차선 {hit} 이(가) 정지 객체로 막혔다 '
+                    f'(다음 한 수 {goal_lane}) → 재계획')
+                self.committed = None
+                self.last_key = None      # 같은 계획이라도 다시 적용되게 한다
             else:
                 if self.demand_now != held:
                     self.apply_demand(held)      # 덮어써졌으면 되돌린다
@@ -614,6 +659,10 @@ class LanePlanner(Node):
             ok = self.apply_demand(demand)
             if ok and step is not None:
                 self.committed = (step[1], list(demand))   # step=(from,to)
+                # 계획 경로가 지나는 모든 차선 중, 지금 비어 있다고 본 것만 기록한다.
+                # 이미 막힌 줄 알고도 A* 가 고른 차선은 감안된 것이므로 파기 근거가 아니다.
+                self.committed_free_lanes = (
+                    frozenset(a[0] for a in path) - self.blocked_lane_ids())
             self.publish_state(
                 ego_lane=lid, v=f'{v:.1f}', 남은변경=len(changes),
                 다음한칸=(f'{step[0]}→{step[1]}' if step else '없음'),

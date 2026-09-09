@@ -5,7 +5,7 @@
       #   로그 37곳이 전부 나온다(요구 판정·후보 생성·거절 사유·안전검사·완료 판정).
       #   로거 이름이 lane_change.NORMAL.left / .right 로 방향이 나뉘어, 좌우가 섞여 해석이
       #   안 되던 문제도 함께 해결된다. 진단할 때만 true.
-      verbose: true
+      verbose: false
       time_limit: 50.0 # [ms]
       backward_lane_length: 200.0
       backward_length_buffer_for_end_of_lane: 1.0 # [m]  # HL FMA 9/8 [빠른 판단] 3.0 -> 1.0
@@ -20,7 +20,12 @@
       #   업스트림도 이 검사를 의심한다 — "TODO(Azu) this check seems to cause scenario failures."
       #   크게 잡아 항상 4.0->0 s 를 0.5 s 씩 9개 샘플링하게 한다. 후보가 많아져 훨씬 일찍 성립한다.
       #   부작용: 방향지시등이 더 일찍 켜진다(채점 항목 13 에는 유리). 되돌리려면 10.0
-      min_length_for_turn_signal_activation: 200.0 # [m]
+      #   9/9 밤: 200.0 으로는 부족해졌다. calc_prepare_durations() 의 조기반환 조건은
+      #   dist_to_terminal_start >= base_link2front(3.808) + 이 값 이다. calc_shift_intervals
+      #   패치로 dist_to_terminal_start 가 -DBL_MAX -> 212.67 로 정상화되면서 203.8 을 넘겨
+      #   조기반환이 되살아났고, 준비시간 후보가 "깜빡이 카운트다운" 값 1개로 고정됐다
+      #   (실측: start_distance 가 45m 주행 내내 55.0m 에 못박힘). 되돌리려면 200.0
+      min_length_for_turn_signal_activation: 400.0 # [m]
 
       # terminal path
       terminal_path:
@@ -159,6 +164,9 @@
         #   true 로 두면 앞차를 뚫는 후보가 거부되므로, 더 짧은 준비(= 더 일찍 꺾는) 후보를
         #   고르게 된다. min_length_for_turn_signal_activation 을 키워 준비시간을 여러 개
         #   샘플링하게 한 것과 세트다. 되돌리려면 false.
+        #   9/9 밤 재적용: 9/8 주석대로 이 값과 min_length_for_turn_signal_activation 은
+        #   세트다. false 면 앞 정지차를 관통하는 긴 준비구간 후보가 안전판정을 통과해
+        #   짧은 준비(= 일찍 꺾는) 후보를 고를 이유가 사라진다. 되돌리려면 false
         check_current_lanes: true
         check_other_lanes: false
         use_all_predicted_paths: false
@@ -208,4 +216,4 @@
         lateral_thresholds: [ 3.0, 3.0, 5.0,  5.0,  1.5,   0.8 ]     # corresponding lateral thresholds [m]
 
       # debug
-      publish_debug_marker: true
+      publish_debug_marker: false

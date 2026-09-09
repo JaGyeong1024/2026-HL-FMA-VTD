@@ -47,4 +47,21 @@
 </node>
 
 
+
+<!-- 계층형 정지차 우회 (MY 브랜치 도입, 2026-09-09).
+     Autoware 가 후보 생성·RSS·제어를 소유하고, 이 노드는 신호/지도/footprint 거부권과
+     접근 속도제한, 단계적 우회/복귀만 담당한다.
+     external_request_lane_change_*.enable_rtc: true 와 짝(자동승인 끄고 이 노드가 승인). -->
+<arg name="detour" default="false"/>
+<node pkg="vtd_autoware_bridge" exec="blocked_route_detour" name="blocked_route_detour"
+      output="screen" if="$(var detour)">
+  <param name="map_osm" value="$(var map_osm)"/>
+  <param name="signal_queue_check_distance_m" value="80.0"/>
+  <param name="signal_timeout_s" value="0.5"/>
+  <param name="hold_distance_m" value="45.0"/>
+  <param name="approach_speed_mps" value="4.0"/>
+  <param name="clear_time_s" value="5.0"/>
+  <param name="approach_deceleration_mps2" value="1.5"/>
+</node>
+
 </launch>

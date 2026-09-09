@@ -157,7 +157,7 @@
           # safety check configuration
           enable_safety_check: true
           # collision check parameters
-          publish_debug_marker: true
+          publish_debug_marker: false
           rss_params:
             rear_vehicle_reaction_time: 2.0
             rear_vehicle_safety_time_margin: 1.0
@@ -188,4 +188,4 @@
 
       # debug
       debug:
-        print_debug_info: true
+        print_debug_info: false

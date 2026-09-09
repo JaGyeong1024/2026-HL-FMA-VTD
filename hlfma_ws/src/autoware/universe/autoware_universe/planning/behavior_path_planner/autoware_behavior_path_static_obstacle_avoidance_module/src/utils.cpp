@@ -2749,10 +2749,40 @@ DrivableLanes generateExpandedDrivableLanes(
 
   const auto use_opposite_lane = use_lane_type == "opposite_direction_lane";
 
+  // HL FMA 2026-09-09: 차선변경이 허용된(점선) 이웃만 주행가능영역에 넣는 모드.
+  //   기본 경로인 RouteHandler::getLeftLanelet 은 routable 이웃이 없으면
+  //   routing_graph->adjacentLeft(실선 이웃)로 폴백한다(route_handler.cpp:1593,
+  //   업스트림 주석: "non-routable lane (e.g. lane change infeasible)").
+  //   그래서 회피가 실선을 넘어 채점 항목 6(실선 차로변경, 경미 -3)에 걸렸다.
+  //   되돌리려면 static_obstacle_avoidance.param.yaml 의 use_lane_type 을
+  //   "same_direction_lane" 으로 되돌리면 된다(이 분기를 타지 않는다).
+  const auto lane_changeable_only = use_lane_type == "same_direction_lane_changeable";
+
+  const auto routable_chain =
+    [&route_handler](const lanelet::ConstLanelet & start, const bool to_left) {
+      lanelet::ConstLanelets chain;
+      const auto & graph = route_handler->getRoutingGraphPtr();
+      if (!graph) {
+        return chain;
+      }
+      auto current = start;
+      for (size_t i = 0; i < 8; ++i) {  // 차선 수 상한. 순환 맵에서의 무한루프 방지
+        const auto next = to_left ? graph->left(current) : graph->right(current);
+        if (!next) {
+          break;
+        }
+        chain.push_back(*next);
+        current = *next;
+      }
+      return chain;
+    };
+
   // 1. get left/right side lanes
   const auto update_left_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
     const auto all_left_lanelets =
-      route_handler->getAllLeftSharedLinestringLanelets(target_lane, use_opposite_lane, true);
+      lane_changeable_only
+        ? routable_chain(target_lane, true)
+        : route_handler->getAllLeftSharedLinestringLanelets(target_lane, use_opposite_lane, true);
     if (!all_left_lanelets.empty()) {
       current_drivable_lanes.left_lane = all_left_lanelets.back();  // leftmost lanelet
       pushUniqueVector(
@@ -2762,7 +2792,9 @@ DrivableLanes generateExpandedDrivableLanes(
   };
   const auto update_right_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
     const auto all_right_lanelets =
-      route_handler->getAllRightSharedLinestringLanelets(target_lane, use_opposite_lane, true);
+      lane_changeable_only
+        ? routable_chain(target_lane, false)
+        : route_handler->getAllRightSharedLinestringLanelets(target_lane, use_opposite_lane, true);
     if (!all_right_lanelets.empty()) {
       current_drivable_lanes.right_lane = all_right_lanelets.back();  // rightmost lanelet
       pushUniqueVector(

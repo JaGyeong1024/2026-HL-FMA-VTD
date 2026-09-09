@@ -323,6 +323,38 @@ std::vector<double> calc_shift_intervals(
     }
   }
 
+  // HL FMA 2026-09-09: 목표에서 '멀어지는' 차선변경(EXTERNAL_REQUEST)은 위 질의가 항상 빈 벡터다.
+  //   route_handler.cpp:1930 이 "질의 대상 lanelet 이 preferred 면 방향과 무관하게 {} 반환"이기
+  //   때문이다. mandatory 에는 맞는 동작이다(그 경우 목표 차선 자체가 안 잡힌다). 그러나
+  //   non-mandatory 는 목표 차선이 잡히는데도 {} 를 받아 min_lc_length/dist_buffer 가 DBL_MAX 로
+  //   붕괴하고, dist_to_terminal_start = -DBL_MAX 가 되어 후보 임계값이 전부 무너진다.
+  //   실측(2026-09-09 VTD): 후보 494회 전부 "No safe path",
+  //   terminal LC path 는 std::length_error. 위 9/8 폴백은 back() 이 preferred 라 걸리지 않는다.
+  //   멀어지는 기동에 필요한 것은 '한 칸 되돌아올 길이'이므로 인접 차선까지의 횡간격 하나를 준다.
+  //   부호 규약은 getLateralIntervalsToPreferredLane 과 동일(우측 음수, 좌측 양수).
+  //   되돌리려면 이 블록을 지운다. mandatory 는 이 분기를 타지 않는다.
+  const auto is_mandatory = common_data_ptr->lc_type == LaneChangeModuleType::NORMAL ||
+                            common_data_ptr->lc_type ==
+                              LaneChangeModuleType::AVOIDANCE_BY_LANE_CHANGE;
+
+  if (intervals.empty() && !is_mandatory) {
+    const auto & routing_graph_ptr = route_handler_ptr->getRoutingGraphPtr();
+    if (routing_graph_ptr) {
+      for (const auto & lane : lanes) {
+        const auto adjacent = (direction == Direction::RIGHT) ? routing_graph_ptr->right(lane)
+                                                              : routing_graph_ptr->left(lane);
+        if (!adjacent) {
+          continue;
+        }
+        const auto from = lane.centerline().front().basicPoint();
+        const auto to = adjacent->centerline().front().basicPoint();
+        const auto gap = std::hypot(from.x() - to.x(), from.y() - to.y());
+        intervals.push_back(direction == Direction::RIGHT ? -gap : gap);
+        break;
+      }
+    }
+  }
+
 
   return intervals;
 }

@@ -8,7 +8,7 @@ launch:
   # behavior path modules
   - arg:
       name: launch_static_obstacle_avoidance
-      default: "false"    # HL FMA 9/8 최종: 끈 채로 간다. 회피는 lane_change 로만 한다.
+      default: "false"   # HL FMA 9/9: 이 맵에 road_shoulder 가 0 이라 isNeverAvoidanceTarget 에서 전부 제외됨(작동 불가). 실측 근거로 off
       #   이 모듈로도 회피는 되지만(횡 -2.71 m 실측) 라우팅 그래프를 안 보므로 실선을 넘는다
       #   — 채점 항목 6(실선 차로변경) -3. 실측으로 15719|15750(solid) 을 넘었다.
       #   lane_change 는 실선을 넘지 않고 방향지시등도 정상이라 그쪽으로 간다.
@@ -35,7 +35,7 @@ launch:
       default: "true"
   - arg:
       name: launch_external_request_lane_change_right_module
-      default: "false"  # HL FMA 9/8: 껐다. 우회는 change_route 로 preferred 를 C 로 바꿔
+      default: "true"   # HL FMA 9/9: preferred 에서 멀어질 수 있는 유일한 모듈. 우측만(좌우 동시가 9/8 교착 원인)
       #   경로 기반 lane_change_right 가 맡는다(전 구간 C 로 두면 type=0 dir=2 valid=1 확인).
       #   external 을 함께 켜두면 루트와 무관하게 반대 방향 후보를 계속 내고, 승인된 모듈들이
       #   각자 정지점을 꽂아 교착된다(h4_pocket_ext2_0908: lane_change_right 15.7m 와
@@ -147,7 +147,7 @@ launch:
       default: "true"   # HL FMA 묶음1(9/7): 급출현 보행자·이륜차. 사전테스트까지는 비활성(개발계획_0902 §3)
   - arg:
       name: launch_boundary_departure_prevention_module
-      default: "true"
+      default: "false"
   - arg:
       name: launch_road_user_stop_module
       default: "true"
