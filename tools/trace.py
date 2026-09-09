@@ -218,6 +218,36 @@ class Trace(Node):
                            'auto': getattr(s, 'auto_mode', None),
                            'd': round(s.start_distance, 1)} for s in m.statuses][:8]}
 
+        # ---- HL FMA 9/10 계측 추가 ----
+        #   추종 오차·조향·실제 가속도를 재려면 이 세 종류가 필요한데 그동안
+        #   기본 요약기가 잘라내서 분석 때마다 값이 없었다.
+        if short == 'Control':                       # /control/command/control_cmd 등
+            lo = getattr(m, 'longitudinal', None)
+            la = getattr(m, 'lateral', None)
+            out = {}
+            if lo is not None:
+                out['acc'] = round(getattr(lo, 'acceleration', 0.0), 3)
+                out['vel'] = round(getattr(lo, 'velocity', 0.0), 3)
+                out['jerk'] = round(getattr(lo, 'jerk', 0.0), 3)
+            if la is not None:
+                out['steer'] = round(getattr(la, 'steering_tire_angle', 0.0), 4)
+                out['steer_rate'] = round(getattr(la, 'steering_tire_rotation_rate', 0.0), 4)
+            return out or None
+
+        if short == 'AccelWithCovarianceStamped':    # /localization/acceleration
+            a = m.accel.accel.linear
+            return {'ax': round(a.x, 3), 'ay': round(a.y, 3)}
+
+        if short == 'SteeringReport':                # /vehicle/status/steering_status
+            return {'steer_actual': round(m.steering_tire_angle, 4)}
+
+        if short == 'Float32MultiArrayStamped' and 'diagnostic' in name:
+            # trajectory_follower lateral/longitudinal diagnostic (횡편차·요오차 등)
+            return {'d': [round(float(x), 4) for x in list(m.data)[:12]]}
+
+        if short == 'Float32Stamped' or short == 'Float64Stamped':
+            return {'d': round(float(m.data), 4)}
+
         if short == 'VelocityLimit':
             return {'max_v': round(m.max_velocity, 2), 'sender': getattr(m, 'sender', '')}
 
