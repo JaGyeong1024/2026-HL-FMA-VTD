@@ -821,6 +821,17 @@ bool NormalLaneChange::hasFinishedLaneChange() const
   const auto yaw_deviation_to_centerline =
     utils::lane_change::calc_angle_to_lanelet_segment(target_lanes, current_pose);
 
+  // HL FMA 9/10 계측: 차선변경이 끝나지 않고 RUNNING 에 머무는 원인을 숫자로 남긴다.
+  //   신호에 정상 정차하면 자세가 개선될 수 없어 영구 교착이 된다(0910_061728 t=100~115,
+  //   150 사이클 연속 'Transit from RUNNING to RUNNING'). 판정되면 이 로그는 지운다.
+  RCLCPP_DEBUG(
+    logger_,
+    "LC_FINISH dist_to_end=%.3f buf=%.3f passed=%d yaw=%.3f(th %.3f) lat=%.3f(th %.3f) v=%.2f",
+    dist_to_lane_change_end, finish_judge_buffer, static_cast<int>(has_passed_end_pose),
+    yaw_deviation_to_centerline, lane_change_parameters_->th_finish_judge_yaw_diff,
+    common_data_ptr_->transient_data.target_lanes_ego_arc.distance,
+    lane_change_parameters_->th_finish_judge_lateral_diff, getEgoVelocity());
+
   if (yaw_deviation_to_centerline > lane_change_parameters_->th_finish_judge_yaw_diff) {
     return false;
   }
