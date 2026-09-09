@@ -22,7 +22,10 @@
         max_prepare_duration: 1.5   # HL FMA 9/7: 8.6m/s x 4.0s = 34m 준비구간 -> shift 시작점이 앞 정지차 바로 앞.
                                     #  obstacle_stop 이 앞차 14.5m 전에 세우므로 도달 불가. 1.5s -> 약 13m
         min_prepare_duration: 1.0
-        lateral_jerk: 3.0              # HL FMA 9/9: 신호등 정지선 때문에 available_length 가 21.9m 로 제한되는데
+        # HL FMA 9/10: 병합 때 NG 값(3.0)이 들어왔다. 전이시간이 JG 대비 18% 길어져
+        #   (2*sqrt(3.2/1.5)+2*1.5/3.0=3.92s vs 2*sqrt(3.2/2.0)+2*2.0/5.0=3.33s)
+        #   코너링·차선변경이 느리다. JG 값으로 되돌린다. 되돌리려면 3.0
+        lateral_jerk: 5.0              # HL FMA 9/9: 신호등 정지선 때문에 available_length 가 21.9m 로 제한되는데
                                        #  3.2m 전이에 22m 초과가 필요해 후보가 0개였다. 저크항 2a/j 를 절반으로.
         min_longitudinal_acc: -1.0
         max_longitudinal_acc: 1.0
@@ -110,8 +113,8 @@
       # lateral acceleration map
       lateral_acceleration:
         velocity: [0.0, 4.0, 10.0]
-        min_values: [1.5, 1.5, 1.5]      # HL FMA 9/9: 1.0 -> 1.5 (전이거리 추가 단축)
-        max_values: [2.0, 2.0, 2.0]      # HL FMA 9/9: 1.2 -> 2.0. 5m/s 에서 선회반경 v^2/a=12.5m, 기하 최소 5.65m 이내
+        min_values: [2.0, 2.0, 2.0]   # HL FMA 9/10: NG 1.5 -> JG 2.0      # HL FMA 9/9: 1.0 -> 1.5 (전이거리 추가 단축)
+        max_values: [4.0, 4.0, 4.0]   # HL FMA 9/10: NG 2.0 -> JG 4.0 (13.6m/s 에서 조향 0.064rad, 한계 0.48 의 13%)      # HL FMA 9/9: 1.2 -> 2.0. 5m/s 에서 선회반경 v^2/a=12.5m, 기하 최소 5.65m 이내
 
       # target object
       target_object:
