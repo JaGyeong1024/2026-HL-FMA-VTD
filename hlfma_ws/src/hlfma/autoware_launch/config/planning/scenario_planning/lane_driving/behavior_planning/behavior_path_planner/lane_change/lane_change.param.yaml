@@ -45,7 +45,9 @@
       frenet:
         enable: true
         use_entire_remaining_distance: false
-        th_yaw_diff: 10.0  # [deg]
+        th_yaw_diff: 25.0  # [deg] HL FMA 9/10(NG 미커밋분 반입): 10.0 으로는 다차로 기동 중
+        #   자차 요각(NG 실측 18.09도)이 임계를 넘어 frenet 후보가 통째로 기각되고,
+        #   비스듬한 자세에서 재계획이 영영 안 되는 교착이 된다. 되돌리려면 10.0
         th_curvature_smoothing: 0.1 # [/]
         th_average_curvature: 0.020 # [/]
 
