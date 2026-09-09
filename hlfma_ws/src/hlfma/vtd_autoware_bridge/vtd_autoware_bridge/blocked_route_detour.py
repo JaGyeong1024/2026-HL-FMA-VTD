@@ -29,6 +29,12 @@ class BlockedRouteDetour(Node):
         p('object_stop_speed_mps', 0.3)
         p('blocked_time_s', 0.4); p('detection_distance_m', 80.0); p('input_timeout_s', 1.0)
         p('hold_distance_m', 45.0); p('approach_speed_mps', 4.0); p('approach_deceleration_mps2', 1.5)
+        # HL FMA 9/10 (NG 미커밋분 반입): 접근 제한 하한. 0 까지 내려가면
+        #   velocity_smoother 가 궤적 전체를 0 으로 만들어 차가 못 움직이고,
+        #   blocker 거리도 안 변해 영구 교착이 된다(NG 실측: 좌회전 통과 후
+        #   blocker=40.83 < hold_distance=45.0 에서 정지). 블로커 앞 정지는
+        #   obstacle_stop 이 자체 마진으로 담당한다. 되돌리려면 0.0
+        p('min_approach_speed_mps', 1.0)
         p('clear_time_s', 1.0)
         p('lookahead_m', 100.0); p('path_lateral_margin_m', 2.2); p('retry_interval_s', 2.0)
         g = lambda n: self.get_parameter(n).value
@@ -39,6 +45,7 @@ class BlockedRouteDetour(Node):
         self.input_timeout = float(g('input_timeout_s'))
         self.hold_distance = float(g('hold_distance_m'))
         self.approach_speed = float(g('approach_speed_mps'))
+        self.min_approach_speed = float(g('min_approach_speed_mps'))
         self.approach_deceleration = float(g('approach_deceleration_mps2'))
         self.clear_time = float(g('clear_time_s'))
         if min(self.hold_distance, self.approach_speed, self.approach_deceleration) <= 0:
@@ -210,6 +217,9 @@ class BlockedRouteDetour(Node):
         # envelope is a desired speed, not a direct brake command or a stop guarantee.
         available = max(0.0, blocker - self.hold_distance)
         speed = min(self.approach_speed, math.sqrt(2.0 * self.approach_deceleration * available))
+        # blocker<=0 은 '지금 세워라' 라는 명시적 호출이므로 그대로 둔다.
+        if blocker > 0.0:
+            speed = max(speed, self.min_approach_speed)
         msg = VelocityLimit()
         msg.stamp = self.get_clock().now().to_msg()
         msg.sender = 'blocked_route_detour'
