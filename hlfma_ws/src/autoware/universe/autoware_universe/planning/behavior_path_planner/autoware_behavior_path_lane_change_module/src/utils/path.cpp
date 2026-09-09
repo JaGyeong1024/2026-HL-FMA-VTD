@@ -91,14 +91,22 @@ PathWithLaneId get_reference_path_from_target_lane(
   const double s_start = lane_change_start_arc_position.length;
   const double s_end = std::invoke([&]() {
     const auto dist_from_lc_start = s_start + lane_changing_length + forward_path_length;
+    // HL FMA 9/10: 대상 방향에 차선변경 구간이 없으면 calc_shift_intervals 가 빈 배열을 돌려주고
+    //   lane_changing_length 가 DBL_MAX 로 채워진다. 그러면 next_lc_buffer 가 -DBL_MAX 가 되어
+    //   `target_lane_length - next_lc_buffer` 가 inf 가 되고, 아래 길이 검사를 그냥 통과한다.
+    //   하지만 getCenterLinePath 는 s_end 를 대상 차로의 실제 길이로 잘라내므로 결과 경로가
+    //   lane_changing_length 보다 짧아지고, resamplePathWithSpline 의 보존 키가 경로 밖이 되어
+    //   std::invalid_argument("query_keys is out of base_keys") 로 behavior_planning 컨테이너가
+    //   SIGABRT 로 죽는다(0910_042310 주행 t=64.5). 실제 길이로 한 번 더 자른다.
+    //   되돌리려면 아래 std::min 들에서 target_lane_length 항을 뺀다.
     if (is_goal_in_route) {
       const double s_goal = autoware::experimental::lanelet2_utils::get_arc_coordinates(
                               target_lanes, route_handler.getGoalPose())
                               .length -
                             next_lc_buffer;
-      return std::min(dist_from_lc_start, s_goal);
+      return std::min({dist_from_lc_start, s_goal, target_lane_length});
     }
-    return std::min(dist_from_lc_start, target_lane_length - next_lc_buffer);
+    return std::min({dist_from_lc_start, target_lane_length - next_lc_buffer, target_lane_length});
   });
 
   constexpr double epsilon = 1e-4;
@@ -590,8 +598,16 @@ std::vector<lane_change::TrajectoryGroup> generate_frenet_candidates(
     const auto max_lane_changing_length = std::min(dist_to_end_from_lc_start, max_lc_len);
 
     constexpr auto resample_interval = 0.5;
-    const auto target_lane_reference_path = get_reference_path_from_target_lane(
-      common_data_ptr, lc_start_pose, max_lane_changing_length, resample_interval);
+    // HL FMA 9/10: 여기서 던져지는 보간 예외가 잡히지 않아 컨테이너 전체가 죽었다.
+    //   후보 하나를 버리고 계속하도록 한다. 되돌리려면 try/catch 를 벗긴다.
+    PathWithLaneId target_lane_reference_path;
+    try {
+      target_lane_reference_path = get_reference_path_from_target_lane(
+        common_data_ptr, lc_start_pose, max_lane_changing_length, resample_interval);
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(get_logger(), "대상 차로 기준경로 생성 실패, 후보 폐기: %s", e.what());
+      continue;
+    }
     if (target_lane_reference_path.points.empty()) {
       continue;
     }
