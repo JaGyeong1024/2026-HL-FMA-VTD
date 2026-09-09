@@ -810,7 +810,20 @@ bool isNeverAvoidanceTarget(
     }
   }
 
-  if (object.is_on_ego_lane) {
+  // HL FMA: 내 차로에 오래 정차한 차량은 교통이 아니라 장애물로 다시 판단하게 한다.
+  //
+  // 아래 is_on_ego_lane 블록은 "갓길에 댄 차가 아니면 절대 회피하지 않는다"는 무조건 게이트라,
+  // Autoware 가 이미 갖고 있는 ambiguous vehicle 정책(주차인지 단순 정차인지 애매한 차량 처리)에
+  // 도달조차 못 하게 만든다. 정지 시간/이동 거리 조건을 만족하면 하드 리턴을 건너뛰고
+  // isSatisfiedWithVehicleCondition() 뒤쪽의 ambiguous 정책이 판단하도록 넘긴다.
+  // policy_ambiguous_vehicle 가 "ignore" 이면 기존 거동과 완전히 동일하다.
+  const auto defer_to_ambiguous_policy =
+    parameters->policy_ambiguous_vehicle != "ignore" &&
+    object.stop_time > parameters->time_threshold_for_ambiguous_vehicle &&
+    calc_distance2d(object.init_pose, object.getPose()) <
+      parameters->distance_threshold_for_ambiguous_vehicle;
+
+  if (object.is_on_ego_lane && !defer_to_ambiguous_policy) {
     const auto right_lane =
       planner_data->route_handler->getRightLanelet(object.overhang_lanelet, true, true);
     if (right_lane.has_value() && isOnRight(object)) {
@@ -877,7 +890,8 @@ bool isNeverAvoidanceTarget(
   }
 
   if (isCloseToStopFactor(object, data, planner_data, parameters)) {
-    if (object.is_on_ego_lane && !object.is_parked) {
+    // 위와 같은 이유로, 오래 정차한 차량은 정지선/횡단보도 근처여도 ambiguous 정책에 맡긴다.
+    if (object.is_on_ego_lane && !object.is_parked && !defer_to_ambiguous_policy) {
       object.info = ObjectInfo::IS_NOT_PARKING_OBJECT;
       RCLCPP_DEBUG(
         rclcpp::get_logger(logger_namespace), "object is close to stop factor. never avoid it.");
@@ -2749,40 +2763,10 @@ DrivableLanes generateExpandedDrivableLanes(
 
   const auto use_opposite_lane = use_lane_type == "opposite_direction_lane";
 
-  // HL FMA 2026-09-09: 차선변경이 허용된(점선) 이웃만 주행가능영역에 넣는 모드.
-  //   기본 경로인 RouteHandler::getLeftLanelet 은 routable 이웃이 없으면
-  //   routing_graph->adjacentLeft(실선 이웃)로 폴백한다(route_handler.cpp:1593,
-  //   업스트림 주석: "non-routable lane (e.g. lane change infeasible)").
-  //   그래서 회피가 실선을 넘어 채점 항목 6(실선 차로변경, 경미 -3)에 걸렸다.
-  //   되돌리려면 static_obstacle_avoidance.param.yaml 의 use_lane_type 을
-  //   "same_direction_lane" 으로 되돌리면 된다(이 분기를 타지 않는다).
-  const auto lane_changeable_only = use_lane_type == "same_direction_lane_changeable";
-
-  const auto routable_chain =
-    [&route_handler](const lanelet::ConstLanelet & start, const bool to_left) {
-      lanelet::ConstLanelets chain;
-      const auto & graph = route_handler->getRoutingGraphPtr();
-      if (!graph) {
-        return chain;
-      }
-      auto current = start;
-      for (size_t i = 0; i < 8; ++i) {  // 차선 수 상한. 순환 맵에서의 무한루프 방지
-        const auto next = to_left ? graph->left(current) : graph->right(current);
-        if (!next) {
-          break;
-        }
-        chain.push_back(*next);
-        current = *next;
-      }
-      return chain;
-    };
-
   // 1. get left/right side lanes
   const auto update_left_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
     const auto all_left_lanelets =
-      lane_changeable_only
-        ? routable_chain(target_lane, true)
-        : route_handler->getAllLeftSharedLinestringLanelets(target_lane, use_opposite_lane, true);
+      route_handler->getAllLeftSharedLinestringLanelets(target_lane, use_opposite_lane, true);
     if (!all_left_lanelets.empty()) {
       current_drivable_lanes.left_lane = all_left_lanelets.back();  // leftmost lanelet
       pushUniqueVector(
@@ -2792,9 +2776,7 @@ DrivableLanes generateExpandedDrivableLanes(
   };
   const auto update_right_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
     const auto all_right_lanelets =
-      lane_changeable_only
-        ? routable_chain(target_lane, false)
-        : route_handler->getAllRightSharedLinestringLanelets(target_lane, use_opposite_lane, true);
+      route_handler->getAllRightSharedLinestringLanelets(target_lane, use_opposite_lane, true);
     if (!all_right_lanelets.empty()) {
       current_drivable_lanes.right_lane = all_right_lanelets.back();  // rightmost lanelet
       pushUniqueVector(

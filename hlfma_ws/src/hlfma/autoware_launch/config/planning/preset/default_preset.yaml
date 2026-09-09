@@ -8,19 +8,10 @@ launch:
   # behavior path modules
   - arg:
       name: launch_static_obstacle_avoidance
-      default: "false"   # HL FMA 9/9: 이 맵에 road_shoulder 가 0 이라 isNeverAvoidanceTarget 에서 전부 제외됨(작동 불가). 실측 근거로 off
-      #   이 모듈로도 회피는 되지만(횡 -2.71 m 실측) 라우팅 그래프를 안 보므로 실선을 넘는다
-      #   — 채점 항목 6(실선 차로변경) -3. 실측으로 15719|15750(solid) 을 넘었다.
-      #   lane_change 는 실선을 넘지 않고 방향지시등도 정상이라 그쪽으로 간다.
-      #   다시 켜려면 "true". 그때는 아래 파라미터들이 함께 살아난다:
-      #     target_object.*.longitudinal_margin 15.0 / max_right_shift_length 8.0 /
-      #     return_dead_line.traffic_light false / ambiguous·parking policy auto
-      #   또한 scene_module_manager 의 slot2 우선순위(lane_change 아래)와 candidate 동시실행 true 가
-      #   반드시 함께여야 한다 — 위에 두면 lane_change_* 를 후보에서 축출한다(실측 0.7초).
-
+      default: "true"   # HL FMA: 차로 내 회피 허용 (9/3 갓길 정차차량 미회피 대응)
   - arg:
       name: launch_avoidance_by_lane_change_module
-      default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
+      default: "true"   # HL FMA: 전방 막힘 시 차선변경 우회 (9/3 갓길 정차차량·사고 미우회 대응)
   - arg:
       name: launch_dynamic_obstacle_avoidance
       default: "false"
@@ -35,20 +26,10 @@ launch:
       default: "true"
   - arg:
       name: launch_external_request_lane_change_right_module
-      default: "true"   # HL FMA 9/9: preferred 에서 멀어질 수 있는 유일한 모듈. 우측만(좌우 동시가 9/8 교착 원인)
-      #   경로 기반 lane_change_right 가 맡는다(전 구간 C 로 두면 type=0 dir=2 valid=1 확인).
-      #   external 을 함께 켜두면 루트와 무관하게 반대 방향 후보를 계속 내고, 승인된 모듈들이
-      #   각자 정지점을 꽂아 교착된다(h4_pocket_ext2_0908: lane_change_right 15.7m 와
-      #   external_..._left 1.6m 가 동시에 정지 → obstacle_stop 1.75m 로 고착).
-      #   되돌리려면 "true".
+      default: "true"   # blocked_route_detour가 RTC 승인하는 정지 차량군 우회 후보
   - arg:
       name: launch_external_request_lane_change_left_module
-      default: "false"  # HL FMA 9/8: 껐다. 우회는 change_route 로 preferred 를 C 로 바꿔
-      #   경로 기반 lane_change_right 가 맡는다(전 구간 C 로 두면 type=0 dir=2 valid=1 확인).
-      #   external 을 함께 켜두면 루트와 무관하게 반대 방향 후보를 계속 내고, 승인된 모듈들이
-      #   각자 정지점을 꽂아 교착된다(h4_pocket_ext2_0908: lane_change_right 15.7m 와
-      #   external_..._left 1.6m 가 동시에 정지 → obstacle_stop 1.75m 로 고착).
-      #   되돌리려면 "true".
+      default: "true"   # blocked_route_detour가 RTC 승인하는 정지 차량군 우회 후보
   - arg:
       name: launch_goal_planner_module
       default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
@@ -141,13 +122,13 @@ launch:
       default: "true"
   - arg:
       name: launch_obstacle_velocity_limiter_module
-      default: "false"
+      default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
   - arg:
       name: launch_run_out_module
-      default: "true"   # HL FMA 묶음1(9/7): 급출현 보행자·이륜차. 사전테스트까지는 비활성(개발계획_0902 §3)
+      default: "true"   # HL FMA: 급출현 보행자 대응 (9/4 검증: 끄면 보행자 충돌). 0.52.0은 예측객체 기반
   - arg:
       name: launch_boundary_departure_prevention_module
-      default: "false"
+      default: "true"
   - arg:
       name: launch_road_user_stop_module
       default: "true"

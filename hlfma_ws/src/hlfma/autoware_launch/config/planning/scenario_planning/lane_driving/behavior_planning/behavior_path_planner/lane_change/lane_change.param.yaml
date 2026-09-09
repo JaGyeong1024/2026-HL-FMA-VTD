@@ -1,31 +1,15 @@
 /**:
   ros__parameters:
     lane_change:
-      # HL FMA 9/8: true 면 lane_change 로거가 DEBUG 로 열려, 모듈이 이미 갖고 있는 판단 지점
-      #   로그 37곳이 전부 나온다(요구 판정·후보 생성·거절 사유·안전검사·완료 판정).
-      #   로거 이름이 lane_change.NORMAL.left / .right 로 방향이 나뉘어, 좌우가 섞여 해석이
-      #   안 되던 문제도 함께 해결된다. 진단할 때만 true.
-      verbose: false
       time_limit: 50.0 # [ms]
       backward_lane_length: 200.0
-      backward_length_buffer_for_end_of_lane: 1.0 # [m]  # HL FMA 9/8 [빠른 판단] 3.0 -> 1.0
+      backward_length_buffer_for_end_of_lane: 3.0 # [m]
       backward_length_buffer_for_blocking_object: 3.0 # [m]
       backward_length_from_intersection: 5.0 # [m]
       enable_stopped_vehicle_buffer: true
 
       # turn signal
-      # HL FMA 9/8 [빠른 판단 기본값] 10.0 -> 200.0
-      #   calc_prepare_durations(): dist_to_terminal_start >= (base_link2front + 이 값) 이면
-      #   준비시간 후보를 **딱 하나만** 시도한다. 그게 안 맞으면 후보가 아예 안 나온다.
-      #   업스트림도 이 검사를 의심한다 — "TODO(Azu) this check seems to cause scenario failures."
-      #   크게 잡아 항상 4.0->0 s 를 0.5 s 씩 9개 샘플링하게 한다. 후보가 많아져 훨씬 일찍 성립한다.
-      #   부작용: 방향지시등이 더 일찍 켜진다(채점 항목 13 에는 유리). 되돌리려면 10.0
-      #   9/9 밤: 200.0 으로는 부족해졌다. calc_prepare_durations() 의 조기반환 조건은
-      #   dist_to_terminal_start >= base_link2front(3.808) + 이 값 이다. calc_shift_intervals
-      #   패치로 dist_to_terminal_start 가 -DBL_MAX -> 212.67 로 정상화되면서 203.8 을 넘겨
-      #   조기반환이 되살아났고, 준비시간 후보가 "깜빡이 카운트다운" 값 1개로 고정됐다
-      #   (실측: start_distance 가 45m 주행 내내 55.0m 에 못박힘). 되돌리려면 200.0
-      min_length_for_turn_signal_activation: 400.0 # [m]
+      min_length_for_turn_signal_activation: 10.0 # [m]
 
       # terminal path
       terminal_path:
@@ -35,35 +19,24 @@
 
       # trajectory generation
       trajectory:
-        max_prepare_duration: 4.0   # HL FMA 9/8 재원복: 1.0 으로 줄였더니 'Ego is far from target lane
-        # start' 판정 임계(= 이 값 x max_vel)가 54.4m -> 13.6m 로 좁아져 차선변경이 계획조차 안 됐다.
-        # (9/7 주석의 경고와 같은 함정. 이 값은 규제요소 근접 판정과 목표차선 도달 판정에 반대로 작용한다)
-        # 규제요소 근접 금지(scene.cpp:342)에는 작을수록 유리하지만, '목표차선 시작점까지 거리'
-        # 판정(scene.cpp:312)에는 작을수록 불리하다. 실주행 진단에서 규제 근접 0회 / 목표차선 시작점
-        # 초과 다수 → 줄인 것이 순손해였다. 48m standoff 에서 우회 후보를 만들려면 54.4m 가 필요하다.
-        min_prepare_duration: 0.5   # HL FMA 9/8: 0.0 으로 없앴더니 path.cpp:515 의 하드코딩 5도
-        # 이음매 검사(준비구간↔횡이동 연속성)에 전 후보가 걸려 채택 0 이 됐다. 최소한만 되살린다.
-        lateral_jerk: 5.0   # HL FMA 9/8: 횡가속 상향과 세트. 되돌리려면 1.5
+        max_prepare_duration: 1.5   # HL FMA 9/7: 8.6m/s x 4.0s = 34m 준비구간 -> shift 시작점이 앞 정지차 바로 앞.
+                                    #  obstacle_stop 이 앞차 14.5m 전에 세우므로 도달 불가. 1.5s -> 약 13m
+        min_prepare_duration: 1.0
+        lateral_jerk: 3.0              # HL FMA 9/9: 신호등 정지선 때문에 available_length 가 21.9m 로 제한되는데
+                                       #  3.2m 전이에 22m 초과가 필요해 후보가 0개였다. 저크항 2a/j 를 절반으로.
         min_longitudinal_acc: -1.0
-        max_longitudinal_acc: 0.5   # HL FMA 9/7 단독 재적용: 저속 차선변경 길이의 ½·a·t² 항이 지배적이라
-        # (2m/s 에서 앞 두 항 13m + 이 항 9m) 이 값을 줄이면 저속 LC 가 크게 짧아져 우회 후 복귀가 가능해진다.
-        # 앞서 안전 판정이 깨진 것은 min_values 1.0 과 동시 변경 탓으로 보고 이번엔 단독 적용해 확인한다.
-        # HL FMA 9/8 [빠른 판단] 1.0 -> 0.3. 후보 간 길이 차가 이보다 작으면 건너뛴다 —
-        # 크면 시도 후보가 성기어 해를 놓친다. 되돌리려면 1.0
-        th_prepare_length_diff: 0.3
-        th_lane_changing_length_diff: 0.3
-        min_lane_changing_velocity: 2.78
+        max_longitudinal_acc: 1.0
+        th_prepare_length_diff: 1.0
+        th_lane_changing_length_diff: 1.0
+        min_lane_changing_velocity: 1.5 # HL FMA 9/7: min_lc_length 16.1m -> 6.1m (가용 16m 대응)
         lon_acc_sampling_num: 5
         lat_acc_sampling_num: 3
         lane_changing_decel_factor: 0.5
-        th_prepare_curvature: 0.04 # [/]  # HL FMA 묶음3: R≥25m 곡선에서 허용
+        th_prepare_curvature: 0.03 # [/]
 
       # delay lane change
       delay_lane_change:
-        # HL FMA 9/8: 실측으로 이 기능이 차단자였다. "목표 차선에 주차 차량 + 자차 미정지 → 건너뜀"
-        # 이 우리 시나리오와 정확히 반대로 작동한다(정지하면 거리가 없어 후보 자체가 안 생김).
-        # lat_up 주행에서 이 사유로 52회 거절. 되돌리려면 true.
-        enable: false
+        enable: true
         check_only_parked_vehicle: false
         min_road_shoulder_width: 0.5  # [m]
         th_parked_vehicle_shift_ratio: 0.6
@@ -72,7 +45,7 @@
       frenet:
         enable: true
         use_entire_remaining_distance: false
-        th_yaw_diff: 10.0  # [deg]  (9/8 확인: 거절 원인이 아니었다. 실제는 path.cpp:515 의 5도 상수)
+        th_yaw_diff: 10.0  # [deg]
         th_curvature_smoothing: 0.1 # [/]
         th_average_curvature: 0.020 # [/]
 
@@ -81,22 +54,22 @@
         allow_loose_check_for_cancel: true
         enable_target_lane_bound_check: true
         stopped_object_velocity_threshold: 0.3          # [m/s] Object whose velocity is less than the threshold is treated as static object.
-        prepare:   # HL FMA 9/8 완화 (원래 1.0/0.8/0.5/1.0)
+        prepare:                                        # RSS parameters used during the prepare phase, regardless of whether the ego is searching for a safe path, canceling, or transitioning to another state.
           expected_front_deceleration: -1.0             # [m/s2]
           expected_rear_deceleration: -1.0              # [m/s2]
-          rear_vehicle_reaction_time: 0.3               # [s]
-          rear_vehicle_safety_time_margin: 0.2          # [s]
-          lateral_distance_max_threshold: 0.3           # [m]
-          longitudinal_distance_min_threshold: 0.5      # [m]
+          rear_vehicle_reaction_time: 1.0               # [s]
+          rear_vehicle_safety_time_margin: 0.8          # [s]
+          lateral_distance_max_threshold: 0.5           # [m]
+          longitudinal_distance_min_threshold: 1.0      # [m]
           longitudinal_velocity_delta_time: 0.0         # [s]
           extended_polygon_policy: "along_path"         # [-] available options are `rectangle` or `along_path`
-        execution:   # HL FMA 9/8 완화 (원래 2.0/1.0/2.0/3.0). GT 인지라 지연·오차 없음
+        execution:
           expected_front_deceleration: -1.0
           expected_rear_deceleration: -1.0
-          rear_vehicle_reaction_time: 0.5
-          rear_vehicle_safety_time_margin: 0.2
-          lateral_distance_max_threshold: 1.0
-          longitudinal_distance_min_threshold: 1.5
+          rear_vehicle_reaction_time: 2.0
+          rear_vehicle_safety_time_margin: 1.0
+          lateral_distance_max_threshold: 2.0
+          longitudinal_distance_min_threshold: 3.0
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
         parked:
@@ -108,22 +81,22 @@
           longitudinal_distance_min_threshold: 3.0
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
-        cancel:   # HL FMA 9/8: execution 과 동일하게. 취소 판정이 더 빡빡하면 시작했다가 되돌아온다 (원래 1.5/0.8/1.0/2.5)
+        cancel:
           expected_front_deceleration: -1.0
           expected_rear_deceleration: -2.0
-          rear_vehicle_reaction_time: 0.5
-          rear_vehicle_safety_time_margin: 0.2
+          rear_vehicle_reaction_time: 1.5
+          rear_vehicle_safety_time_margin: 0.8
           lateral_distance_max_threshold: 1.0
-          longitudinal_distance_min_threshold: 1.5
+          longitudinal_distance_min_threshold: 2.5
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
-        stuck:   # HL FMA 9/8: 상류는 execution 과 같아 완화가 없었다 (원래 2.0/1.0/2.0/3.0)
+        stuck:
           expected_front_deceleration: -1.0
           expected_rear_deceleration: -1.0
-          rear_vehicle_reaction_time: 0.5
-          rear_vehicle_safety_time_margin: 0.2
-          lateral_distance_max_threshold: 1.0
-          longitudinal_distance_min_threshold: 1.5
+          rear_vehicle_reaction_time: 2.0
+          rear_vehicle_safety_time_margin: 1.0
+          lateral_distance_max_threshold: 2.0
+          longitudinal_distance_min_threshold: 3.0
           longitudinal_velocity_delta_time: 0.0
           extended_polygon_policy: "rectangle"
 
@@ -135,10 +108,8 @@
       # lateral acceleration map
       lateral_acceleration:
         velocity: [0.0, 4.0, 10.0]
-        min_values: [2.0, 2.0, 2.0]   # HL FMA 9/8: 채택 후보 중앙값 51.5m 로는 50m 앞 정지차 전에 못 끝난다.
-        # 채점 15항목에 승차감·가속도 기준 없음. 실제 제약은 차로 유지(항목3) 즉 MPC 추종 오차뿐이다.
-        # 13.6m/s 에서 4.0m/s^2 = 곡률 0.022, 조향 0.064rad (한계 0.48rad 의 13%) 로 여유가 크다.
-        max_values: [4.0, 4.0, 4.0]   # 되돌리려면 min 1.0 / max 1.2
+        min_values: [1.5, 1.5, 1.5]      # HL FMA 9/9: 1.0 -> 1.5 (전이거리 추가 단축)
+        max_values: [2.0, 2.0, 2.0]      # HL FMA 9/9: 1.2 -> 2.0. 5m/s 에서 선회반경 v^2/a=12.5m, 기하 최소 5.65m 이내
 
       # target object
       target_object:
@@ -156,31 +127,15 @@
         prediction_time_resolution: 0.5
         th_incoming_object_yaw: 2.3562 # [rad]
         yaw_diff_threshold: 3.1416 # [rad]
-        # HL FMA 9/8 [빠른 판단] false -> true (코드 구조체 기본값도 true 다).
-        #   get_target_objects(): 이 값이 false 면 **자차 차선의 객체를 안전검사에 넣지 않는다**.
-        #   그러면 준비 구간이 앞 정지차를 관통해도 모듈이 모른 채 후보를 채택하고,
-        #   그 뒤 motion_velocity 의 obstacle_stop 이 벽을 세워 기동 도중에 멈춰버린다
-        #   (실측 2026-09-08: A->B 기동이 15.6초 RUNNING 고착, rviz 에서 경로가 정지차를 관통).
-        #   true 로 두면 앞차를 뚫는 후보가 거부되므로, 더 짧은 준비(= 더 일찍 꺾는) 후보를
-        #   고르게 된다. min_length_for_turn_signal_activation 을 키워 준비시간을 여러 개
-        #   샘플링하게 한 것과 세트다. 되돌리려면 false.
-        #   9/9 밤 재적용: 9/8 주석대로 이 값과 min_length_for_turn_signal_activation 은
-        #   세트다. false 면 앞 정지차를 관통하는 긴 준비구간 후보가 안전판정을 통과해
-        #   짧은 준비(= 일찍 꺾는) 후보를 고를 이유가 사라진다. 되돌리려면 false
-        check_current_lanes: true
+        check_current_lanes: false
         check_other_lanes: false
         use_all_predicted_paths: false
 
       # lane change regulations
       regulation:
-        # HL FMA 9/8 [빠른 판단] intersection·traffic_light off.
-        #   is_near_regulatory_element(): max_prepare_length(54.4m) > 규제요소까지 거리 이면
-        #   차선변경을 통째로 차단한다. 우리 경로는 끝이 신호 교차로이고 좌회전 포켓 진입은
-        #   그 54.4 m 안에서 일어나야 한다 — 목적이 정면으로 충돌한다.
-        #   횡단보도는 남긴다(보행자 관련, 채점 항목 10·12). 되돌리려면 셋 다 true.
         crosswalk: true
-        intersection: false
-        traffic_light: false
+        intersection: true
+        traffic_light: true
 
       # ego vehicle stuck detection
       stuck_detection:
@@ -190,15 +145,15 @@
       # lane change cancel
       cancel:
         enable_on_prepare_phase: true
-        enable_on_lane_changing_phase: true
+        enable_on_lane_changing_phase: false  # HL FMA 9/8 진단: Abort 고착(hasFinishedAbort 는 자차가 지나가야 true) 확인용
         delta_time: 1.0                     # [s]
         duration: 5.0                       # [s]
         max_lateral_jerk: 100.0             # [m/s3]
         overhang_tolerance: 0.0             # [m]
-        unsafe_hysteresis_threshold: 1      # [/] HL FMA 9/8: GT 인지라 연속 확인이 불필요. 되돌리려면 5
+        unsafe_hysteresis_threshold: 5      # [/]
         deceleration_sampling_num: 1        # [/] Used to sample the approved lane change path, specifically for checking safety against leading objects.
 
-      lane_change_finish_judge_buffer: 1.0      # [m]  # HL FMA 9/8 [빠른 판단] 2.0 -> 1.0 (n회당 가산)
+      lane_change_finish_judge_buffer: 2.0      # [m]
       finish_judge_lateral_threshold: 0.1        # [m]
       finish_judge_lateral_angle_deviation: 1.0 # [deg]
 
@@ -216,4 +171,4 @@
         lateral_thresholds: [ 3.0, 3.0, 5.0,  5.0,  1.5,   0.8 ]     # corresponding lateral thresholds [m]
 
       # debug
-      publish_debug_marker: false
+      publish_debug_marker: true

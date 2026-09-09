@@ -136,9 +136,6 @@ double calc_dist_to_last_fit_width(
 double calc_maximum_prepare_length(const CommonDataPtr & common_data_ptr)
 {
   const auto max_prepare_duration = common_data_ptr->lc_param_ptr->trajectory.max_prepare_duration;
-  // HL FMA P2 철회(9/7 시뮬 실주행): 외부 속도제한을 여기 반영하면 max_prepare_length 가 제한에 비례해
-  // 줄고, 그 값이 scene.cpp:204/313 의 '차선변경 시작 가능 거리' 판정에도 쓰여 저속에서 후보가 아예
-  // 생성되지 않았다(detour3: 제한 4.0→0.04 로 감소하자 후보 소멸). 규제구역 축소 이득보다 손해가 크다.
   const auto ego_max_speed = common_data_ptr->bpp_param_ptr->max_vel;
 
   return max_prepare_duration * ego_max_speed;
@@ -274,7 +271,10 @@ std::vector<double> calc_max_lane_change_lengths(
 double calc_distance_buffer(const LCParamPtr & lc_param_ptr, const std::vector<double> & lc_lengths)
 {
   if (lc_lengths.empty()) {
-    return std::numeric_limits<double>::max();
+    // HL FMA: 빈 배열은 "차선변경이 필요 없다"는 뜻이므로 필요 여유는 0 이다.
+    // DBL_MAX 를 반환하면 상위에서 (유한값 - DBL_MAX) = -DBL_MAX 로 퇴화해
+    // 모든 후보가 폐기된다. (scene.cpp: dist_to_terminal_start)
+    return 0.0;
   }
 
   const auto finish_judge_buffer = lc_param_ptr->lane_change_finish_judge_buffer;
@@ -295,68 +295,24 @@ std::vector<double> calc_shift_intervals(
   const auto & route_handler_ptr = common_data_ptr->route_handler_ptr;
   const auto direction = common_data_ptr->direction;
 
-  auto intervals = route_handler_ptr->getLateralIntervalsToPreferredLane(lanes.back(), direction);
-
-  // HL FMA 9/8: back() 하나만 보면 '목표 차선에서 멀어졌다가 돌아오는' 우회를 표현할 수 없다.
-  //   차선열 끝의 preferred 가 좌회전 포켓(왼쪽)이면, 우측 방향은 오른쪽으로 아무리 걸어도
-  //   preferred 를 못 만나 빈 벡터가 되고 필요 길이가 DBL_MAX 가 되어 후보가 전멸한다
-  //   (실측 h4_lc_only_0908: preferred 를 B 로 바꿔도 dir=2 가 계속 무한대).
-  //   그래서 back() 이 비면 자차 쪽으로 되짚어 오며 첫 유효 구간을 쓴다. back() 이 유효하면
-  //   기존과 동일하게 동작한다. 되돌리려면 이 블록을 지우면 된다.
-  //   가드: back() 이 이미 preferred 면 '변경이 필요 없어서' 빈 구간이 나온 것이다. 그 경우에 되짚어
-  //   가면 앞쪽 세그먼트에서 없는 요구를 주워 불필요한 차선변경을 만들 수 있다.
-  //   preferred 가 반대 방향이라 빈 경우에만 폴백한다.
-  const auto back_is_preferred = [&]() {
-    const auto preferred = route_handler_ptr->getPreferredLanelets();
-    return std::any_of(preferred.begin(), preferred.end(), [&](const auto & l) {
-      return l.id() == lanes.back().id();
-    });
-  };
-
-  if (intervals.empty() && lanes.size() > 1 && !back_is_preferred()) {
-    for (auto it = std::next(lanes.rbegin()); it != lanes.rend(); ++it) {
-      auto near_intervals = route_handler_ptr->getLateralIntervalsToPreferredLane(*it, direction);
-      if (!near_intervals.empty()) {
-        intervals = std::move(near_intervals);
-        break;
-      }
+  // HL FMA: lanes.back() 하나만 조회하면, 먼 구간의 preferred 가 진행 방향과 반대쪽일 때
+  // 빈 배열이 반환된다. 그 빈 배열은 calc_distance_buffer 에서 DBL_MAX 로 바뀌고,
+  // dist_to_terminal_start = (유한값) - DBL_MAX = -DBL_MAX 가 되어
+  // 모든 차선변경 후보가 prepare length 검사에서 폐기된다.
+  // 먼 쪽부터 자차 쪽으로 내려오며 첫 유효값을 사용한다.
+  for (auto it = lanes.rbegin(); it != lanes.rend(); ++it) {
+    const auto intervals = route_handler_ptr->getLateralIntervalsToPreferredLane(*it, direction);
+    if (!intervals.empty()) {
+      // HL FMA 9/9: 업스트림은 선호 차로까지의 차선변경 횟수만큼 구간을 돌려주고,
+      //   calc_distance_buffer 가 그 개수만큼 finish_judge_buffer 와 backward_buffer 를
+      //   중복 요구한다(인계문서 §6.4: 2회분 약 26.6m). 대상 차로를 한 번에 건너뛰도록
+      //   바꿨으므로 구간을 하나로 합쳐 1회분 버퍼만 요구하게 한다.
+      //   되돌리려면 intervals 를 그대로 반환한다.
+      return {std::accumulate(intervals.begin(), intervals.end(), 0.0)};
     }
   }
 
-  // HL FMA 2026-09-09: 목표에서 '멀어지는' 차선변경(EXTERNAL_REQUEST)은 위 질의가 항상 빈 벡터다.
-  //   route_handler.cpp:1930 이 "질의 대상 lanelet 이 preferred 면 방향과 무관하게 {} 반환"이기
-  //   때문이다. mandatory 에는 맞는 동작이다(그 경우 목표 차선 자체가 안 잡힌다). 그러나
-  //   non-mandatory 는 목표 차선이 잡히는데도 {} 를 받아 min_lc_length/dist_buffer 가 DBL_MAX 로
-  //   붕괴하고, dist_to_terminal_start = -DBL_MAX 가 되어 후보 임계값이 전부 무너진다.
-  //   실측(2026-09-09 VTD): 후보 494회 전부 "No safe path",
-  //   terminal LC path 는 std::length_error. 위 9/8 폴백은 back() 이 preferred 라 걸리지 않는다.
-  //   멀어지는 기동에 필요한 것은 '한 칸 되돌아올 길이'이므로 인접 차선까지의 횡간격 하나를 준다.
-  //   부호 규약은 getLateralIntervalsToPreferredLane 과 동일(우측 음수, 좌측 양수).
-  //   되돌리려면 이 블록을 지운다. mandatory 는 이 분기를 타지 않는다.
-  const auto is_mandatory = common_data_ptr->lc_type == LaneChangeModuleType::NORMAL ||
-                            common_data_ptr->lc_type ==
-                              LaneChangeModuleType::AVOIDANCE_BY_LANE_CHANGE;
-
-  if (intervals.empty() && !is_mandatory) {
-    const auto & routing_graph_ptr = route_handler_ptr->getRoutingGraphPtr();
-    if (routing_graph_ptr) {
-      for (const auto & lane : lanes) {
-        const auto adjacent = (direction == Direction::RIGHT) ? routing_graph_ptr->right(lane)
-                                                              : routing_graph_ptr->left(lane);
-        if (!adjacent) {
-          continue;
-        }
-        const auto from = lane.centerline().front().basicPoint();
-        const auto to = adjacent->centerline().front().basicPoint();
-        const auto gap = std::hypot(from.x() - to.x(), from.y() - to.y());
-        intervals.push_back(direction == Direction::RIGHT ? -gap : gap);
-        break;
-      }
-    }
-  }
-
-
-  return intervals;
+  return {};
 }
 
 std::pair<MinMaxValue, MinMaxValue> calc_lc_length_and_dist_buffer(

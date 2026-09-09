@@ -260,8 +260,17 @@ void PlannerManager::updateCurrentRouteLanelet(
   const auto & pose = data->self_odometry->pose.pose;
   const auto p = data->parameters;
 
+  // HL FMA 9/9: 업스트림은 자율주행 중이면 경로 이탈 복구 스냅을 통째로 건너뛴다. 그러면
+  //   current_route_lanelet_ 이 한 번 어긋났을 때 되돌아올 길이 없다. 실측(시나리오 2):
+  //   2차로 차선변경 도중 자차가 중간 차로 14890 에 들어갔는데 추적이 못 따라가
+  //   isEgoOutOfRoute=true -> "no module is running" -> createGoalAroundPath 가 47m 앞에
+  //   v=0 궤적을 내놓고 영구 정지했다. 14890 은 경로 seg4 에 분명히 들어 있어서
+  //   getClosestLaneletWithConstrainsWithinRoute 면 바로 다시 붙는다(yaw 여유 60도, 실측 16도).
+  //   승인 모듈이 실행 중일 때만 건너뛰도록 좁혀 상류 의도(기동 중 추적값을 흔들지 않음)는 남긴다.
+  //   되돌리려면 is_any_approved_module_running && 를 지운다.
   const bool skip_global_route_snap =
-    data->operation_mode && data->operation_mode->mode == OperationModeState::AUTONOMOUS &&
+    is_any_approved_module_running && data->operation_mode &&
+    data->operation_mode->mode == OperationModeState::AUTONOMOUS &&
     data->operation_mode->is_autoware_control_enabled;
 
   const auto snap_to_global_route_if_ego_out = [&]() {

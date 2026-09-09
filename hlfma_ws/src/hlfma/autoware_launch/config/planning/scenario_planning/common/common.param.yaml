@@ -13,18 +13,18 @@
 
 /**:
   ros__parameters:
-    max_vel: 13.6           # max velocity limit [m/s] (HL FMA: 49km/h. 제한 50, 초과 1km/h 까지 허용. 평가는 VTD RDB 실속도 기준 — 9/6 결정)           # max velocity limit [m/s] (HL FMA: 49km/h. 제한 50, 초과 1km/h 까지 허용. 평가는 VTD RDB 실속도 기준 — 9/6 결정)
+    max_vel: 12.8           # max velocity limit [m/s] (HL FMA: 46km/h, 제한 50 대비 마진. 평가는 VTD 실속도 기준)
 
     # constraints param for normal driving
     normal:
-      min_acc: -3.5         # min deceleration [m/ss]  # HL FMA 묶음1 2차(9/7): 보행자 30m 경계. 1차 -2.5 는 40m 정지·30m 충돌
-      max_acc: 1.5          # max acceleration [m/ss]  # HL FMA 묶음1: 재출발·LC 최저속 도달
-      min_jerk: -3.0        # min jerk [m/sss]  # HL FMA 묶음1 2차
+      min_acc: -1.0         # min deceleration [m/ss]
+      max_acc: 1.0          # max acceleration [m/ss]
+      min_jerk: -1.0        # min jerk [m/sss]
       max_jerk: 1.0         # max jerk [m/sss]
 
     # constraints to be observed
     limit:
-      min_acc: -4.0         # min deceleration limit [m/ss]  # HL FMA 묶음1 2차: normal 보다 큰 절대값 유지
-      max_acc: 2.0          # max acceleration limit [m/ss]  # HL FMA 묶음1
-      min_jerk: -3.5        # min jerk limit [m/sss]  # HL FMA 묶음1 2차
+      min_acc: -4.0         # min deceleration limit [m/ss] (HL FMA 9/4: 보행자 급출현 -2.5로는 정지거리 32.2m > 가용 30.3m. 패킷 한계 -6.0)
+      max_acc: 1.0          # max acceleration limit [m/ss]
+      min_jerk: -1.5        # min jerk limit [m/sss]
       max_jerk: 1.5         # max jerk limit [m/sss]

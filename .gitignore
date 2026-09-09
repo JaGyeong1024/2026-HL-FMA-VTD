@@ -21,8 +21,11 @@ hlfma_ws/log/
 autoware.log
 
 # 주행 기록 (record.sh 출력: bag·pcap·로그)
-/test/
+test/
 
-# 하네스 격리 빌드(gtest)
-hlfma_ws/build_h/
-hlfma_ws/install_h/
+# Bridge regression tests (root test/ recordings remain ignored).
+!hlfma_ws/src/hlfma/vtd_autoware_bridge/test/
+!hlfma_ws/src/hlfma/vtd_autoware_bridge/test/test_blocked_route_detour.py
+
+# 백업 zip 은 저장소 밖으로
+*.zip
