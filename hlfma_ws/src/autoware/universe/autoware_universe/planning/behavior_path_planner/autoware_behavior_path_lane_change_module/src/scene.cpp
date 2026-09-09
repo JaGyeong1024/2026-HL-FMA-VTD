@@ -1162,6 +1162,17 @@ bool NormalLaneChange::get_lane_change_paths(LaneChangePaths & candidate_paths) 
     return false;
   }
 
+  // HL FMA 9/10: 대상 방향에 차선변경 구간이 없으면 calc_lc_length_and_dist_buffer 가
+  //   lane_changing_length 를 DBL_MAX 로 채운다. 그 값으로는 어차피 유효한 후보가 나오지
+  //   않으므로(길이 임계 초과로 전부 폐기) 여기서 멈춘다. 되돌리려면 이 블록을 지운다.
+  constexpr auto invalid_lc_length = std::numeric_limits<double>::max() * 0.5;
+  if (common_data_ptr_->transient_data.lane_changing_length.max > invalid_lc_length) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, clock_, 5000,
+      "차선변경 구간을 구할 수 없어(선호 차로까지의 횡방향 구간 없음) 후보를 만들지 않는다.");
+    return false;
+  }
+
   const auto & current_lanes = get_current_lanes();
 
   const auto target_objects = get_target_objects(filtered_objects_, current_lanes);
