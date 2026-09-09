@@ -206,25 +206,38 @@ std::vector<DrivableLanes> generateDrivableLanes(
     drivable_lanes.at(i).left_lane = current_lane;
     drivable_lanes.at(i).right_lane = current_lane;
 
-    const auto left_lane = route_handler.getLeftLanelet(current_lane, false, false);
-    const auto right_lane = route_handler.getRightLanelet(current_lane, false, false);
-    if (!left_lane && !right_lane) {
-      continue;
-    }
-
-    for (size_t lc_idx = current_lc_idx; lc_idx < lane_change_lanes.size(); ++lc_idx) {
-      const auto & lc_lane = lane_change_lanes.at(lc_idx);
-      if (left_lane && lc_lane.id() == left_lane->id()) {
-        drivable_lanes.at(i).left_lane = lc_lane;
-        current_lc_idx = lc_idx;
-        break;
+    // HL FMA 9/9: 업스트림은 인접 1개만 대상 차로와 대조한다. 2칸 건너뛰는 차선변경에서는
+    //   이 대조가 실패해 주행가능영역이 현재 차로에 머물고, 시프트 경로가 영역 밖이 되어
+    //   모든 후보가 폐기된다. 대상 차로를 만날 때까지 좌/우로 걸어가며 중간 차로를
+    //   middle_lanes 에 담는다. 되돌리려면 인접 1개 비교로 되돌린다.
+    const auto walk_to_target = [&](const bool to_left) {
+      lanelet::ConstLanelets intermediates;
+      auto lane = to_left ? route_handler.getLeftLanelet(current_lane, false, false)
+                          : route_handler.getRightLanelet(current_lane, false, false);
+      for (size_t step = 0; step < 8 && lane; ++step) {
+        for (size_t lc_idx = current_lc_idx; lc_idx < lane_change_lanes.size(); ++lc_idx) {
+          if (lane_change_lanes.at(lc_idx).id() != lane->id()) {
+            continue;
+          }
+          if (to_left) {
+            drivable_lanes.at(i).left_lane = lane_change_lanes.at(lc_idx);
+          } else {
+            drivable_lanes.at(i).right_lane = lane_change_lanes.at(lc_idx);
+          }
+          drivable_lanes.at(i).middle_lanes.insert(
+            drivable_lanes.at(i).middle_lanes.end(), intermediates.begin(), intermediates.end());
+          current_lc_idx = lc_idx;
+          return true;
+        }
+        intermediates.push_back(*lane);
+        lane = to_left ? route_handler.getLeftLanelet(*lane, false, false)
+                       : route_handler.getRightLanelet(*lane, false, false);
       }
+      return false;
+    };
 
-      if (right_lane && lc_lane.id() == right_lane->id()) {
-        drivable_lanes.at(i).right_lane = lc_lane;
-        current_lc_idx = lc_idx;
-        break;
-      }
+    if (!walk_to_target(true)) {
+      walk_to_target(false);
     }
   }
 
@@ -363,20 +376,33 @@ std::optional<lanelet::ConstLanelet> get_target_lane_for_mandatory_lane_change(
 
   const int num = route_handler_ptr->getNumLaneToPreferredLane(ref_lane, direction);
   if (num == 0) return std::nullopt;
-  if (direction == Direction::NONE || direction == Direction::RIGHT) {
-    if (num < 0) {
-      const auto right_lanes = is_intersection_ll ? routing_graph_ptr->adjacentRight(ref_lane)
-                                                  : routing_graph_ptr->right(ref_lane);
-      if (right_lanes) return *right_lanes;
+
+  // HL FMA 9/9: 업스트림은 선호 차로가 몇 칸 떨어져 있든 인접 1개만 대상으로 삼아
+  //   순차 차선변경을 강제한다. 시나리오 2 좌회전은 2칸(14925 -> 14890 -> 14855)인데,
+  //   6대 봉쇄를 우회하며 차로 길이를 소모하고 나면 순차 2회분 버퍼가 남지 않는다(인계문서 §6.4).
+  //   num 만큼 걸어가 최종 차로를 대상으로 삼아 1회 기동으로 건너뛴다.
+  //   되돌리려면 walk 를 지우고 routing_graph_ptr->left/right 1회 호출로 되돌린다.
+  const auto walk = [&](const bool to_left) -> std::optional<lanelet::ConstLanelet> {
+    const int steps = (num > 0) ? num : -num;
+    lanelet::ConstLanelet lane = ref_lane;
+    for (int i = 0; i < steps; ++i) {
+      const auto next = to_left ? (is_intersection_ll ? routing_graph_ptr->adjacentLeft(lane)
+                                                      : routing_graph_ptr->left(lane))
+                                : (is_intersection_ll ? routing_graph_ptr->adjacentRight(lane)
+                                                      : routing_graph_ptr->right(lane));
+      // 도중에 끊기면 거기까지만 간다. 한 칸도 못 가면 대상 없음.
+      if (!next) return (i == 0) ? std::nullopt : std::make_optional(lane);
+      lane = *next;
     }
+    return lane;
+  };
+
+  if (direction == Direction::NONE || direction == Direction::RIGHT) {
+    if (num < 0) return walk(false);
   }
 
   if (direction == Direction::NONE || direction == Direction::LEFT) {
-    if (num > 0) {
-      const auto left_lanes = is_intersection_ll ? routing_graph_ptr->adjacentLeft(ref_lane)
-                                                 : routing_graph_ptr->left(ref_lane);
-      if (left_lanes) return *left_lanes;
-    }
+    if (num > 0) return walk(true);
   }
   return std::nullopt;
 }

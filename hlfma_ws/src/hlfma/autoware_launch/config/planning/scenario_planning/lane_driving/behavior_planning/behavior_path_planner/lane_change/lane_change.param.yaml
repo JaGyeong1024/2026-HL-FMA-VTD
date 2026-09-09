@@ -22,7 +22,8 @@
         max_prepare_duration: 1.5   # HL FMA 9/7: 8.6m/s x 4.0s = 34m 준비구간 -> shift 시작점이 앞 정지차 바로 앞.
                                     #  obstacle_stop 이 앞차 14.5m 전에 세우므로 도달 불가. 1.5s -> 약 13m
         min_prepare_duration: 1.0
-        lateral_jerk: 1.5              # HL FMA 9/7: shift time 5.79s -> 4.06s
+        lateral_jerk: 3.0              # HL FMA 9/9: 신호등 정지선 때문에 available_length 가 21.9m 로 제한되는데
+                                       #  3.2m 전이에 22m 초과가 필요해 후보가 0개였다. 저크항 2a/j 를 절반으로.
         min_longitudinal_acc: -1.0
         max_longitudinal_acc: 1.0
         th_prepare_length_diff: 1.0
@@ -107,8 +108,8 @@
       # lateral acceleration map
       lateral_acceleration:
         velocity: [0.0, 4.0, 10.0]
-        min_values: [1.0, 1.0, 1.0]      # HL FMA 9/8: 0.4 로는 전이구간 75m. getSafePath 가 가장 긴 후보를 고르므로 하한을 올려야 짧아짐
-        max_values: [1.2, 1.2, 1.2]      # HL FMA 9/7: 0.65 -> 1.2
+        min_values: [1.5, 1.5, 1.5]      # HL FMA 9/9: 1.0 -> 1.5 (전이거리 추가 단축)
+        max_values: [2.0, 2.0, 2.0]      # HL FMA 9/9: 1.2 -> 2.0. 5m/s 에서 선회반경 v^2/a=12.5m, 기하 최소 5.65m 이내
 
       # target object
       target_object:

@@ -303,7 +303,12 @@ std::vector<double> calc_shift_intervals(
   for (auto it = lanes.rbegin(); it != lanes.rend(); ++it) {
     const auto intervals = route_handler_ptr->getLateralIntervalsToPreferredLane(*it, direction);
     if (!intervals.empty()) {
-      return intervals;
+      // HL FMA 9/9: 업스트림은 선호 차로까지의 차선변경 횟수만큼 구간을 돌려주고,
+      //   calc_distance_buffer 가 그 개수만큼 finish_judge_buffer 와 backward_buffer 를
+      //   중복 요구한다(인계문서 §6.4: 2회분 약 26.6m). 대상 차로를 한 번에 건너뛰도록
+      //   바꿨으므로 구간을 하나로 합쳐 1회분 버퍼만 요구하게 한다.
+      //   되돌리려면 intervals 를 그대로 반환한다.
+      return {std::accumulate(intervals.begin(), intervals.end(), 0.0)};
     }
   }
 
