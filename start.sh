@@ -199,9 +199,26 @@ if r is None:
 print(f"[engage] success={r.status.success} code={r.status.code} '{r.status.message}'")
 spin(3)
 print(f"[engage] operation mode={st['mode']} (2=AUTONOMOUS)")
+if not r.status.success or st['mode'] != 2:
+    print('[engage] FAILED_FLAG')   # 아래 bash 가 이 표시를 보고 진단그래프 사유를 붙인다
 print('[engage] 정지: ./stop.sh')
 n.destroy_node(); rclpy.shutdown()
 PY
+  # 방식 b (2026-09-10): 실패해도 출발은 시도하되, 실패했으면 진단그래프 사유를 같이 남긴다.
+  #   avail=False 로 60초 타임아웃 후 강행하는 경로가 있어서, 사유가 없으면 "왜 안 됐는지"가
+  #   로그에 안 남고 스크립트는 그냥 진행한다(실측 01:35 오염 주행). 원인을 바로 보이게 한다.
+  if grep -q "FAILED_FLAG" "$ENGAGE_LOG" 2>/dev/null; then
+    {
+      echo "----- engage 실패: 진단그래프 사유 (autoware 로그에서) -----"
+      awk '/target mode is not available/{buf=""; keep=1} keep{buf=buf $0 ORS} /^\s*$/{if(keep){last=buf; keep=0}} END{printf "%s", last}' "$AW_LOG" 2>/dev/null | tail -25
+      echo "----- ego 시작 앵커 (VTD 리셋 여부 확인) -----"
+      grep "시작 앵커" "$BRIDGE_LOG" 2>/dev/null | tail -1
+      echo "  (시나리오 시작점이 아니면 VTD 리셋 필요 — 직전 주행 종료 위치에서 시작한 것)"
+      echo "----- 중복 노드 -----"
+      grep "is duplicated" "$AW_LOG" 2>/dev/null | tail -5
+      echo "----- 참고: ./stop.sh 후 ros2 daemon stop/start 로 그래프를 비우고 재시도 -----"
+    } | tee -a "$ENGAGE_LOG"
+  fi
   ) &
   echo "[engage] 자동 출발 대기 중 (log=$ENGAGE_LOG). 취소: ENGAGE=false 로 재기동"
 else
