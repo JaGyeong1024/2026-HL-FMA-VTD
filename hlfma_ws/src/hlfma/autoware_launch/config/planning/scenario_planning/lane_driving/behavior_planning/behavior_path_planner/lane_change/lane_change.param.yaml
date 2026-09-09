@@ -25,8 +25,9 @@
         # HL FMA 9/10: 병합 때 NG 값(3.0)이 들어왔다. 전이시간이 JG 대비 18% 길어져
         #   (2*sqrt(3.2/1.5)+2*1.5/3.0=3.92s vs 2*sqrt(3.2/2.0)+2*2.0/5.0=3.33s)
         #   코너링·차선변경이 느리다. JG 값으로 되돌린다. 되돌리려면 3.0
-        lateral_jerk: 5.0              # HL FMA 9/9: 신호등 정지선 때문에 available_length 가 21.9m 로 제한되는데
-                                       #  3.2m 전이에 22m 초과가 필요해 후보가 0개였다. 저크항 2a/j 를 절반으로.
+        # HL FMA 9/10: 병합으로 NG 값(3.0)이 들어왔던 것을 JG 값으로 되돌린다.
+        #   위 lateral_acceleration 과 세트다. 되돌리려면 3.0
+        lateral_jerk: 5.0
         min_longitudinal_acc: -1.0
         max_longitudinal_acc: 1.0
         th_prepare_length_diff: 1.0
@@ -113,8 +114,16 @@
       # lateral acceleration map
       lateral_acceleration:
         velocity: [0.0, 4.0, 10.0]
-        min_values: [2.0, 2.0, 2.0]   # HL FMA 9/10: NG 1.5 -> JG 2.0      # HL FMA 9/9: 1.0 -> 1.5 (전이거리 추가 단축)
-        max_values: [4.0, 4.0, 4.0]   # HL FMA 9/10: NG 2.0 -> JG 4.0 (13.6m/s 에서 조향 0.064rad, 한계 0.48 의 13%)      # HL FMA 9/9: 1.2 -> 2.0. 5m/s 에서 선회반경 v^2/a=12.5m, 기하 최소 5.65m 이내
+        min_values: [2.0, 2.0, 2.0]
+        # HL FMA 9/10: 병합으로 NG 값(1.5/2.0)이 들어왔던 것을 JG 값으로 되돌린다.
+        #   전이시간 = 2*sqrt(3.2/a) + 2a/j
+        #     NG 1.5/3.0 -> 3.92 s   JG 2.0/5.0 -> 3.33 s  (18% 단축)
+        #   근거: 13.6 m/s 에서 4.0 m/s^2 = 곡률 0.022, 조향 0.064 rad
+        #        (한계 0.48 rad 의 13%). 채점 15항목에 승차감·가속도 기준 없음.
+        #   미검증 리스크: 전이가 짧아지면 MPC 추종 오차가 커져 항목 3(차로 유지)에
+        #        걸릴 수 있다. 실주행에서 횡편차를 재서 확인할 것.
+        #   되돌리려면 min 1.5 / max 2.0 (NG), 또는 min 1.0 / max 1.2 (업스트림 근처)
+        max_values: [4.0, 4.0, 4.0]
 
       # target object
       target_object:
