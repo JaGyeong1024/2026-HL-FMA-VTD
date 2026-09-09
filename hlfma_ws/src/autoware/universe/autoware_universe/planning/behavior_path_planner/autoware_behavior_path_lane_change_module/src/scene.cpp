@@ -540,6 +540,16 @@ void NormalLaneChange::insert_stop_point(
     return;
   }
 
+  // HL FMA 9/10: 종점 정지는 '이 차로가 끝나기 전에 반드시 바꿔야 한다'는 의무 차선변경에만
+  //   의미가 있다. 선택적(외부요청) 차선변경은 못 해도 그냥 직진하면 되므로 차를 세울 이유가
+  //   없다. 그런데 external_request_lane_change_right 는 오른쪽 변경이 기하학적으로
+  //   가능하기만 하면 계속 요청 상태라, 우회가 끝난 뒤에도 교차로 정지선에 정지점을 꽂았다
+  //   (0910_071212 실측: 12초 구간에 no safe path 정지점 99회). 신호등 정지점과 겹쳐
+  //   감속을 키우고 경로 절단을 유발했다. 되돌리려면 이 블록을 지운다.
+  if (!utils::lane_change::is_mandatory_lane_change(common_data_ptr_->lc_type)) {
+    return;
+  }
+
   const auto & route_handler = getRouteHandler();
 
   if (route_handler->getNumLaneToPreferredLane(lanelets.back()) == 0) {
@@ -816,6 +826,28 @@ bool NormalLaneChange::hasFinishedLaneChange() const
     return !boost::geometry::disjoint(
       lanes_polygon,
       lanelet::utils::to2D(experimental::lanelet2_utils::from_ros(current_pose.position)));
+  }
+
+  // HL FMA 9/10: 종료점을 지나지 못했더라도 자차 footprint 가 목표 차로 안에 온전히
+  //   들어왔고 요 편차가 크지 않으면 차선변경은 끝난 것으로 본다.
+  //   기존 판정은 종료점을 못 지나면 횡오차 0.1m + 요오차 1.0deg 를 요구하는데, 다차로
+  //   기동에서는 도달할 수 없고, 기동 중 신호에 정상 정차하면 자세가 개선될 수 없어
+  //   영구 교착이 된다(0910_071212: 정지 후 2200 사이클 전부 RUNNING, 초록불에도 재출발
+  //   불가). 모듈이 끝나지 않으면 종점 정지점도 계속 꽂힌다.
+  //   footprint 포함은 중심점 포함보다 엄격하므로 두 차로에 걸친 상태를 완료로 오판하지 않는다.
+  //   되돌리려면 이 블록을 지운다.
+  {
+    const auto & target_polygon = common_data_ptr_->lanes_polygon_ptr->target;
+    const auto & footprint = common_data_ptr_->transient_data.current_footprint;
+    const auto yaw_dev = utils::lane_change::calc_angle_to_lanelet_segment(
+      target_lanes, current_pose);
+    if (
+      boost::geometry::within(footprint, target_polygon) &&
+      yaw_dev < lane_change_parameters_->th_finish_judge_yaw_diff * 10.0) {
+      RCLCPP_DEBUG(
+        logger_, "LC_FINISH 목표 차로에 온전히 진입해 완료 처리. yaw=%.3f", yaw_dev);
+      return true;
+    }
   }
 
   const auto yaw_deviation_to_centerline =
