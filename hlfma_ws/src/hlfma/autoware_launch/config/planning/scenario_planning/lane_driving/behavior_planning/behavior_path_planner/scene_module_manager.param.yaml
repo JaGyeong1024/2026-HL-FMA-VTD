@@ -27,12 +27,12 @@
 
     external_request_lane_change_left:
       enable_rtc: true
-      enable_simultaneous_execution_as_approved_module: false
+      enable_simultaneous_execution_as_approved_module: true  # HL FMA 9/9: false 면 승인 풀에 들어가는 순간 static_obstacle_avoidance 를 포함한 다른 모든 모듈이 getRequestModules 에서 제외된다(planner_manager.cpp:517)
       enable_simultaneous_execution_as_candidate_module: true
 
     external_request_lane_change_right:
       enable_rtc: true
-      enable_simultaneous_execution_as_approved_module: false
+      enable_simultaneous_execution_as_approved_module: true  # HL FMA 9/9: false 면 승인 풀에 들어가는 순간 static_obstacle_avoidance 를 포함한 다른 모든 모듈이 getRequestModules 에서 제외된다(planner_manager.cpp:517)
       enable_simultaneous_execution_as_candidate_module: true
 
     lane_change_left:
@@ -63,11 +63,15 @@
     static_obstacle_avoidance:
       enable_rtc: false
       enable_simultaneous_execution_as_approved_module: true
-      enable_simultaneous_execution_as_candidate_module: false
+      # HL FMA 9/9: false 면 slot2 의 lane_change_* 가 먼저 후보로 들어갔을 때
+      # 회피 모듈이 executable_modules 에 합류하지 못해 평가조차 되지 않는다
+      # (planner_manager.cpp:713). 좌회전 우선차로 때문에 lane_change_left 가
+      # 상시 후보로 떠 있어 회피가 영구 굶주림 상태가 된다.
+      enable_simultaneous_execution_as_candidate_module: true
 
     avoidance_by_lane_change:
       enable_rtc: false
-      enable_simultaneous_execution_as_approved_module: false
+      enable_simultaneous_execution_as_approved_module: true  # HL FMA 9/9: false 면 승인 풀에 들어가는 순간 static_obstacle_avoidance 를 포함한 다른 모든 모듈이 getRequestModules 에서 제외된다(planner_manager.cpp:517)
       enable_simultaneous_execution_as_candidate_module: false
 
     dynamic_obstacle_avoidance:

@@ -131,3 +131,40 @@ sudo ldconfig
   (290.5,-2.7) v=5.91 -> (298.0,-24.6) v=7.06, 무정차. 이전에는 마진 0.05 에서만 통과했다.
 - 남은 문제: 통과 후 (306.2, -42.1) 에서 재정지. 이 시점 객체는 전부 OUT_OF_TARGET_AREA 로
   회피와 무관 — 좌회전 차로 진입 문제로 추정.
+
+## 2026-09-09 후속: 모듈 슬롯 굶주림과 공간 기반 회피 방향
+
+avoidance_direction_by_available_space.patch 를 거리 기준에서 **공간 기준**으로 다시 작성했다.
+기존: 편차가 threshold_distance_object_is_on_center(1.0m) 미만일 때만 개입.
+문제: route preferred 가 좌회전 차로라 참조 경로가 좌1 을 따라가고, 자차로의 차단 차량이
+      경로 기준 2.3~6.4m 떨어져 보여 개입 조건이 성립하지 않았다.
+변경: 부호로 정해진 쪽의 경계 여유가 getAvoidMargin() 최소 요구치에 못 미치고
+      반대쪽은 충족하면 방향을 뒤집는다. 요구치는 기존 파라미터로만 계산한다
+      (lateral_hard_margin + 0.5W + hard_drivable_bound_margin + 0.5W = 2.386m).
+
+### scene_module_manager.param.yaml (핵심)
+
+planner_manager.cpp:517 getRequestModules 에 이 조건이 있다.
+    exclusive_module_exist_in_approved_pool = any(!isSimultaneousExecutableAsApprovedModule)
+    if (is_this_not_joinable) continue;   // isExecutionRequested 조차 호출되지 않음
+승인 풀에 배타 모듈이 하나라도 있으면 **다른 모든 모듈이 평가에서 통째로 제외**된다.
+blocked_route_detour 가 외부 차선변경을 상시 요청하는데 그 모듈이 as_approved:false 라,
+승인되는 순간 static_obstacle_avoidance 가 영구 굶주림에 빠졌다.
+계측: createObjectData 호출이 67회에서 멈춤 -> 수정 후 3079회.
+
+  external_request_lane_change_left/right, avoidance_by_lane_change
+      enable_simultaneous_execution_as_approved_module: false -> true
+  static_obstacle_avoidance
+      enable_simultaneous_execution_as_candidate_module: false -> true
+
+### 검증 (1회, 반복 확인 필요)
+
+obstacle_stop.lateral_margin 을 **원래값 0.3** 으로 되돌린 상태에서 6대 봉쇄를 무정차 통과.
+  (289.0,  2.2) v=6.96
+  (292.7,-11.5) v=6.73   <- 기존 교착 지점 (291.7,-6.3) 을 감속 없이 통과
+  (306.8,-37.2) v=2.88
+  (309.3,-41.1) v=0      <- 차선 복귀 후 정지
+MRM 없음, VTD 수신 정상, 자력 정지. 회피 방향 판정은 전 객체 LEFT(=우측회피).
+
+미해결: (309.3,-41.1) 에서 좌회전 차로로 진입하지 못한다.
+       DETOUR(외부 우측 차선변경)는 여전히 85회 전부 prepare_samples=0 으로 거부된다.

@@ -535,14 +535,36 @@ ObjectData StaticObstacleAvoidanceModule::createObjectData(
       return min_distance;
     };
 
-    const auto is_near_centerline =
-      std::abs(lateral_deviation) < parameters_->threshold_distance_object_is_on_center;
     const auto has_bounds = data.left_bound.size() > 1 && data.right_bound.size() > 1;
 
-    if (is_near_centerline && has_bounds) {
+    if (has_bounds) {
+      // getAvoidMargin() 이 회피 가능으로 판정하는 최소 경계거리와 같은 식.
+      //   to_bound - hard_drivable_bound_margin - 0.5*W >= lateral_hard_margin + 0.5*W
+      const auto half_width = 0.5 * planner_data_->parameters.vehicle_width;
+      const auto required_room = object_parameter.lateral_hard_margin + half_width +
+                                 parameters_->hard_drivable_bound_margin + half_width;
+
       const auto to_left = distance_to_bound(data.left_bound);
       const auto to_right = distance_to_bound(data.right_bound);
-      object_data.direction = (to_right > to_left) ? Direction::LEFT : Direction::RIGHT;
+
+      // Direction::RIGHT = 객체가 우측에 있다 = 자차는 좌측으로 회피 (left_bound 사용)
+      // Direction::LEFT  = 객체가 좌측에 있다 = 자차는 우측으로 회피 (right_bound 사용)
+      const auto is_right = object_data.direction == Direction::RIGHT;
+      const auto chosen_room = is_right ? to_left : to_right;
+      const auto other_room = is_right ? to_right : to_left;
+
+      if (chosen_room < required_room && other_room >= required_room) {
+        object_data.direction = is_right ? Direction::LEFT : Direction::RIGHT;
+      }
+
+      static size_t hlfma_calls = 0;
+      ++hlfma_calls;
+      RCLCPP_INFO_THROTTLE(
+        getLogger(), *clock_, 2000,
+        "HLFMA dir #%zu: obj(%.1f,%.1f) dev=%+.2f toL=%.2f toR=%.2f need=%.2f -> %s", hlfma_calls,
+        object_pose.position.x, object_pose.position.y, lateral_deviation, to_left, to_right,
+        required_room,
+        object_data.direction == Direction::LEFT ? "LEFT(=우측회피)" : "RIGHT(=좌측회피)");
     }
   }
 
