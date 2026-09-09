@@ -1011,6 +1011,14 @@ SlotOutput SubPlannerManager::propagateFull(
     }
 
     if (highest_priority_module->isWaitingApproval()) {
+      // HL FMA 9/10 계측: 승인 대기 상태의 후보 모듈 경로가 승인 모듈의 경로를 대체한다.
+      //   우회 복귀 중 경로가 한 사이클씩 307m -> 20~35m 로 튀는 현상의 후보 원인이라,
+      //   어느 모듈이 얼마나 짧은 경로로 덮어쓰는지 남긴다. 판정되면 이 로그는 지운다.
+      RCLCPP_DEBUG(
+        rclcpp::get_logger("planner_manager"),
+        "PATH_SWAP by %s: approved %zu pts -> candidate %zu pts",
+        highest_priority_module->name().c_str(), approved_module_output.path.points.size(),
+        candidate_module_output.path.points.size());
       // there is no need to launch new module
       return SlotOutput{
         candidate_module_output, isAnyCandidateExclusive(), is_failed_approved_slot,
