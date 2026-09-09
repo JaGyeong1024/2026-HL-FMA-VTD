@@ -29,6 +29,11 @@ SKIP_TOPIC = re.compile(r'^/tf|^/parameter_events|^/rosout_agg|^/clock$|^/trace'
 
 # 타입별 최소 기록 간격(초). 안 적힌 건 DEFAULT_DT.
 DEFAULT_DT = 0.1
+# 중복 제거를 하지 않는 토픽(부분 문자열 일치). 경로 흔들림 추적용.
+NO_DEDUP = ('path_with_lane_id', 'behavior_planning/path', '/planning/trajectory',
+            'motion_planning/path_optimizer/trajectory', 'velocity_smoother/trajectory',
+            '/localization/kinematic_state')
+
 TYPE_DT = {'MarkerArray': 0.5, 'PredictedObjects': 0.2, 'TrackedObjects': 0.5,
            'DetectedObjects': 0.5, 'DiagnosticArray': 1.0}
 
@@ -192,7 +197,14 @@ class Trace(Node):
             data = {'err': f'{type(e).__name__}: {e}'[:120]}
         if data is None:
             return
-        self.ev_if(name, data)
+        # HL FMA 9/10: 경로·궤적은 중복 제거하지 않고 매 발행을 기록한다. ev_if 로 접으면
+        #   값이 같은 사이클이 빠져 실제 10Hz 가 3~4Hz 로 언더샘플링되고, 0.1~0.3초짜리
+        #   경로 흔들림의 시작 시점을 알 수 없다(0910_063142 에서 52초에 190샘플).
+        #   되돌리려면 아래 분기를 없애고 ev_if 만 쓴다.
+        if any(a in name for a in NO_DEDUP):
+            self.ev(name, data)
+        else:
+            self.ev_if(name, data)
 
     def on_log(self, m):
         """전 노드의 로그. 같은 줄이 2초 안에 반복되면 접는다."""
