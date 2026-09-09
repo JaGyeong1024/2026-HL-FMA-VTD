@@ -288,7 +288,17 @@ class BlockedRouteDetour(Node):
         if b is not None:
             self.last_blocked = now
             self.blocked_since = now if self.blocked_since is None else self.blocked_since
-            self.set_approach_limit(b)
+            # HL FMA 9/10: 접근 제한은 **우회를 실제로 추진할 때만** 건다.
+            #   무조건 걸면, 아래 우회 요청 조건(blocked_time 경과 && not planner_stop_before)
+            #   과 어긋나 "우회는 요청하지 않으면서 속도만 묶는" 상태가 생긴다.
+            #   실측(01:52 주행): 좌회전 통과 후 t=114~144 동안 max_v=1.0 이 30초 유지돼
+            #   1.0 m/s 로 기어갔다. 그 구간은 obstacle_cruise/obstacle_stop 이 이미
+            #   처리 중이었고 우회 요청은 한 번도 나가지 않았다. 채점 항목 8(녹색신호
+            #   정지선 30m 내 5초 이상 정차) 위험. 되돌리려면 조건 없이 set_approach_limit(b).
+            if now - self.blocked_since >= self.blocked_time and not self.planner_stop_before(b):
+                self.set_approach_limit(b)
+            else:
+                self.clear_approach_limit()
         else:
             self.blocked_since = None
             if now - self.last_blocked < self.clear_time:
