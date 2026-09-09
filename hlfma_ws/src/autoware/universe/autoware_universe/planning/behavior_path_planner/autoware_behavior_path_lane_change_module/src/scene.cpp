@@ -467,6 +467,31 @@ BehaviorModuleOutput NormalLaneChange::generateOutput()
 {
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
   if (!status_.is_valid_path) {
+    // HL FMA 9/10: 여기서 바로 prev_module_output_ 을 돌려주면 출력이 '현재 차로 직진'으로
+    //   되돌아간다. 그 직진은 노선을 벗어나 30~42m 에서 끊기므로 안전한 폴백이 아니라 더
+    //   나쁜 상태다. 실측(0910_073426)에서 이 왕복이 1~8 사이클(0.1~0.8초)로 반복되며
+    //   경로가 307m <-> 30m 로 튀었고, 그때마다 감속과 자세 흐트러짐이 누적됐다.
+    //   마지막으로 유효했던 출력을 짧은 시간 동안 유지한다. 사이클 수가 아니라 시간으로
+    //   제한하는 이유는 플래너 주기가 부하에 따라 13~52ms 로 흔들리기 때문이다.
+    //   자차가 보관 경로에서 벗어나면 즉시 폐기한다.
+    //   되돌리려면 이 블록을 지우고 바로 prev_module_output_ 을 반환한다.
+    constexpr double hold_duration_s = 1.5;      // 실측 최대 튐 0.8초의 약 2배
+    constexpr double hold_lateral_limit_m = 1.5; // 자차가 보관 경로에서 이만큼 벗어나면 폐기
+    if (last_valid_output_time_ && last_valid_output_.path.points.size() > 1) {
+      const auto age = (clock_.now() - *last_valid_output_time_).seconds();
+      const auto lateral = std::abs(autoware::motion_utils::calcLateralOffset(
+        last_valid_output_.path.points, getEgoPose().position));
+      if (age >= 0.0 && age <= hold_duration_s && std::isfinite(lateral) &&
+          lateral <= hold_lateral_limit_m) {
+        RCLCPP_DEBUG(
+          logger_, "LC_HOLD 후보 생성 실패, 마지막 유효 출력 유지 (age=%.2fs lat=%.2fm)",
+          age, lateral);
+        return last_valid_output_;
+      }
+      RCLCPP_DEBUG(
+        logger_, "LC_HOLD 보관본 폐기 (age=%.2fs lat=%.2fm)", age, lateral);
+    }
+
     RCLCPP_DEBUG(logger_, "No valid path found. Returning previous module's path as output.");
     insert_stop_point(get_current_lanes(), prev_module_output_.path);
     return prev_module_output_;
@@ -509,6 +534,10 @@ BehaviorModuleOutput NormalLaneChange::generateOutput()
 
   set_signal_activation_time(
     output.turn_signal_info.turn_signal.command != turn_signal_info.turn_signal.command);
+
+  // HL FMA 9/10: 유효한 출력을 보관해 둔다(위 실패 분기에서 사용).
+  last_valid_output_ = output;
+  last_valid_output_time_ = clock_.now();
 
   return output;
 }
