@@ -17,20 +17,18 @@
 
     # constraints param for normal driving
     normal:
-      # HL FMA 9/10: 병합 때 NG 값(-1.0)이 들어왔으나 12.8m/s 정지거리가 82m 로
-      #   급정지가 불가능했다. JG 실측값으로 되돌린다(-3.5 -> 23m).
-      #   run_out.param.yaml 이 deceleration_limit 3.5 를 가정하고 판단하므로
-      #   정합성 회복이기도 하다. 되돌리려면 -1.0 / -1.0
-      min_acc: -3.5         # min deceleration [m/ss]
+      # HL FMA 9/10 실측: VTD Ioniq6 모델은 -2.4 근처까지만 정상 응답한다.
+      #   -3.5 로 올렸더니 계획이 -4.74 를 명령했고 VTD 가 -19.25 m/s^2 로 과반응해
+      #   13.4 -> 3.0 m/s 급정지 후 회복 못 하고 교착됐다(실측 03:35, (277.9,34.8)).
+      #   855m 성공 주행에서 관측된 실제 최대 감속은 -4.57(저속) 이고 명령은 -2.4 이하였다.
+      #   그 안쪽인 -2.5 까지만 연다. 12.8m/s 정지거리 82m -> 33m.
+      #   되돌리려면 -1.0. 더 올리지 말 것 — VTD 응답이 비선형이다.
+      min_acc: -2.5         # min deceleration [m/ss]
       max_acc: 1.0          # max acceleration [m/ss]
-      min_jerk: -3.0        # min jerk [m/sss]
+      min_jerk: -1.0        # min jerk [m/sss]
       max_jerk: 1.0         # max jerk [m/sss]
-
-    # constraints to be observed
     limit:
-      # HL FMA 9/10: 비상 경로가 -5.5 를 내므로 한계를 패킷 상한(-6.0)까지 연다.
-      #   (9/10 갱신: normal.min_acc 도 -3.5 로 올렸다. 아래 limit 은 비상 경로 상한이다.)
-      min_acc: -6.0         # min deceleration limit [m/ss] (HL FMA 9/4: 보행자 급출현 -2.5로는 정지거리 32.2m > 가용 30.3m. 패킷 한계 -6.0)
+      min_acc: -4.0         # min deceleration limit [m/ss]
       max_acc: 1.0          # max acceleration limit [m/ss]
-      min_jerk: -3.5        # min jerk limit [m/sss] (HL FMA 9/10: 비상 target_jerk -5.0 을 클램프하지 않도록)
+      min_jerk: -1.5        # min jerk limit [m/sss]
       max_jerk: 1.5         # max jerk limit [m/sss]
