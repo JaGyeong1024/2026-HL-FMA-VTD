@@ -28,7 +28,17 @@ class BlockedRouteDetour(Node):
         p = self.declare_parameter
         p('object_stop_speed_mps', 0.3)
         p('blocked_time_s', 0.4); p('detection_distance_m', 80.0); p('input_timeout_s', 1.0)
-        p('hold_distance_m', 45.0); p('approach_speed_mps', 4.0); p('approach_deceleration_mps2', 1.5)
+        # HL FMA 9/10: hold_distance 45.0 은 도입 커밋(b260f4f, 메시지에 "미검증")부터
+        #   근거 없이 유지된 값이다. 실제 필요치 = 접근속도에서 차선변경 1회를 끝낼 거리:
+        #     준비  max_prepare_duration 1.5 s
+        #     전이  shift 3.2m, lat_acc 1.5, jerk 3.0 -> 2*sqrt(3.2/1.5)+2*1.5/3.0 = 3.9 s
+        #     버퍼  backward_length_buffer 3.0 + lane_change_finish_judge_buffer 2.0 = 5 m
+        #   -> 4.0 m/s * (1.5+3.9) + 5 = 26.6 m
+        #   45 는 2배 과대라, 노변 정지물체 45m 뒤부터 available=0 이 되어 하한 1.0 m/s 로
+        #   30초씩 기어갔다(실측 02:40 주행 t=106~137, 3.6 kph). 채점 항목 8 위험.
+        #   ★ lane_change.param.yaml 의 max_prepare_duration / lateral_acceleration /
+        #     lateral_jerk 를 바꾸면 이 값을 다시 계산할 것. 되돌리려면 45.0
+        p('hold_distance_m', 26.0); p('approach_speed_mps', 4.0); p('approach_deceleration_mps2', 1.5)
         # HL FMA 9/10 (NG 미커밋분 반입): 접근 제한 하한. 0 까지 내려가면
         #   velocity_smoother 가 궤적 전체를 0 으로 만들어 차가 못 움직이고,
         #   blocker 거리도 안 변해 영구 교착이 된다(NG 실측: 좌회전 통과 후
@@ -288,17 +298,7 @@ class BlockedRouteDetour(Node):
         if b is not None:
             self.last_blocked = now
             self.blocked_since = now if self.blocked_since is None else self.blocked_since
-            # HL FMA 9/10: 접근 제한은 **우회를 실제로 추진할 때만** 건다.
-            #   무조건 걸면, 아래 우회 요청 조건(blocked_time 경과 && not planner_stop_before)
-            #   과 어긋나 "우회는 요청하지 않으면서 속도만 묶는" 상태가 생긴다.
-            #   실측(01:52 주행): 좌회전 통과 후 t=114~144 동안 max_v=1.0 이 30초 유지돼
-            #   1.0 m/s 로 기어갔다. 그 구간은 obstacle_cruise/obstacle_stop 이 이미
-            #   처리 중이었고 우회 요청은 한 번도 나가지 않았다. 채점 항목 8(녹색신호
-            #   정지선 30m 내 5초 이상 정차) 위험. 되돌리려면 조건 없이 set_approach_limit(b).
-            if now - self.blocked_since >= self.blocked_time and not self.planner_stop_before(b):
-                self.set_approach_limit(b)
-            else:
-                self.clear_approach_limit()
+            self.set_approach_limit(b)
         else:
             self.blocked_since = None
             if now - self.last_blocked < self.clear_time:
