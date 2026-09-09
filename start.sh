@@ -13,7 +13,7 @@
 #
 # 환경변수 (선택):
 #   ENGAGE=false                   기동만 하고 출발은 사람이 (기본 true)
-#   LANE_PLAN=false                판단 노드(lane_planner) 끄기 — 순수 Autoware 로만 (기본 true)
+#   (LANE_PLAN/DETOUR 인자는 NG 병합(7dea5f7)으로 제거됨 — NG 판 bridge.launch.xml 에 없다)
 #   ROUTE_CSV=/path/to/route.csv   경로 자동 주입 (route_node). 기본: $HOME/hlfma/route/route_config.yaml 의 csv_path
 #   ROUTE_CSV=none                 경로 주입 안 함 (rviz 2D Goal Pose 수동)
 #   AUTO_ENGAGE=true               (구) route_node 가 SET 직후 즉시 engage. 자율주행 가능 여부를 안 기다리므로 기본 false 유지
@@ -111,8 +111,6 @@ setsid ros2 launch vtd_autoware_bridge bridge.launch.xml \
   map_osm:="$ROOT/map/lanelet2_map.osm" \
   route_csv:="$ROUTE_CSV" \
   auto_engage:="${AUTO_ENGAGE:-false}" \
-  lane_plan:="${LANE_PLAN:-true}" \
-  detour:="${DETOUR:-false}" \
   > "$BRIDGE_LOG" 2>&1 < /dev/null &
 BR_PID=$!
 echo "[bridge] host=$VTD_HOST route_csv=${ROUTE_CSV:-없음} auto_engage=${AUTO_ENGAGE:-false} log=$BRIDGE_LOG"
