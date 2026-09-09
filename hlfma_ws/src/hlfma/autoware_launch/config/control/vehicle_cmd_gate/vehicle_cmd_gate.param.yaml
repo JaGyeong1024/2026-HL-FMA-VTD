@@ -22,11 +22,8 @@
     filter_activated_velocity_threshold: 1.0
     external_emergency_stop_heartbeat_timeout: 0.0
     stop_hold_acceleration: -1.5
-    # HL FMA 9/10: 급정지를 '계획된 감속'이 아니라 '물리적 풀 브레이크'로 본다.
-    #   브리지 패킷은 -6.0 까지 받는데(ACCEL_MIN) 비상 경로가 -2.4 라 12.8m/s 정지거리가
-    #   40m 였다. -5.5 면 21m. 채점 15항목에 승차감·가속도 기준이 없어 감점 위험은 없다.
-    #   0.61g 수준으로 마른 노면 타이어 한계(~1.0g) 안이다. 되돌리려면 -2.4
-    emergency_acceleration: -5.5
+    # HL FMA 9/10: -5.5 로 올렸다가 되돌림. VTD 가 -4.74 명령에 -19.25 로 과반응했다.
+    emergency_acceleration: -2.4
     moderate_stop_service_acceleration: -1.5
     stop_check_duration: 1.0
     nominal:

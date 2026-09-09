@@ -171,9 +171,7 @@ class VtdAutowareBridge(Node):
         # (누락 뒤 2배 이동 ÷ 짧은 dt) 로 과대 속도가 나온다 — 실측(9/8): pose 가 약 4개마다
         # 하나씩 규칙적으로 누락되고 그때 55~60 km/h 스파이크가 0.2~0.6초 지속됐다.
         # 차량 한계는 common.param.yaml limit 의 max_acc 2.0 / min_acc -4.0 이므로 여유를 둬 6.0.
-        # HL FMA 9/10: 6.0 이면 0 -> -6.0 도달에 1.0초가 걸려 풀 브레이크가 늦는다.
-        #   12.0 이면 0.5초. 되돌리려면 6.0
-        self.max_accel_step = 12.0
+        self.max_accel_step = 6.0
         # 리스폰 리셋 직후 한 샘플은 위 제한을 건너뛴다. 리셋으로 추정이 0 이 됐는데 차는
         # 실제로 움직이는 경우, 제한이 걸리면 재획득이 0.3 m/s 씩만 되어 느려진다.
         self.vel_reacquire = True
