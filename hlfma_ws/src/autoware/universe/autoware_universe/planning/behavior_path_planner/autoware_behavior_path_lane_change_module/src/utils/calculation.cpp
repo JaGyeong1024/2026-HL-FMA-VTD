@@ -489,7 +489,13 @@ std::vector<double> calc_prepare_durations(const CommonDataPtr & common_data_ptr
   std::vector<double> prepare_durations;
   constexpr double step = 0.5;
 
-  for (double duration = max_prepare_duration; duration >= 0.0; duration -= step) {
+  // HL FMA 9/10: 준비시간 후보를 오름차순으로 뒤집는다. 원래는 max 부터 내려오는데,
+  //   scene.cpp 의 후보 루프가 처음 안전한 것을 만나면 return 하므로 (ACCEPT!!!),
+  //   내림차순이면 "가장 오래 미루는 안"이 늘 먼저 채택된다. 경로는 좌회전 차로까지
+  //   나와 있는데 기동이 계속 미뤄지던 원인. 오름차순이면 즉시 시작(0초)이 먼저 검사되고,
+  //   그게 안전하지 않을 때만 점점 미루는 안으로 넘어간다. 안전 판정 자체는 그대로다.
+  //   되돌리려면 duration = max_prepare_duration; duration >= 0.0; duration -= step
+  for (double duration = 0.0; duration <= max_prepare_duration + 1e-9; duration += step) {
     prepare_durations.push_back(duration);
   }
 
