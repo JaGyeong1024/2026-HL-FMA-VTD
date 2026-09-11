@@ -70,10 +70,11 @@ fi
 # 종료 훅: Ctrl+C(SIGINT)/종료 시 브리지·route_node·Autoware 노드를 확실히 정리한다.
 # 두 launch 를 setsid 로 각자 프로세스 그룹에 띄우고, 그룹째 신호를 보낸다(다른 클론 프로세스는 영향 없음).
 # component_container 일부가 늦게 죽으면 그룹 KILL, 마지막으로 이 install 경로로 식별되는 잔존 노드 정리.
-AW_PID=""; BR_PID=""
+AW_PID=""; BR_PID=""; PCAP_PID=""
 cleanup() {
   trap - EXIT INT TERM
   echo "[start] 종료 정리..." >&2
+  [ -n "$PCAP_PID" ] && { kill -INT "$PCAP_PID" 2>/dev/null; wait "$PCAP_PID" 2>/dev/null; }
   for pid in "$AW_PID" "$BR_PID"; do [ -n "$pid" ] && kill -INT -- "-$pid" 2>/dev/null; done
   for i in $(seq 1 16); do
     alive=0; for pid in "$AW_PID" "$BR_PID"; do [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=1; done
@@ -95,6 +96,14 @@ export ROS_LOG_DIR="$HOME/hlfma/logs/ros_${RUN_TS}"
 mkdir -p "$ROS_LOG_DIR"
 ln -sfn "$BRIDGE_LOG" "$HOME/hlfma/logs/bridge_latest.log"
 ln -sfn "$AW_LOG" "$HOME/hlfma/logs/autoware_latest.log"
+# 9/12: VTD 원시 패킷 pcap 을 기본으로 남긴다 (tcpdump 는 cap_net_raw 가 있어 sudo 불필요, CPU ≈0).
+#   나중에 tools/pcap_judge.py 로 접촉·VRU 접근속도·최고속도·신호 전이를 판정한다. 끄려면 PCAP=0 ./start.sh
+if [ "${PCAP:-1}" = "1" ]; then
+  PCAP_FILE="$HOME/hlfma/logs/vtd_${RUN_TS}.pcap"
+  ( trap - INT; exec tcpdump -i "${IFACE:-any}" -n -s 0 -w "$PCAP_FILE" "host $VTD_HOST" ) </dev/null >"$HOME/hlfma/logs/tcpdump_${RUN_TS}.err" 2>&1 &
+  PCAP_PID=$!; sleep 1
+  if kill -0 "$PCAP_PID" 2>/dev/null; then echo "[start] pcap: $PCAP_FILE"; ln -sfn "$PCAP_FILE" "$HOME/hlfma/logs/vtd_latest.pcap"; else echo "[start] pcap 실패: $(tail -1 "$HOME/hlfma/logs/tcpdump_${RUN_TS}.err")" >&2; PCAP_PID=""; fi
+fi
 cat > "$HOME/hlfma/logs/run_latest.env" <<EOF
 RUN_TS=$RUN_TS
 VTD_HOST=$VTD_HOST

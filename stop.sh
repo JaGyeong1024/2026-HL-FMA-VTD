@@ -6,7 +6,7 @@
 #      죽였다. 대회 당일 다른 창을 끄는 사고가 되므로 전부 이 디렉터리 기준으로 좁혔다.
 #      rviz 는 주행에 영향이 없으므로 여기서 끄지 않는다 (필요하면 창을 직접 닫는다).
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PATTERNS=("$ROOT/hlfma_ws/install/" "map_path:=$ROOT/map")
+PATTERNS=("$ROOT/hlfma_ws/install/" "map_path:=$ROOT/map" "tcpdump .* -w $HOME/hlfma/logs/vtd_")   # 9/12: start.sh 기본 pcap 도 정리
 
 kill_all() {   # $1 = 신호
   for pat in "${PATTERNS[@]}"; do

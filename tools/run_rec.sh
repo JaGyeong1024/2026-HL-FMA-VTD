@@ -113,7 +113,7 @@ if [ "${RVIZ:-0}" = "1" ]; then
 fi
 
 # ── 5. 스택 기동 (start.sh: 브리지+Autoware → 경로 → engage 까지) ──────────
-setsid env ROUTE_CSV="$ROUTE_CSV" "$ROOT/start.sh" > "$OUT/start.log" 2>&1 < /dev/null &
+setsid env ROUTE_CSV="$ROUTE_CSV" PCAP=0 "$ROOT/start.sh" > "$OUT/start.log" 2>&1 < /dev/null &   # pcap 은 run_rec 이 OUT/net 에 직접 남김 (중복 방지)
 START_PID=$!
 echo "$P 스택 기동 (pid $START_PID)"
 
