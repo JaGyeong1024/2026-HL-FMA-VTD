@@ -25,6 +25,7 @@ def qyaw(q):
 class BlockedRouteDetour(Node):
     def __init__(self):
         super().__init__('blocked_route_detour')
+        self._blocker_key = None
         p = self.declare_parameter
         p('object_stop_speed_mps', 0.3)
         p('blocked_time_s', 0.4); p('detection_distance_m', 80.0); p('input_timeout_s', 1.0)
@@ -192,13 +193,29 @@ class BlockedRouteDetour(Node):
         distances = []
         for obj in self.objects.objects:
             velocity = obj.kinematics.initial_twist_with_covariance.twist.linear
-            if math.hypot(velocity.x, velocity.y) > self.obj_stop_v:
+            speed = math.hypot(velocity.x, velocity.y)
+            if speed > self.obj_stop_v:
                 continue
             lateral, arc = project(obj.kinematics.initial_pose_with_covariance.pose.position)
             distance = arc - ego_arc
             if lateral < self.margin and 0.0 < distance < self.detection_distance:
-                distances.append(distance)
-        return min(distances) if distances else None
+                distances.append((distance, obj, lateral, speed))
+        if not distances:
+            self._blocker_key = None
+            return None
+        distance, obj, lateral, speed = min(distances, key=lambda d: d[0])
+        # 계측(9/11): 막힘으로 잡은 객체가 무엇인지 남긴다 — 보행자/차량에 따라 우회가 달라지는지 가르기 위해.
+        u = obj.object_id.uuid
+        oid = u[0] | (u[1] << 8) | (u[2] << 16) | (u[3] << 24)
+        label = max(obj.classification, key=lambda c: c.probability).label if obj.classification else -1
+        name = {0: 'UNKNOWN', 1: 'CAR', 2: 'TRUCK', 3: 'BUS', 4: 'TRAILER',
+                5: 'MOTORCYCLE', 6: 'BICYCLE', 7: 'PEDESTRIAN'}.get(label, str(label))
+        key = (oid, name)
+        if key != self._blocker_key:
+            self.get_logger().info(
+                f'DETOUR blocker id={oid} {name} dist={distance:.1f}m lat={lateral:.2f}m v={speed:.2f}')
+        self._blocker_key = key
+        return distance
 
     def report_status(self, now):
         if now - self.last_diagnostic < 5.0:

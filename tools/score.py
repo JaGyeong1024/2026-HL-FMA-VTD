@@ -21,7 +21,8 @@ def load(path):
         except Exception: continue
         k = d.get('k') or ''
         t = d.get('t')
-        if d.get('xy') and d.get('v') is not None:
+        # 9/11: 자차 궤적은 kinematic_state 만 (모든 xy 레코드를 합산하던 과다 집계 수정)
+        if k == '/localization/kinematic_state' and d.get('xy') and d.get('v') is not None:
             ego.append((t, d['xy'][0], d['xy'][1], d['v']))
         if k == '/planning/planning_factors/traffic_light' and d.get('f'):
             for f in d['f']:
@@ -94,14 +95,16 @@ def main(path):
     notes.append('12 횡단보도 정차: 횡단보도 좌표 없음 — 미판정')
 
     # 14 충돌 — 최근접 객체 거리
-    mind = None
+    mind = None; mind_at = None   # near 항목 = (거리[m, 정수 반올림], 객체 속도)
     for t, n, near in obj:
         for pair in near:
             if isinstance(pair, list) and pair:
-                mind = pair[0] if mind is None else min(mind, pair[0])
+                if mind is None or pair[0] < mind:
+                    mind, mind_at = pair[0], (t, pair[1] if len(pair) > 1 else None)
     if mind is not None:
-        if mind < 1.0: add(14, '도로이용자 충돌', 6, '최근접 %.1f m' % mind)
-        else: notes.append('14 충돌: 최근접 객체 %.1f m' % mind)
+        where = 't=%.0f 객체v=%s' % (mind_at[0], mind_at[1])
+        if mind < 1.0: add(14, '도로이용자 충돌', 6, '최근접 %.1f m (%s)' % (mind, where))
+        else: notes.append('14 충돌: 최근접 객체 %.1f m (%s)' % (mind, where))
 
     # 13 방향지시등 — 차선변경 시각을 알 수 없으면 점등 유무만 기록
     on = [t for t, c in turn if c in (2, 3)]
