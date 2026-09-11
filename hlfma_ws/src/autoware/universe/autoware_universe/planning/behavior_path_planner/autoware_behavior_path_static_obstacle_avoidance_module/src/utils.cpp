@@ -55,6 +55,20 @@ using autoware_perception_msgs::msg::TrafficLightElement;
 
 namespace
 {
+bool isCompactObstacle(const ObjectData & object)
+{
+  const auto & dimensions = object.object.shape.dimensions;
+  return dimensions.x <= 0.5 && dimensions.y <= 0.5;
+}
+
+bool allowsYellowDashedOppositeLane(const lanelet::ConstLineString3d & boundary)
+{
+  const auto subtype = boundary.attributeOr("subtype", std::string{});
+  return boundary.attributeOr("color", std::string{}) == "yellow" &&
+         (subtype == "dashed" || subtype == "dashed_dashed") &&
+         boundary.attributeOr("lane_change", std::string{}) == "yes";
+}
+
 geometry_msgs::msg::Point32 createPoint32(const double x, const double y, const double z)
 {
   geometry_msgs::msg::Point32 p;
@@ -1248,6 +1262,11 @@ std::optional<double> getAvoidMargin(
   const auto & vehicle_width = planner_data->parameters.vehicle_width;
   const auto object_type = utils::getHighestProbLabel(object.object.classification);
   const auto object_parameter = parameters->object_parameters.at(object_type);
+  // Compact obstacles keep their measured envelope but receive no additional lateral margin.
+  // Half the ego width is still required so that the planned vehicle body does not overlap it.
+  if (isCompactObstacle(object)) {
+    return 0.5 * vehicle_width;
+  }
   const auto lateral_hard_margin = object.is_parked
                                      ? object_parameter.lateral_hard_margin_for_parked_vehicle
                                      : object_parameter.lateral_hard_margin;
@@ -1839,8 +1858,10 @@ void fillObjectEnvelopePolygon(
   const auto object_type = utils::getHighestProbLabel(object_data.object.classification);
   const auto object_parameter = parameters->object_parameters.at(object_type);
 
-  const auto & envelope_buffer_margin =
-    object_parameter.envelope_buffer_margin * object_data.distance_factor;
+  const auto envelope_buffer_margin = isCompactObstacle(object_data)
+                                        ? 0.0
+                                        : object_parameter.envelope_buffer_margin *
+                                            object_data.distance_factor;
 
   const auto id = object_data.object.object_id;
   const auto same_id_obj = std::find_if(
@@ -2761,10 +2782,16 @@ DrivableLanes generateExpandedDrivableLanes(
     return current_drivable_lanes;
   }
 
-  const auto use_opposite_lane = use_lane_type == "opposite_direction_lane";
+  const auto use_all_opposite_lanes = use_lane_type == "opposite_direction_lane";
+  const auto use_yellow_dashed_opposite_lane =
+    use_lane_type == "yellow_dashed_opposite_lane";
 
   // 1. get left/right side lanes
   const auto update_left_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
+    const auto use_opposite_lane =
+      use_all_opposite_lanes ||
+      (use_yellow_dashed_opposite_lane &&
+       allowsYellowDashedOppositeLane(target_lane.leftBound()));
     const auto all_left_lanelets =
       route_handler->getAllLeftSharedLinestringLanelets(target_lane, use_opposite_lane, true);
     if (!all_left_lanelets.empty()) {
@@ -2775,6 +2802,10 @@ DrivableLanes generateExpandedDrivableLanes(
     }
   };
   const auto update_right_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
+    const auto use_opposite_lane =
+      use_all_opposite_lanes ||
+      (use_yellow_dashed_opposite_lane &&
+       allowsYellowDashedOppositeLane(target_lane.rightBound()));
     const auto all_right_lanelets =
       route_handler->getAllRightSharedLinestringLanelets(target_lane, use_opposite_lane, true);
     if (!all_right_lanelets.empty()) {
@@ -2876,6 +2907,49 @@ DrivableLanes generateExpandedDrivableLanes(
   // 3. update again for new left/right lanes
   update_left_lanelets(current_drivable_lanes.left_lane);
   update_right_lanelets(current_drivable_lanes.right_lane);
+
+  // Some maps model the two sides of a yellow center line as separate LineStrings.  In that
+  // representation getAll*SharedLinestringLanelets() cannot reach the opposing lane even though
+  // RouteHandler can identify it geometrically.  Allow that lane only as a fail-closed fallback
+  // across a yellow dashed boundary.  The inverted lanelet gives calcBound() an outer boundary in
+  // the ego direction; the existing avoidance safety checker still examines the original opposing
+  // lane and the normal return shift must fit before this yellow-dashed corridor ends.
+  if (use_yellow_dashed_opposite_lane) {
+    const auto add_left_opposite = [&]() {
+      const auto edge = current_drivable_lanes.left_lane;
+      if (!allowsYellowDashedOppositeLane(edge.leftBound())) {
+        return;
+      }
+      const auto opposite_lanes = route_handler->getLeftOppositeLanelets(edge);
+      if (opposite_lanes.empty()) {
+        return;
+      }
+      if (current_drivable_lanes.right_lane.id() != edge.id()) {
+        current_drivable_lanes.middle_lanes.push_back(edge);
+      }
+      current_drivable_lanes.left_lane = static_cast<lanelet::ConstLanelet>(
+        route_handler->getMostRightLanelet(opposite_lanes.front()).invert());
+    };
+
+    const auto add_right_opposite = [&]() {
+      const auto edge = current_drivable_lanes.right_lane;
+      if (!allowsYellowDashedOppositeLane(edge.rightBound())) {
+        return;
+      }
+      const auto opposite_lanes = route_handler->getRightOppositeLanelets(edge);
+      if (opposite_lanes.empty()) {
+        return;
+      }
+      if (current_drivable_lanes.left_lane.id() != edge.id()) {
+        current_drivable_lanes.middle_lanes.push_back(edge);
+      }
+      current_drivable_lanes.right_lane = static_cast<lanelet::ConstLanelet>(
+        route_handler->getMostLeftLanelet(opposite_lanes.front()).invert());
+    };
+
+    add_left_opposite();
+    add_right_opposite();
+  }
 
   // 4. compensate that current_lane is in either of left_lane, right_lane or middle_lanes.
   if (

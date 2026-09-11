@@ -1446,17 +1446,16 @@ std::vector<lanelet::ConstLineString3d> get_no_lane_change_lines(
   for (const auto & ll : target_lanes) {
     const auto & ls = (direction == Direction::LEFT) ? ll.leftBound() : ll.rightBound();
 
-    // 1. Check if the physical line is solid
-    const bool is_solid =
-      (ls.attributeOr(lanelet::AttributeName::Subtype, "") == lanelet::AttributeValueString::Solid);
+    // A solid boundary is never crossable, even when the map accidentally carries
+    // lane_change=yes. Composite markings (e.g. solid_dashed) are conservative as well.
+    const auto subtype = ls.attributeOr(lanelet::AttributeName::Subtype, std::string{});
+    const bool contains_solid = subtype.find("solid") != std::string::npos;
 
     // 2. Check for explicit lane_change permission tags
     const std::string lane_change_val = ls.attributeOr("lane_change", "");
 
     const bool explicit_no = (lane_change_val == "no");
-    const bool explicit_yes = (lane_change_val == "yes");
-
-    if ((is_solid && !explicit_yes) || explicit_no) {
+    if (contains_solid || explicit_no) {
       no_lane_change_lines.push_back(ls);
     }
   }

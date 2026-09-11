@@ -162,6 +162,7 @@ class VtdAutowareBridge(Node):
         self.ctrl_count = 0
         self.last_cmd_time = None
         self.watchdog_active = False
+        self.overspeed_guard_active = False
 
         # 상태 추정
         self.prev = None
@@ -661,6 +662,27 @@ class VtdAutowareBridge(Node):
                 self.get_logger().error(f'제어 명령 두절 {now - last:.2f}s → 페일세이프 감속 {self.failsafe_accel} m/s²')
             else:
                 self.get_logger().info('제어 명령 재개')
+
+        # Final command guard for the 50 km/h scoring limit.  Preserve any stronger
+        # braking request (including AEB) by only lowering the acceleration command.
+        speed_kph = max(0.0, self.vx_f) * 3.6
+        if speed_kph >= 49.0:
+            accel = min(accel, -2.5)
+        elif speed_kph >= 48.0:
+            # 48 km/h: -1.0 m/s², linearly reaching -2.5 m/s² at 49 km/h.
+            guard_accel = -1.0 - 1.5 * (speed_kph - 48.0)
+            accel = min(accel, guard_accel)
+        elif speed_kph >= 47.5:
+            accel = min(accel, 0.0)
+
+        guard_active = speed_kph >= 47.5
+        if guard_active != self.overspeed_guard_active:
+            self.overspeed_guard_active = guard_active
+            if guard_active:
+                self.get_logger().warning(
+                    f'overspeed guard 활성화: {speed_kph:.2f} km/h, accel={accel:.2f} m/s²')
+            else:
+                self.get_logger().info(f'overspeed guard 해제: {speed_kph:.2f} km/h')
         pkt = pack_ctrl(self.steer_sign * steer, accel, turn)
         self.pub_raw_tx.publish(UInt8MultiArray(data=list(pkt)))
         try:
