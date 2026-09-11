@@ -69,7 +69,7 @@ class RouteNode(Node):
         # 경로가 SET 이고 자율주행이 다시 '가능' 상태면 재진입한다 (9/7 시뮬 실주행에서 확인된 교착).
         # (리스폰 재주입 A13 과는 별개 문제. **기본 끔** — 검증 중 비상정지를 가리지 않기 위해.
         #  대회 당일 사용 여부는 따로 결정한다.)
-        dp('auto_reengage', False)
+        dp('auto_reengage', True)
         dp('reengage_grace_s', 2.0)     # [s] 가능 상태가 이만큼 지속되면 재진입
         dp('reengage_max', 20)          # 한 주행에서 재진입 상한 (무한 반복 방지)
         dp('use_waypoints', True)      # 중간 짝점을 waypoints로 (false면 goal만)

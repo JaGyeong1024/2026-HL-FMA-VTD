@@ -114,9 +114,11 @@ setsid ros2 launch vtd_autoware_bridge bridge.launch.xml \
   > "$BRIDGE_LOG" 2>&1 < /dev/null &
 BR_PID=$!
 echo "[bridge] host=$VTD_HOST route_csv=${ROUTE_CSV:-없음} auto_engage=${AUTO_ENGAGE:-false} log=$BRIDGE_LOG"
-sleep 3
+sleep 0.5
 grep -m3 "맵 로드\|VTD 연결\|경로 CSV" "$BRIDGE_LOG" 2>/dev/null || true
 
+# Autoware component INFO/WARN/ERROR는 터미널에 뿌리지 않고 파일에만 보관한다.
+# engage 상태 로그는 아래 별도 engage 프로세스가 계속 터미널에 출력한다.
 setsid ros2 launch autoware_launch autoware.launch.xml \
   "${COMMON_ARGS[@]}" \
   launch_perception:=false \
@@ -128,7 +130,7 @@ setsid ros2 launch autoware_launch autoware.launch.xml \
   system_run_mode:=planning_simulation \
   launch_system_monitor:=false \
   launch_dummy_diag_publisher:=true \
-  is_simulation:=true > >(tee -i "$AW_LOG") 2>&1 < /dev/null &
+  is_simulation:=true > "$AW_LOG" 2>&1 < /dev/null &
 AW_PID=$!
 echo "[autoware] log=$AW_LOG  ros_log_dir=$ROS_LOG_DIR"
 
@@ -197,7 +199,7 @@ if r is None:
     print('[engage] 서비스 응답 없음', file=sys.stderr)
     sys.exit(1)
 print(f"[engage] success={r.status.success} code={r.status.code} '{r.status.message}'")
-spin(3)
+spin(0.5)
 print(f"[engage] operation mode={st['mode']} (2=AUTONOMOUS)")
 if not r.status.success or st['mode'] != 2:
     print('[engage] FAILED_FLAG')   # 아래 bash 가 이 표시를 보고 진단그래프 사유를 붙인다

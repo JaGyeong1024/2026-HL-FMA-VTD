@@ -159,7 +159,7 @@
       # ego vehicle stuck detection
       stuck_detection:
         velocity: 0.5 # [m/s]
-        stop_time: 3.0 # [s]
+        stop_time: 2.0 # [s]
 
       # lane change cancel
       cancel:
