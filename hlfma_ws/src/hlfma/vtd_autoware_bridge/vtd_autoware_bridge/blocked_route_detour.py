@@ -30,7 +30,7 @@ class BlockedRouteDetour(Node):
         p('blocked_time_s', 0.4); p('detection_distance_m', 80.0); p('input_timeout_s', 1.0)
         p('hold_distance_m', 45.0); p('approach_speed_mps', 4.0); p('approach_deceleration_mps2', 1.5)
         p('clear_time_s', 1.0)
-        p('lookahead_m', 100.0); p('path_lateral_margin_m', 2.2); p('retry_interval_s', 2.0)
+        p('lookahead_m', 100.0); p('path_lateral_margin_m', 2.2); p('retry_interval_s', 0.4)   # HL FMA 9/10: 2.0 이면 13m/s 에서 승인 요청 사이에 26m 를 지나간다. 그동안 모듈은 WaitingForApproval 이라 매 주기 경로를 새로 그려(interface.cpp:110) 경로가 뚝뚝 끊긴다. 0.4 로 줄여 후보가 유효해지는 즉시 승인이 나가게 한다. 되돌리려면 2.0
         g = lambda n: self.get_parameter(n).value
         self.obj_stop_v = float(g('object_stop_speed_mps'))
         self.lookahead, self.margin, self.retry = float(g('lookahead_m')), float(g('path_lateral_margin_m')), float(g('retry_interval_s'))
@@ -248,7 +248,11 @@ class BlockedRouteDetour(Node):
                 if (st.safe and not st.auto_mode
                         and st.state.type == State.WAITING_FOR_EXECUTION
                         and math.isfinite(st.start_distance) and math.isfinite(st.finish_distance)
-                        and st.start_distance >= 0.0 and st.finish_distance > 0.0
+                        # HL FMA 9/10: 시작점이 자차보다 조금 뒤여도 승인 대상에 남긴다.
+                        #   준비시간 오름차순 적용 후 후보가 start=0.32 처럼 0 에 붙어 나오는데,
+                        #   >= 0.0 이면 자차가 조금만 더 가도 음수가 되어 그 주기를 통째로 놓치고,
+                        #   놓친 만큼 재계획이 이어져 경로가 끊긴다. 되돌리려면 0.0
+                        and st.start_distance >= -2.0 and st.finish_distance > 0.0
                         and clear >= required):
                     choices.append((clear, key, st))
         return choices
@@ -294,6 +298,9 @@ class BlockedRouteDetour(Node):
 
         if self.pending is not None and not self.pending.done():
             return
+        # HL FMA 9/10 검토: 여기서 committed 일 때 retry 를 건너뛰어 uuid 교체를 따라잡게
+        #   해봤으나 RTC 항목 수가 10 -> 9 로 거의 안 줄었다(플래너 쪽 취소를 막고 나면
+        #   churn 자체가 낮아 retry 가 병목이 아니다). 발행률만 올라가므로 되돌렸다.
         if self.committed is not None and now - self.last_request < self.retry:
             return
         if now - self.last_request < self.retry:
