@@ -18,7 +18,7 @@
 
   <!-- 정지 차량군 우회: 일반/외부요청 LC 승인 중재 및 우회 대기 접근 속도 제한. -->
   <node pkg="vtd_autoware_bridge" exec="blocked_route_detour" name="blocked_route_detour" output="screen">
-    <param name="hold_distance_m" value="26.0"/>  <!-- HL FMA 9/10: 45.0 -> 26.0, 근거는 노드 주석 -->
+    <param name="hold_distance_m" value="40.0"/> <!-- 9/12: 26 -> 40. 정지차 군집(S자)에 47 km/h 로 진입하면 회피가 unsafe→정지 교착(0912_060929 t=408s). 40 m 전에 4 m/s 면 저속 진입으로 통과(0912_050738). -->  <!-- HL FMA 9/10: 45.0 -> 26.0, 근거는 노드 주석 -->
     <param name="approach_speed_mps" value="4.0"/>
   </node>
 
