@@ -23,7 +23,7 @@ class PedestrianProximitySlowdown(Node):
         p = self.declare_parameter
         p('lateral_distance_m', 10.0)
         p('lookahead_distance_m', 50.0)
-        p('normal_slowdown_speed_mps', 9.7222)
+        p('normal_slowdown_speed_mps', 6.94)  # 9/12: 35->25 km/h. 35 로는 도로변 자전거가 튀어나올 때 못 섬(0912_044131 t=34s 0.6 m)
         p('school_zone_slowdown_speed_mps', 6.94)
         p('school_zone_limit_kph', 30.0)
         p('map_osm', '')
