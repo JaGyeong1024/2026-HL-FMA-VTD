@@ -4,9 +4,13 @@
       extra_object_width: 1.0  # [m] extra width around detected objects
       minimum_object_velocity: 0.5  # [m/s] objects with a velocity bellow this value are ignored
       stop_distance_buffer: 0.5  # [m] extra distance to add between the stop point and the collision point
-      time_horizon: 5.0  # [s] time horizon used for collision checks
+      # HL FMA 9/12: 5.0 -> 8.0. 시나리오 대향차는 정지 상태에서 4 초 만에 70 km/h 로 달려온다.
+      #   브리지 예측경로도 8 초이므로 맞춘다. 되돌리려면 5.0
+      time_horizon: 8.0  # [s] time horizon used for collision checks
       hysteresis: 1.0  # [m] once a collision has been detected, this hysteresis is used on the collision detection
-      add_stop_duration_buffer : 0.5  # [s] duration where a collision must be continuously detected before a stop decision is added
+      add_stop_duration_buffer : 0.2   # HL FMA 9/12: 0.5 -> 0.2 (급가속 대향차 반응 지연 축소)  # [s] duration where a collision must be continuously detected before a stop decision is added
       remove_stop_duration_buffer : 1.0  # [s] duration between no collision being detected and the stop decision being remove
       minimum_object_distance_from_ego_trajectory: 1.0  # [m] minimum distance between the footprints of ego and an object to consider for collision
-      ignore_unavoidable_collisions : true  # if true, ignore collisions that cannot be avoided by stopping (assuming the obstacle continues going straight)
+      # HL FMA 9/12: true 면 어차피 못 선다고 판단한 충돌을 무시해 아무 제동도 안 한다.
+      #   최대한 줄이는 편이 낫다. 되돌리려면 true
+      ignore_unavoidable_collisions : false  # if true, ignore collisions that cannot be avoided by stopping (assuming the obstacle continues going straight)
