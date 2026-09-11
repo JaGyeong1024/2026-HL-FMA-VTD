@@ -28,7 +28,15 @@ class BlockedRouteDetour(Node):
         p = self.declare_parameter
         p('object_stop_speed_mps', 0.3)
         p('blocked_time_s', 0.4); p('detection_distance_m', 80.0); p('input_timeout_s', 1.0)
-        p('hold_distance_m', 45.0); p('approach_speed_mps', 4.0); p('approach_deceleration_mps2', 1.5)
+        # HL FMA 9/11: 45.0 -> 26.0 (JG 값). 좌회전 직후 blocker=40.3m 에서
+        #   available = max(0, 40.3-45.0) = 0 이라 속도제한 0 이 나가고, 차가 멈추면
+        #   blocker 거리도 안 변해 영구 교착이었다(4회 재현, 정지점 433.5/-24.9).
+        #   되돌리려면 45.0
+        p('hold_distance_m', 26.0); p('approach_speed_mps', 4.0); p('approach_deceleration_mps2', 1.5)
+        # HL FMA 9/11: 접근 속도 하한(JG 값). 위 식이 0 을 뱉는 구간에서도 기어가게 해
+        #   교착을 막는다. 실제 정지는 obstacle_stop/AEB 가 담당하고 이 값은
+        #   '원하는 속도' 상한일 뿐이다(set_approach_limit 주석 참조). 되돌리려면 0.0
+        p('min_approach_speed_mps', 1.0)
         p('clear_time_s', 1.0)
         p('lookahead_m', 100.0); p('path_lateral_margin_m', 2.2); p('retry_interval_s', 0.4)   # HL FMA 9/10: 2.0 이면 13m/s 에서 승인 요청 사이에 26m 를 지나간다. 그동안 모듈은 WaitingForApproval 이라 매 주기 경로를 새로 그려(interface.cpp:110) 경로가 뚝뚝 끊긴다. 0.4 로 줄여 후보가 유효해지는 즉시 승인이 나가게 한다. 되돌리려면 2.0
         g = lambda n: self.get_parameter(n).value
@@ -38,6 +46,7 @@ class BlockedRouteDetour(Node):
         self.detection_distance = float(g('detection_distance_m'))
         self.input_timeout = float(g('input_timeout_s'))
         self.hold_distance = float(g('hold_distance_m'))
+        self.min_approach_speed = float(g('min_approach_speed_mps'))
         self.approach_speed = float(g('approach_speed_mps'))
         self.approach_deceleration = float(g('approach_deceleration_mps2'))
         self.clear_time = float(g('clear_time_s'))
@@ -210,6 +219,9 @@ class BlockedRouteDetour(Node):
         # envelope is a desired speed, not a direct brake command or a stop guarantee.
         available = max(0.0, blocker - self.hold_distance)
         speed = min(self.approach_speed, math.sqrt(2.0 * self.approach_deceleration * available))
+        # blocker<=0 은 '지금 세워라' 라는 명시적 호출이므로 그대로 둔다.
+        if blocker > 0.0:
+            speed = max(speed, self.min_approach_speed)
         msg = VelocityLimit()
         msg.stamp = self.get_clock().now().to_msg()
         msg.sender = 'blocked_route_detour'
