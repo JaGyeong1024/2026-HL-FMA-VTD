@@ -13,7 +13,7 @@
 
 /**:
   ros__parameters:
-    max_vel: 13.3           # max velocity limit [m/s] (HL FMA: 46km/h, 제한 50 대비 마진. 평가는 VTD 실속도 기준)
+    max_vel: 13.3333        # max velocity limit [m/s] (48 km/h)
 
     # constraints param for normal driving
     normal:
