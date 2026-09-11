@@ -118,6 +118,14 @@ class VtdAutowareBridge(Node):
         dp('tl_guard_front_m', 3.808)      # [m] 후륜축(base_link) -> 앞범퍼
         dp('tl_guard_slow_decel', 1.5)     # [m/s^2] 제한 속도까지 줄이는 감속 (시작 거리 계산용)
         dp('tl_guard_margin_m', 3.0)       # [m] 시작 거리 여유
+        # 9/12: VTD 가 신호를 정지선 12 m 앞에서야 알려주는 곳(짧은 도로의 신호 3곳, 예: lanelet 116111 → VTD 신호 167)이
+        #   있다. 상태 미할당(0)인 정지선이 가까우면 12 m 안에 설 수 있는 속도로 접근한다(반응 0.5 s + 실제 감속 2.3 →
+        #   5.5 m/s 정지거리 9.3 m). 0912_050738·054114 둘 다 34 km/h 로 적색 정지선 통과.
+        dp('tl_unknown_cap_mps', 5.5)      # [m/s] 미할당 신호 정지선 접근 상한 (20 km/h)
+        dp('tl_unknown_dist_m', 45.0)      # [m] 이 거리 안에 미할당 정지선이 있으면 상한 적용
+        # 9/12: 차로 방향과 어긋나게 달리는 차(끼어들기)는 차선 투영 대신 직선 예측. 투영하면 옆 차로에 머무는 것으로
+        #   예측돼 정지 모듈이 못 본다(0912_054114 t=844s 옆 차로에서 들어와 서는 차와 24 km/h 접촉).
+        dp('cutin_yaw_deg', 4.0)           # [deg] 차로 방향과 이 이상 어긋나면 직선 예측
         dp('publish_dummy_perception', True)
         dp('predict_horizon', 8.0)       # [s] objects 예측 경로 길이 (차선변경 2회 기동이 6~8s)
         dp('report_period', 5.0)
@@ -149,6 +157,9 @@ class VtdAutowareBridge(Node):
         self.tl_guard_front = float(g('tl_guard_front_m'))
         self.tl_guard_slow_decel = float(g('tl_guard_slow_decel'))
         self.tl_guard_margin = float(g('tl_guard_margin_m'))
+        self.tl_unknown_cap = float(g('tl_unknown_cap_mps'))
+        self.tl_unknown_dist = float(g('tl_unknown_dist_m'))
+        self.cutin_yaw = math.radians(float(g('cutin_yaw_deg')))
         self.tl_guard_vstar = self._tl_guard_safe_speed()
         self.tl_guard = {'active': False, 'lanelet': None, 'last_pub': -1e9}
         self.get_logger().info(
@@ -512,6 +523,9 @@ class VtdAutowareBridge(Node):
                         _, s_c, _ = self.omap.project(lid, x, y)
                         cx, cy, ch, _ = self.omap.point_along(lid, s_c, 0.0)
                         lat = -(x - cx) * math.sin(ch) + (y - cy) * math.cos(ch)
+                        dh = (heading - ch + math.pi) % (2.0 * math.pi) - math.pi
+                        if abs(dh) > self.cutin_yaw and speed > 1.0:
+                            lid = s_c = lat = None   # 끼어들기/차로 이탈 중 → 직선 예측 (dp 'cutin_yaw_deg' 주석)
                 except Exception:
                     lid = s_c = lat = None
 
@@ -686,9 +700,12 @@ class VtdAutowareBridge(Node):
         may_turn_yellow = may_turn_yellow or state in (1, 2)
         s = None if dist is None else dist - self.tl_guard_front - self.tl_guard_stop_margin
         v = self.vx_f
-        want, reason = False, ''
+        want, reason, limit = False, '', vs
         if entry is None or s is None:
             reason = '다음 정지선 없음'
+        elif state == 0 and -1.0 < s <= self.tl_unknown_dist:
+            # 9/12: 미할당 신호 정지선이 가까움 → 12 m 안에 설 수 있는 속도로 (dp 주석 참조)
+            want, limit = True, self.tl_unknown_cap
         elif not may_turn_yellow:
             reason = f'state {state}'
         elif s <= vs * T:
@@ -702,13 +719,13 @@ class VtdAutowareBridge(Node):
             if not g['active'] or g['lanelet'] != entry.lanelet_id:
                 self.get_logger().info(
                     f'HLFMA 신호 접근 제한: lanelet {entry.lanelet_id} 정지점 {s:.1f}m state {state}, '
-                    f'{v * 3.6:.0f} -> {vs * 3.6:.0f} km/h (48km/h 기준 딜레마 '
+                    f'{v * 3.6:.0f} -> {limit * 3.6:.0f} km/h (48km/h 기준 딜레마 '
                     f'{13.33 * T:.0f}~{self._tl_judge_dist(13.33):.0f}m)')
             g['active'], g['lanelet'] = True, entry.lanelet_id
             if t - g['last_pub'] >= 0.2:
                 msg = VelocityLimit()
                 msg.stamp = self.get_clock().now().to_msg()
-                msg.max_velocity = float(vs)
+                msg.max_velocity = float(limit)
                 msg.sender = 'tl_dilemma_guard'
                 self.pub_vlim.publish(msg)
                 g['last_pub'] = t
