@@ -9,7 +9,15 @@
       enable_stopped_vehicle_buffer: true
 
       # turn signal
-      min_length_for_turn_signal_activation: 10.0 # [m]
+      #   HL FMA 9/10: calc_prepare_durations 의 조기반환 조건이 dist_to_terminal_start >=
+      #   base_link2front(3.808) + 이 값 이다. 10.0 이면 임계가 13.8m 라 대부분 구간에서
+      #   조기반환이 걸려 준비시간 후보가 (max_prepare_duration - 깜빡이 켠 시간) 1개로 고정된다.
+      #   그러면 시프트 시작점이 자차 앞 고정 거리에 놓여 자차와 같은 속도로 도망가고,
+      #   경로는 좌회전 차로까지 나와 있는데 기동이 영영 시작되지 않는다.
+      #   업스트림도 이 줄에 TODO: this check seems to cause scenario failures 를 달아뒀다.
+      #   400.0 이면 임계가 403.8m 라 조기반환이 사실상 꺼지고, 준비시간이 max~0 으로
+      #   샘플링되어 0초(즉시 시작) 후보가 생긴다. 되돌리려면 10.0
+      min_length_for_turn_signal_activation: 400.0 # [m]
 
       # terminal path
       terminal_path:

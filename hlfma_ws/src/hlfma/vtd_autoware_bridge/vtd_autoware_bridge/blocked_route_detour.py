@@ -266,7 +266,14 @@ class BlockedRouteDetour(Node):
             return
         running = [(key, st) for key, statuses in self.status.items()
                    if self.fresh('status_' + key, now) for st in statuses
-                   if st.state.type in (State.RUNNING, State.ABORTING)]
+                   if st.state.type in (State.RUNNING, State.ABORTING)
+                   # HL FMA 9/10: 이미 끝난 기동을 RUNNING 으로 붙잡고 있으면 이 가드가 영구히
+                   #   걸려 다음 승인 요청을 아예 못 보낸다. 실측: 우측 우회가 start=-46.24
+                   #   finish=0.33 로 46m 뒤에서 끝났는데 state=1 이라, lane_change_left 가
+                   #   safe=True/start=0.32/finish=27.21 인 정상 후보를 들고도 cmd=0 으로 대기했고
+                   #   DETOUR request 가 우측 1건만 나갔다. 종료분은 가드에서 뺀다.
+                   #   되돌리려면 아래 finish_distance 조건을 지운다.
+                   and not (math.isfinite(st.finish_distance) and st.finish_distance <= 0.5)]
         if running:
             # Never send an opposing command mid-maneuver. Only release the
             # waiting speed limit once the planner reports execution, not on send.
