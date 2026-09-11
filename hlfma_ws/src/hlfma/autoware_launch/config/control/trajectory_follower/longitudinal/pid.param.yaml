@@ -18,7 +18,7 @@
     enable_smooth_stop: true
     enable_overshoot_emergency: false # {OVERRIDE}
     enable_large_tracking_error_emergency: true
-    enable_slope_compensation: true
+    enable_slope_compensation: false # HL FMA 9/12: 오르막 8~12%에서 +0.8 m/s² 피드포워드가 초과속도(51 km/h)를 만듦. VTD 는 경사 무관 순가속 실현
     enable_keep_stopped_until_steer_convergence: true
 
     # state transition

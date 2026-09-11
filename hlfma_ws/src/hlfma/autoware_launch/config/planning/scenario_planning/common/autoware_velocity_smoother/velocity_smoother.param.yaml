@@ -44,8 +44,8 @@
     stop_dist_to_prohibit_engage: 0.5  # if the stop point is in this distance, the speed is set to 0 not to move the vehicle [m]
 
     # stop velocity
-    stopping_velocity: 2.778  # change target velocity to this value before v=0 point [m/s]
-    stopping_distance: 0.0    # distance for the stopping_velocity [m]. 0 means the stopping velocity is not applied.
+    stopping_velocity: 1.0    # HL FMA 9/12: 정지점 앞 접근 속도. 2.778 이면 VTD 제동 잔류로 정지선 4~7 m 앞에 서고 기어감(채점 7번)
+    stopping_distance: 5.0    # HL FMA 9/12: 정지점 5 m 앞부터 stopping_velocity 로 (2 m 로는 3.3 m 앞 정지, 원본 0.0). distance for the stopping_velocity [m]. 0 means the stopping velocity is not applied.
 
     # path extraction parameters
     extract_ahead_dist: 200.0         # forward trajectory distance used for planning [m]

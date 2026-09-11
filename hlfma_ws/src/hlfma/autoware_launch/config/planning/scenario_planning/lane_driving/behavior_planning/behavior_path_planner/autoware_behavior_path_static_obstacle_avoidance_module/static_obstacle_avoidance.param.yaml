@@ -12,7 +12,7 @@
       # "opposite_direction_lane": this module uses both same direction and opposite direction lane.
       # "yellow_dashed_opposite_lane": opposite lane is allowed only across a yellow dashed,
       # lane_change=yes boundary; white dashed and every solid boundary remain forbidden.
-      use_lane_type: "yellow_dashed_opposite_lane"
+      use_lane_type: "same_direction_lane"  # HL FMA 9/12: 반대 차로 회피는 하지 않는다(중앙선 침범 -6 방어). 실선은 utils.cpp isCrossableForAvoidance 가 막는다
       # drivable area setting
       use_intersection_areas: false     # HL FMA: 교차로 여유공간 이탈 금지
       use_hatched_road_markings: false  # HL FMA: 사선지대 침범 금지

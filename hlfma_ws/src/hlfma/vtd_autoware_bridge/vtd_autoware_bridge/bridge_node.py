@@ -423,7 +423,11 @@ class VtdAutowareBridge(Node):
             obj.object_id = UUID(uuid=list(struct.pack('<IIII', oid & 0xFFFFFFFF, 0, 0, 0)))
             obj.existence_probability = 1.0
             cls = ObjectClassification()
-            if length < 1.2 and width < 1.2:
+            # 9/12 실측(docs/대회정보/object_bbox_based_classification.md): 라바콘 0.3x0.3x0.32.
+            #   높이 0.6 미만은 정적 장애물(UNKNOWN) — 보행자로 분류되면 road_user_stop 이 풀리지 않는 정지를 건다.
+            if height < 0.6:
+                cls.label = ObjectClassification.UNKNOWN
+            elif length < 1.2 and width < 1.2:
                 cls.label = ObjectClassification.PEDESTRIAN
             elif length < 2.8:
                 cls.label = ObjectClassification.MOTORCYCLE

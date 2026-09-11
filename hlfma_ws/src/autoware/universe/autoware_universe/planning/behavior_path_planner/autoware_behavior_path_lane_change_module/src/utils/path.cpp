@@ -743,6 +743,10 @@ std::optional<LaneChangePath> get_candidate_path(
   const auto & prepare_metric = trajectory_group.prepare_metric;
   const auto & initial_state = trajectory_group.initial_state;
   const auto & target_ref_sums = trajectory_group.target_lane_ref_path_dist;
+  // HL FMA 9/12: 아래 ref_i 보정은 기준 경로에 점이 하나 이상 있어야 성립한다.
+  if (target_lane_ref_path.points.empty()) {
+    return std::nullopt;
+  }
   auto zipped_candidates = ranges::views::zip(
     lane_changing_candidate.poses, lane_changing_candidate.frenet_points,
     lane_changing_candidate.longitudinal_velocities, lane_changing_candidate.lateral_velocities,
@@ -757,7 +761,14 @@ std::optional<LaneChangePath> get_candidate_path(
     auto ref_i_itr = std::find_if(
       target_ref_sums.begin(), target_ref_sums.end(),
       [s](const double ref_s) { return ref_s > s; });
-    auto ref_i = std::distance(target_ref_sums.begin(), ref_i_itr);
+    // HL FMA 9/12: frenet 점의 s 가 기준 경로 끝을 넘으면 find_if 가 end() 를 돌려 ref_i 가
+    //   배열 크기와 같아지고, 아래 points[ref_i] 가 범위 밖을 읽는다. 그 쓰레기 lane_ids 를
+    //   replace_with_sorted_ids 가 비교하다 behavior_planning 컨테이너가 죽었다
+    //   (9/11 23:58:55 NG, 20:16·20:21 JG, 커널 기록 lane_change .so +0x113481).
+    //   use_entire_remaining_distance=true 로 후보가 차로 끝까지 뻗으면서 드러났다.
+    //   끝을 넘은 점은 기준 경로의 마지막 점 높이·lane_ids 를 쓴다. 되돌리려면 std::min 을 뺀다.
+    const auto last_ref_i = static_cast<std::ptrdiff_t>(target_lane_ref_path.points.size()) - 1;
+    const auto ref_i = std::min(std::distance(target_ref_sums.begin(), ref_i_itr), last_ref_i);
 
     PathPointWithLaneId point;
     point.point.pose = pose;
