@@ -14,7 +14,7 @@
         unknown: false
         bicycle: true
         motorcycle: true
-        pedestrian: true
+        pedestrian: false # pedestrians are handled by preventive slowdown and run_out/road-user stop
 
         max_obstacle_vel: 100.0 # [m/s]
         min_obstacle_vel: 0.0 # [m/s]
