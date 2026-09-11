@@ -44,6 +44,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -163,6 +164,36 @@ template <typename T>
 void pushUniqueVector(T & base_vector, const T & additional_vector)
 {
   base_vector.insert(base_vector.end(), additional_vector.begin(), additional_vector.end());
+}
+
+// HL FMA 9/11: 회피 주행영역을 옆 차로로 넓힐 때 넘지 않을 경계선인가.
+//   route_handler 의 getLeftLanelet/getRightLanelet 은 차선변경 가능한 이웃(routing graph
+//   left/right)이 없으면 adjacentLeft/Right 로 폴백해 lane_change=no 실선 너머 차로까지
+//   돌려준다(route_handler.cpp "non-routable lane"). 그 차로가 회피 주행영역에 들어가면
+//   회피 경로가 실선을 넘는다 -> 대회 "실선 차로 변경" 감점(1회 -3, 2회 -6).
+//   맵에서 같은 방향 차로 사이 실선은 흰색 21개 + 노란색 9개이고 둘 다 여기서 막힌다.
+//   판정은 lane_change 태그가 아니라 선 모양(subtype)으로 한다. 채점은 노면에 그려진 선을
+//   보는데, 익스포터의 lane_change 태그는 섹션 중점 근사라 선 모양과 어긋나는 곳이 있다
+//   (점선인데 lane_change=no 인 5개는 계속 넘을 수 있다).
+//   되돌리려면 이 함수가 항상 true 를 반환하게 한다.
+bool isCrossableForAvoidance(const lanelet::ConstLineString3d & boundary)
+{
+  if (!boundary.hasAttribute(lanelet::AttributeName::Subtype)) {
+    return true;
+  }
+  const auto & subtype = boundary.attribute(lanelet::AttributeName::Subtype).value();
+  if (subtype != "solid" && subtype != "solid_solid") {
+    return true;
+  }
+  // 주기마다 불리므로 경계선마다 한 번만 남긴다.
+  static std::unordered_set<lanelet::Id> reported;
+  if (reported.insert(boundary.id()).second) {
+    RCLCPP_INFO(
+      rclcpp::get_logger(logger_namespace),
+      "HLFMA avoid_bound: way %ld (%s) 너머로 회피 주행영역을 넓히지 않음", boundary.id(),
+      subtype.c_str());
+  }
+  return false;
 }
 
 }  // namespace
@@ -2763,10 +2794,61 @@ DrivableLanes generateExpandedDrivableLanes(
 
   const auto use_opposite_lane = use_lane_type == "opposite_direction_lane";
 
+  // HL FMA 9/11: route_handler 의 getAllLeft/RightSharedLinestringLanelets(..., true) 와 같은
+  //   순서로 옆 차로를 모으되, 넘을 수 없는 경계선(isCrossableForAvoidance)을 만나면 멈춘다.
+  //   반대 차로(opposite_direction_lane)도 사이 선이 실선이면 넣지 않는다.
+  //   되돌리려면 update_left/right_lanelets 에서 route_handler->getAll*SharedLinestringLanelets
+  //   (target_lane, use_opposite_lane, true) 를 다시 부른다.
+  const auto collect_side_lanelets = [&](const lanelet::ConstLanelet & target_lane,
+                                         const bool is_left) {
+    const auto side_bound = [](const lanelet::ConstLanelet & lane, const bool left) {
+      return left ? lane.leftBound() : lane.rightBound();
+    };
+    const auto side_lane = [&](const lanelet::ConstLanelet & lane, const bool left) {
+      return left ? route_handler->getLeftLanelet(lane) : route_handler->getRightLanelet(lane);
+    };
+    constexpr size_t max_side_lanes = 10;  // 맵 이상으로 순환할 때를 대비한 상한
+
+    // 경계선 판정은 그 너머에 차로가 있을 때만 한다(도로 가장자리 선은 로그를 남기지 않게).
+    lanelet::ConstLanelets lanes;
+    lanelet::ConstLanelet edge = target_lane;
+    for (size_t i = 0; i < max_side_lanes; ++i) {
+      const auto next = side_lane(edge, is_left);
+      if (!next) {
+        break;
+      }
+      if (!isCrossableForAvoidance(side_bound(edge, is_left))) {
+        return lanes;
+      }
+      lanes.push_back(*next);
+      edge = *next;
+    }
+
+    if (!use_opposite_lane) {
+      return lanes;
+    }
+    const auto opposite_lanes = is_left ? route_handler->getLeftOppositeLanelets(edge)
+                                        : route_handler->getRightOppositeLanelets(edge);
+    if (opposite_lanes.empty() || !isCrossableForAvoidance(side_bound(edge, is_left))) {
+      return lanes;
+    }
+    // 반대 차로는 뒤집어서 넣고, 자차에서 멀어지는 쪽(반대 차로 기준으로는 반대편)으로 이어 간다.
+    lanelet::ConstLanelet opposite = opposite_lanes.front();
+    lanes.push_back(opposite.invert());
+    for (size_t i = 0; i < max_side_lanes; ++i) {
+      const auto next = side_lane(opposite, !is_left);
+      if (!next || !isCrossableForAvoidance(side_bound(opposite, !is_left))) {
+        break;
+      }
+      lanes.push_back(next->invert());
+      opposite = *next;
+    }
+    return lanes;
+  };
+
   // 1. get left/right side lanes
   const auto update_left_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
-    const auto all_left_lanelets =
-      route_handler->getAllLeftSharedLinestringLanelets(target_lane, use_opposite_lane, true);
+    const auto all_left_lanelets = collect_side_lanelets(target_lane, true);
     if (!all_left_lanelets.empty()) {
       current_drivable_lanes.left_lane = all_left_lanelets.back();  // leftmost lanelet
       pushUniqueVector(
@@ -2775,8 +2857,7 @@ DrivableLanes generateExpandedDrivableLanes(
     }
   };
   const auto update_right_lanelets = [&](const lanelet::ConstLanelet & target_lane) {
-    const auto all_right_lanelets =
-      route_handler->getAllRightSharedLinestringLanelets(target_lane, use_opposite_lane, true);
+    const auto all_right_lanelets = collect_side_lanelets(target_lane, false);
     if (!all_right_lanelets.empty()) {
       current_drivable_lanes.right_lane = all_right_lanelets.back();  // rightmost lanelet
       pushUniqueVector(
@@ -2824,6 +2905,14 @@ DrivableLanes generateExpandedDrivableLanes(
         const auto & left_lane = is_left ? next_lane : edge_lane;
         const auto & right_lane = is_left ? edge_lane : next_lane;
         if (!isEndPointsConnected(left_lane, right_lane)) {
+          continue;
+        }
+
+        // HL FMA 9/11: 갈라져 나가는 옆 차로도 마주 보는 경계선이 실선이면 넓히지 않는다.
+        //   경계선을 공유하지 않는 경우가 있어 양쪽 선을 다 본다. 되돌리려면 이 블록을 지운다.
+        if (
+          !isCrossableForAvoidance(right_lane.leftBound()) ||
+          !isCrossableForAvoidance(left_lane.rightBound())) {
           continue;
         }
 
