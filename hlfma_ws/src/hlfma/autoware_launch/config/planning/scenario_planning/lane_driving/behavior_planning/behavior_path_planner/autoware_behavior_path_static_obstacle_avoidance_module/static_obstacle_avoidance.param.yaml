@@ -10,17 +10,17 @@
       # "current_lane"           : use only current lane. this module doesn't use adjacent lane to avoid object.
       # "same_direction_lane"    : this module uses same direction lane to avoid object if need.
       # "opposite_direction_lane": this module uses both same direction and opposite direction lane.
-      use_lane_type: "opposite_direction_lane"
+      use_lane_type: "same_direction_lane"              # HL FMA: 같은 방향 차로까지 허용 (반대차로는 금지 = 중앙선 침범 -6 방어)
       # drivable area setting
-      use_intersection_areas: true
-      use_hatched_road_markings: true
-      use_freespace_areas: true
+      use_intersection_areas: false     # HL FMA: 교차로 여유공간 이탈 금지
+      use_hatched_road_markings: false  # HL FMA: 사선지대 침범 금지
+      use_freespace_areas: false        # HL FMA: 자유공간 이탈 금지
 
       # avoidance is performed for the object type with true
       target_object:
         car:
           th_moving_speed: 1.0                          # [m/s]
-          th_moving_time: 2.0                           # [s]
+          th_moving_time: 1.0                           # [s]
           longitudinal_margin: 0.0                      # [m]
           lateral_margin:
             soft_margin: 0.5                            # [m]
@@ -129,7 +129,7 @@
 
         # detection area generation parameters
         detection_area:
-          static: false                                 # [-]
+          static: true                                  # HL FMA 9/9: false 면 탐지범위가 자차속도에 비례해, 정지 시 0 이 되어 회피 대상이 사라진다(교착). true 면 max_forward_distance 고정 사용
           min_forward_distance: 50.0                    # [m]
           max_forward_distance: 150.0                   # [m]
           backward_distance: 10.0                       # [m]
@@ -152,15 +152,15 @@
           # "auto"   : generate candidate path. if RTC is running as AUTO mode, the ego avoids it automatically.
           # "manual" : generate candidate path and wait operator approval even if RTC is running as AUTO mode.
           # "ignore" : never avoid it.
-          policy: "manual"                              # [-]
+          policy: "auto"                                # HL FMA 9/9: 내 차로 장기 정차 차량을 회피 대상으로 승격 (isNeverAvoidanceTarget 바이패스와 짝)
           condition:
-            th_stopped_time: 3.0                        # [s]
+            th_stopped_time: 0.5                        # HL FMA 9/9: stop_time 이 1.2s 부근에서 동결되는 현상 회피용 (원본 3.0)
             th_moving_distance: 1.0                     # [m]
           ignore_area:
             traffic_light:
-              front_distance: 20.0                      # [m]
+              front_distance: 5.0                      # [m]
             crosswalk:
-              front_distance: 20.0                      # [m]
+              front_distance: 5.0                      # [m]
               behind_distance: 0.0                      # [m]
           wait_and_see:
             target_behaviors: ["MERGING", "DEVIATING"]  # [-]

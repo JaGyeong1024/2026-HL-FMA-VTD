@@ -8,13 +8,13 @@ launch:
   # behavior path modules
   - arg:
       name: launch_static_obstacle_avoidance
-      default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
+      default: "true"   # HL FMA: 차로 내 회피 허용 (9/3 갓길 정차차량 미회피 대응)
   - arg:
       name: launch_avoidance_by_lane_change_module
-      default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
+      default: "true"   # HL FMA: 전방 막힘 시 차선변경 우회 (9/3 갓길 정차차량·사고 미우회 대응)
   - arg:
       name: launch_dynamic_obstacle_avoidance
-      default: "false"
+      default: "true"
   - arg:
       name: launch_sampling_planner_module
       default: "false" # Warning, experimental module, use only in simulations
@@ -26,10 +26,10 @@ launch:
       default: "true"
   - arg:
       name: launch_external_request_lane_change_right_module
-      default: "false"
+      default: "true"   # blocked_route_detour가 RTC 승인하는 정지 차량군 우회 후보
   - arg:
       name: launch_external_request_lane_change_left_module
-      default: "false"
+      default: "true"   # blocked_route_detour가 RTC 승인하는 정지 차량군 우회 후보
   - arg:
       name: launch_goal_planner_module
       default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
@@ -125,7 +125,7 @@ launch:
       default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
   - arg:
       name: launch_run_out_module
-      default: "false"  # HL FMA: 비활성 (개발계획_0902 §3)
+      default: "true"   # HL FMA: 급출현 보행자 대응 (9/4 검증: 끄면 보행자 충돌). 0.52.0은 예측객체 기반
   - arg:
       name: launch_boundary_departure_prevention_module
       default: "true"

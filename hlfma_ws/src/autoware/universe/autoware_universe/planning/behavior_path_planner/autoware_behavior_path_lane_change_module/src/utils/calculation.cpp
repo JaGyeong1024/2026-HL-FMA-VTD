@@ -271,7 +271,10 @@ std::vector<double> calc_max_lane_change_lengths(
 double calc_distance_buffer(const LCParamPtr & lc_param_ptr, const std::vector<double> & lc_lengths)
 {
   if (lc_lengths.empty()) {
-    return std::numeric_limits<double>::max();
+    // HL FMA: 빈 배열은 "차선변경이 필요 없다"는 뜻이므로 필요 여유는 0 이다.
+    // DBL_MAX 를 반환하면 상위에서 (유한값 - DBL_MAX) = -DBL_MAX 로 퇴화해
+    // 모든 후보가 폐기된다. (scene.cpp: dist_to_terminal_start)
+    return 0.0;
   }
 
   const auto finish_judge_buffer = lc_param_ptr->lane_change_finish_judge_buffer;
@@ -292,7 +295,24 @@ std::vector<double> calc_shift_intervals(
   const auto & route_handler_ptr = common_data_ptr->route_handler_ptr;
   const auto direction = common_data_ptr->direction;
 
-  return route_handler_ptr->getLateralIntervalsToPreferredLane(lanes.back(), direction);
+  // HL FMA: lanes.back() 하나만 조회하면, 먼 구간의 preferred 가 진행 방향과 반대쪽일 때
+  // 빈 배열이 반환된다. 그 빈 배열은 calc_distance_buffer 에서 DBL_MAX 로 바뀌고,
+  // dist_to_terminal_start = (유한값) - DBL_MAX = -DBL_MAX 가 되어
+  // 모든 차선변경 후보가 prepare length 검사에서 폐기된다.
+  // 먼 쪽부터 자차 쪽으로 내려오며 첫 유효값을 사용한다.
+  for (auto it = lanes.rbegin(); it != lanes.rend(); ++it) {
+    const auto intervals = route_handler_ptr->getLateralIntervalsToPreferredLane(*it, direction);
+    if (!intervals.empty()) {
+      // HL FMA 9/9: 업스트림은 선호 차로까지의 차선변경 횟수만큼 구간을 돌려주고,
+      //   calc_distance_buffer 가 그 개수만큼 finish_judge_buffer 와 backward_buffer 를
+      //   중복 요구한다(인계문서 §6.4: 2회분 약 26.6m). 대상 차로를 한 번에 건너뛰도록
+      //   바꿨으므로 구간을 하나로 합쳐 1회분 버퍼만 요구하게 한다.
+      //   되돌리려면 intervals 를 그대로 반환한다.
+      return {std::accumulate(intervals.begin(), intervals.end(), 0.0)};
+    }
+  }
+
+  return {};
 }
 
 std::pair<MinMaxValue, MinMaxValue> calc_lc_length_and_dist_buffer(

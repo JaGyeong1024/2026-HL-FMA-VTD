@@ -1,0 +1,1430 @@
+// Copyright 2025 TIER IV, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "autoware/lanelet2_utils/geometry.hpp"
+
+#include "autoware/lanelet2_utils/conversion.hpp"
+
+#include <Eigen/Core>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <autoware_utils_geometry/geometry.hpp>
+
+#include <boost/geometry.hpp>
+
+#include <gtest/gtest.h>
+#include <lanelet2_core/LaneletMap.h>
+#include <lanelet2_core/geometry/Lanelet.h>
+#include <lanelet2_core/primitives/Lanelet.h>
+#include <lanelet2_core/primitives/Point.h>
+
+#include <filesystem>
+#include <string>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace autoware::experimental
+{
+
+template <typename LaneletPointT, typename LaneletPointT2>
+static void expect_point_eq(const LaneletPointT & p1, LaneletPointT2 & p2)
+{
+  EXPECT_DOUBLE_EQ(p1.x(), p2.x());
+  EXPECT_DOUBLE_EQ(p1.y(), p2.y());
+  EXPECT_DOUBLE_EQ(p1.z(), p2.z());
+}
+
+template <typename ROSPointT, typename ROSPointT2>
+static void expect_point_eq_ros(const ROSPointT & p1, ROSPointT2 & p2)
+{
+  EXPECT_DOUBLE_EQ(p1.x, p2.x);
+  EXPECT_DOUBLE_EQ(p1.y, p2.y);
+  EXPECT_DOUBLE_EQ(p1.z, p2.z);
+}
+
+template <typename QuatT>
+static void expect_quat_eq(const QuatT & quat1, const QuatT & quat2)
+{
+  EXPECT_DOUBLE_EQ(quat1.x, quat2.x);
+  EXPECT_DOUBLE_EQ(quat1.y, quat2.y);
+  EXPECT_DOUBLE_EQ(quat1.z, quat2.z);
+  EXPECT_DOUBLE_EQ(quat1.w, quat2.w);
+}
+
+auto make_point = [](double x, double y, double z) {
+  geometry_msgs::msg::Point p;
+  p.x = x;
+  p.y = y;
+  p.z = z;
+  return p;
+};
+
+static geometry_msgs::msg::Pose make_pose(double x, double y, double z = 0.0, double yaw = 0.0)
+{
+  using autoware_utils_geometry::create_quaternion_from_rpy;
+
+  geometry_msgs::msg::Pose p;
+  p.position = make_point(x, y, z);
+  p.orientation = create_quaternion_from_rpy(0.0, 0.0, yaw);
+  return p;
+}
+
+class ExtrapolatedLaneletTest : public ::testing::Test
+{
+protected:
+  lanelet::LaneletMapConstPtr lanelet_map_ptr_{nullptr};
+
+  void SetUp() override
+  {
+    const auto sample_map_dir =
+      fs::path(ament_index_cpp::get_package_share_directory("autoware_lanelet2_utils")) /
+      "sample_map";
+    const auto intersection_crossing_map_path = sample_map_dir / "vm_03/left_hand/lanelet2_map.osm";
+
+    lanelet_map_ptr_ =
+      lanelet2_utils::load_mgrs_coordinate_map(intersection_crossing_map_path.string());
+  }
+};
+
+class GetLaneletAngle : public ExtrapolatedLaneletTest
+{
+};
+
+class GetArcCoordinates : public ExtrapolatedLaneletTest
+{
+};
+
+// Test 1: forward extrapolation
+TEST(ExtrapolatedPointTest, ForwardExtrapolation)
+{
+  lanelet::ConstPoint3d p1(1, 0.0, 0.0, 0.0);
+  lanelet::ConstPoint3d p2(2, 10.0, 0.0, 0.0);
+  double distance = 5.0;
+
+  auto interpolated_pt = lanelet2_utils::extrapolate_point(p1, p2, distance);
+
+  EXPECT_NEAR(interpolated_pt.x(), 15.0, 1e-4);
+  EXPECT_NEAR(interpolated_pt.y(), 0.0, 1e-4);
+  EXPECT_NEAR(interpolated_pt.z(), 0.0, 1e-4);
+}
+
+// Test 2: Zero distance extrapolation
+TEST(ExtrapolatedPointTest, ZeroDistanceReturnsOrigin)
+{
+  lanelet::ConstPoint3d p1(1, 1.0, 2.0, 3.0);
+  lanelet::ConstPoint3d p2(2, 4.0, 5.0, 6.0);
+  double distance = 0.0;
+
+  auto interpolated_pt = lanelet2_utils::extrapolate_point(p1, p2, distance);
+
+  EXPECT_NEAR(interpolated_pt.x(), p2.x(), 1e-4);
+  EXPECT_NEAR(interpolated_pt.y(), p2.y(), 1e-4);
+  EXPECT_NEAR(interpolated_pt.z(), p2.z(), 1e-4);
+}
+
+// Test 3: Zero distance interpolation
+TEST(InterpolatePointTest, ZeroDistanceReturnsFirstOrLast)
+{
+  lanelet::ConstPoint3d p1(1, 1.0, 2.0, 3.0);
+  lanelet::ConstPoint3d p2(2, 4.0, 5.0, 6.0);
+  double distance = 0.0;
+
+  auto interpolated_pt_first = lanelet2_utils::interpolate_point(p1, p2, distance);
+  ASSERT_TRUE(interpolated_pt_first.has_value());
+  EXPECT_NEAR(interpolated_pt_first->x(), p1.x(), 1e-4);
+}
+
+// Test 4: Interpolation at exact segment length
+TEST(InterpolatePointTest, AtSegmentEnd)
+{
+  lanelet::ConstPoint3d p1(1, 1.0, 2.0, 3.0);
+  lanelet::ConstPoint3d p2(2, 4.0, 5.0, 6.0);
+  double segment_length = std::hypot(4.0 - 1.0, 5.0 - 2.0, 6.0 - 3.0);
+
+  auto interpolated_pt_forward = lanelet2_utils::interpolate_point(p1, p2, segment_length);
+  ASSERT_TRUE(interpolated_pt_forward.has_value());
+  EXPECT_NEAR(interpolated_pt_forward->x(), p2.x(), 1e-4);
+}
+
+// Test 5: out‑of‑bounds interpolation (returns nullopt)
+TEST(InterpolatePointTest, OutOfBoundsDistanceReturnsNullopt)
+{
+  lanelet::ConstPoint3d p1(1, 1.0, 2.0, 3.0);
+  lanelet::ConstPoint3d p2(2, 4.0, 5.0, 6.0);
+  double segment_length = std::hypot(4.0 - 1.0, 5.0 - 2.0, 6.0 - 3.0);
+
+  auto interpolated_pt_pos = lanelet2_utils::interpolate_point(p1, p2, segment_length + 1.0);
+  auto interpolated_pt_neg = lanelet2_utils::interpolate_point(p1, p2, -1.0);
+  EXPECT_FALSE(interpolated_pt_pos.has_value());
+  EXPECT_FALSE(interpolated_pt_neg.has_value());
+}
+
+// Test 6: interpolate_lanelet test from map
+TEST_F(ExtrapolatedLaneletTest, InterpolateLanelet)
+{
+  const auto ll = lanelet_map_ptr_->laneletLayer.get(2287);
+  auto opt_pt = lanelet2_utils::interpolate_lanelet(ll, 3.0);
+  ASSERT_TRUE(opt_pt.has_value());
+  // TODO(soblin): following are flaky
+  EXPECT_NEAR(opt_pt->x(), 164.269030, 1e-4);
+  EXPECT_NEAR(opt_pt->y(), 181.097588, 2e-3);
+  EXPECT_NEAR(opt_pt->z(), 100.000000, 2e-3);
+}
+
+// Test 7: interpolate_lanelet_sequence test from map
+TEST_F(ExtrapolatedLaneletTest, InterpolateLaneletSequence)
+{
+  lanelet::ConstLanelets lanelets;
+  lanelets.reserve(3);
+  for (const auto & id : {2287, 2288, 2289}) {
+    lanelets.push_back(lanelet_map_ptr_->laneletLayer.get(id));
+  }
+  auto opt_pt = lanelet2_utils::interpolate_lanelet_sequence(lanelets, 3.0);
+  ASSERT_TRUE(opt_pt.has_value());
+  // TODO(soblin): following are flaky
+  EXPECT_NEAR(opt_pt->x(), 164.269030, 2e-3);
+  EXPECT_NEAR(opt_pt->y(), 181.097588, 2e-3);
+  EXPECT_NEAR(opt_pt->z(), 100.000000, 2e-3);
+}
+
+// Test 8: concatenate_center_line empty input
+TEST(ConcatenateCenterLineTest, EmptyInputReturnsNullopt)
+{
+  lanelet::ConstLanelets empty_seq;
+  auto opt_ls = lanelet2_utils::concatenate_center_line(empty_seq);
+  EXPECT_FALSE(opt_ls.has_value());
+}
+
+// Test 9: concatenate_center_line map
+TEST_F(ExtrapolatedLaneletTest, ConcatenateCenterlinesSequence)
+{
+  lanelet::ConstLanelets lanelets;
+  lanelets.reserve(3);
+  for (auto id : {2287, 2288, 2289}) {
+    lanelets.push_back(lanelet_map_ptr_->laneletLayer.get(id));
+  }
+
+  auto opt_ls = lanelet2_utils::concatenate_center_line(lanelets);
+
+  ASSERT_TRUE(opt_ls.has_value());
+  const auto & ls = *opt_ls;
+
+  const auto first_expected = lanelets.front().centerline().front().basicPoint();
+  EXPECT_NEAR(ls.front().x(), first_expected.x(), 1e-4);
+  EXPECT_NEAR(ls.front().y(), first_expected.y(), 1e-4);
+  EXPECT_NEAR(ls.front().z(), first_expected.z(), 1e-4);
+  const auto last_expected = lanelets.back().centerline().back().basicPoint();
+  EXPECT_NEAR(ls.back().x(), last_expected.x(), 1e-4);
+  EXPECT_NEAR(ls.back().y(), last_expected.y(), 1e-4);
+  EXPECT_NEAR(ls.back().z(), last_expected.z(), 1e-4);
+
+  for (size_t i = 1; i < ls.size(); ++i) {
+    EXPECT_FALSE(ls[i].basicPoint() == ls[i - 1].basicPoint());
+  }
+}
+
+// Test 10: getLineStringFromArcLength empty linestring
+TEST(GetLineStringFromArcLength, EmptyLinestringReturnsNullopt)
+{
+  lanelet::ConstLineString3d empty{lanelet::InvalId, lanelet::Points3d{}};
+  auto opt =
+    autoware::experimental::lanelet2_utils::get_linestring_from_arc_length(empty, 0.5, 1.0);
+  EXPECT_FALSE(opt.has_value());
+}
+
+// Test 11: getLineStringFromArcLength out of bounds
+TEST(GetLineStringFromArcLength, OutOfBoundsReturnsNullopt)
+{
+  std::vector<lanelet::Point3d> pts = {
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 0.0, 0.0, 0.0)},
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 1.0, 0.0, 0.0)},
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 2.0, 0.0, 0.0)}};
+  lanelet::ConstLineString3d line{lanelet::InvalId, pts};
+  auto opt1 =
+    autoware::experimental::lanelet2_utils::get_linestring_from_arc_length(line, 0.0, 3.0);
+  EXPECT_FALSE(opt1.has_value());
+  auto opt2 =
+    autoware::experimental::lanelet2_utils::get_linestring_from_arc_length(line, -1.0, 1.0);
+  EXPECT_FALSE(opt2.has_value());
+}
+
+// Test 12: getLineStringFromArcLength full range
+TEST(GetLineStringFromArcLength, FullRangeReturnsAllPoints)
+{
+  std::vector<lanelet::Point3d> pts = {
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 0.0, 0.0, 0.0)},
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 1.0, 0.0, 0.0)},
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 2.0, 0.0, 0.0)}};
+  lanelet::ConstLineString3d line{lanelet::InvalId, pts};
+  auto opt = autoware::experimental::lanelet2_utils::get_linestring_from_arc_length(line, 0.0, 2.0);
+  ASSERT_TRUE(opt.has_value());
+  const auto & out = *opt;
+  ASSERT_EQ(out.size(), line.size());
+  for (size_t i = 0; i < line.size(); ++i) {
+    EXPECT_NEAR(out[i].x(), line[i].x(), 1e-4);
+    EXPECT_NEAR(out[i].y(), line[i].y(), 1e-4);
+    EXPECT_NEAR(out[i].z(), line[i].z(), 1e-4);
+  }
+}
+
+// Test 13: getLineStringFromArcLength partial range
+TEST(GetLineStringFromArcLength, PartialRangeExtractsCorrectSegment)
+{
+  std::vector<lanelet::Point3d> pts = {
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 0.0, 0.0, 0.0)},
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 1.0, 0.0, 0.0)},
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 1.7, 0.0, 0.0)},
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 2.0, 0.0, 0.0)}};
+  lanelet::ConstLineString3d line{lanelet::InvalId, pts};
+  auto opt = autoware::experimental::lanelet2_utils::get_linestring_from_arc_length(line, 0.5, 1.5);
+  ASSERT_TRUE(opt.has_value());
+  const auto & out = *opt;
+  ASSERT_EQ(out.size(), 3u);
+  EXPECT_NEAR(out[0].x(), 0.5, 1e-4);
+  EXPECT_NEAR(out[2].x(), 1.5, 1e-4);
+}
+
+// Test 14: get_pose_from_2d_arc_length out of bound
+TEST_F(ExtrapolatedLaneletTest, GetPoseFrom2dArcLength_OutOfBounds)
+{
+  lanelet::ConstLanelets lanelets;
+  EXPECT_FALSE(
+    autoware::experimental::lanelet2_utils::get_pose_from_2d_arc_length(lanelets, 0.0).has_value());
+
+  lanelets.push_back(lanelet_map_ptr_->laneletLayer.get(2287));
+  EXPECT_FALSE(
+    autoware::experimental::lanelet2_utils::get_pose_from_2d_arc_length(lanelets, -1.0)
+      .has_value());
+  EXPECT_FALSE(
+    autoware::experimental::lanelet2_utils::get_pose_from_2d_arc_length(lanelets, 1e6).has_value());
+}
+
+// Test 15: get_pose_from_2d_arc_length
+TEST_F(ExtrapolatedLaneletTest, GetPoseFrom2dArcLength_OnRealMapLanelets)
+{
+  lanelet::ConstLanelets lanelets;
+  for (auto id : {2287, 2288, 2289}) {
+    lanelets.push_back(lanelet_map_ptr_->laneletLayer.get(id));
+  }
+  auto opt_pose =
+    autoware::experimental::lanelet2_utils::get_pose_from_2d_arc_length(lanelets, 3.0);
+  ASSERT_TRUE(opt_pose.has_value());
+  const auto & p = *opt_pose;
+  // TODO(soblin): following are flaky
+  EXPECT_NEAR(p.position.x, 164.269030, 2e-3);
+  EXPECT_NEAR(p.position.y, 181.097588, 2e-3);
+  EXPECT_NEAR(p.position.z, 100.000000, 2e-3);
+  auto pt1 = lanelet_map_ptr_->laneletLayer.get(2287).centerline().front().basicPoint();
+  auto pt2 = lanelet_map_ptr_->laneletLayer.get(2287).centerline()[1].basicPoint();
+  double expected_yaw = std::atan2(pt2.y() - pt1.y(), pt2.x() - pt1.x());
+  double half = expected_yaw * 0.5;
+  geometry_msgs::msg::Quaternion eq;
+  eq.x = 0.0;
+  eq.y = 0.0;
+  eq.z = std::sin(half);
+  eq.w = std::cos(half);
+
+  EXPECT_NEAR(p.orientation.x, eq.x, 1e-4);
+  EXPECT_NEAR(p.orientation.y, eq.y, 1e-4);
+  EXPECT_NEAR(p.orientation.z, eq.z, 1e-4);
+  EXPECT_NEAR(p.orientation.w, eq.w, 1e-4);
+}
+
+// Test 16: getPolygonFromArcLength empty lanelets
+TEST(getPolygonFromArcLength, EmptyLaneletsReturnsNullopt)
+{
+  lanelet::ConstLanelets empty{};
+  auto opt = autoware::experimental::lanelet2_utils::get_polygon_from_arc_length(empty, 0.5, 1.0);
+  EXPECT_FALSE(opt.has_value());
+}
+
+// Test 17: getPolygonFromArcLength ordinary cases
+TEST(getPolygonFromArcLength, OrdinaryLaneletsReturnCorrectPolygon)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points1 = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points1 = {p3, p4};
+
+  auto ll1 = create_safe_lanelet(left_points1, right_points1);
+
+  auto p5 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p6 = lanelet::BasicPoint3d(6.0, 2.0, 0.0);
+  auto p7 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+  auto p8 = lanelet::BasicPoint3d(6.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points2 = {p5, p6};
+  std::vector<lanelet::BasicPoint3d> right_points2 = {p7, p8};
+
+  auto ll2 = create_safe_lanelet(left_points2, right_points2);
+
+  auto lanelet_sequence = lanelet::ConstLanelets{*ll1, *ll2};
+
+  // Full range
+  {
+    const auto polygon_opt = autoware::experimental::lanelet2_utils::get_polygon_from_arc_length(
+      lanelet_sequence, 0.0, 6.0);
+    ASSERT_TRUE(polygon_opt.has_value());
+    const auto polygon_area = boost::geometry::area(lanelet::utils::to2D(polygon_opt.value()));
+    EXPECT_NEAR(polygon_area, 12.0, 1e-4);
+  }
+
+  // Partial range
+  {
+    const auto polygon_opt = autoware::experimental::lanelet2_utils::get_polygon_from_arc_length(
+      lanelet_sequence, 2.0, 4.0);
+    ASSERT_TRUE(polygon_opt.has_value());
+    const auto polygon_area = boost::geometry::area(lanelet::utils::to2D(polygon_opt.value()));
+    EXPECT_NEAR(polygon_area, 4.0, 1e-4);
+  }
+}
+
+// Test 18: get_closest_segment full range
+TEST(GetClosestSegment, OrdinaryLinestringReturnCorrectSegment)
+{
+  std::vector<lanelet::Point3d> pts = {
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 0.0, 0.0, 0.0)},
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 1.0, 0.0, 0.0)},
+    lanelet::Point3d{lanelet::ConstPoint3d(1, 2.0, 0.0, 0.0)}};
+  lanelet::ConstLineString3d line{lanelet::InvalId, pts};
+
+  // The Closest Segment is the first segment
+  {
+    lanelet::BasicPoint3d query(0.5, 0.0, 0.0);
+    auto out = autoware::experimental::lanelet2_utils::get_closest_segment(line, query);
+    ASSERT_EQ(out.size(), 2);
+
+    lanelet::BasicPoint3d start_point = out.front().basicPoint();
+    lanelet::BasicPoint3d end_point = out.back().basicPoint();
+
+    expect_point_eq(start_point, pts.at(0));
+    expect_point_eq(end_point, pts.at(1));
+  }
+
+  // The Closest Segment is the second segment
+  {
+    lanelet::BasicPoint3d query(1.5, 0.0, 0.0);
+    auto out = autoware::experimental::lanelet2_utils::get_closest_segment(line, query);
+    ASSERT_EQ(out.size(), 2);
+
+    lanelet::BasicPoint3d start_point = out.front().basicPoint();
+    lanelet::BasicPoint3d end_point = out.back().basicPoint();
+
+    expect_point_eq(start_point, pts.at(1));
+    expect_point_eq(end_point, pts.at(2));
+  }
+}
+
+// Test 19: get_lanelet_angle Horizontal Case
+TEST_F(GetLaneletAngle, GetHorizontalAngle)
+{
+  const auto ll = lanelet_map_ptr_->laneletLayer.get(2296);
+  lanelet::BasicPoint3d p(190.5, 177.83, 100);
+  auto out = autoware::experimental::lanelet2_utils::get_lanelet_angle(ll, p);
+  // Test = -3.1308317, Result = -3.13089
+  EXPECT_NEAR(out, -3.1308317, 1e-4);
+}
+
+// Test 20: get_lanelet_angle Vertical
+TEST_F(GetLaneletAngle, GetVerticalAngle)
+{
+  const auto ll = lanelet_map_ptr_->laneletLayer.get(2258);
+  lanelet::BasicPoint3d p(106.71, 149.3, 100);
+  auto out = autoware::experimental::lanelet2_utils::get_lanelet_angle(ll, p);
+  // Test = 1.58204, Result = 1.58206
+  EXPECT_NEAR(out, 1.58204, 1e-4);
+}
+
+// Test 21: get_closest_center_pose Horizontal Case
+TEST(GetClosestCenterPoseTest, getHorizontalPose)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  using autoware_utils_geometry::create_quaternion_from_yaw;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points = {p3, p4};
+  auto ll = create_safe_lanelet(left_points, right_points);
+
+  auto search_pt = lanelet::BasicPoint3d(1.0, 1.2, 0.0);
+  auto out = autoware::experimental::lanelet2_utils::get_closest_center_pose(*ll, search_pt);
+
+  auto expected_point = make_point(1.0, 1.0, 0.0);
+  expect_point_eq_ros(out.position, expected_point);
+
+  auto expected_quat = create_quaternion_from_yaw(0);
+  expect_quat_eq(out.orientation, expected_quat);
+}
+
+// Test 22: get_closest_center_pose Vertical Case
+TEST(GetClosestCenterPoseTest, getVerticalPose)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  using autoware_utils_geometry::create_quaternion_from_yaw;
+  auto p1 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(0.0, 3.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(2.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(2.0, 3.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points = {p3, p4};
+  auto ll = create_safe_lanelet(left_points, right_points);
+
+  auto search_pt = lanelet::BasicPoint3d(1.2, 1.0, 0.0);
+  auto out = autoware::experimental::lanelet2_utils::get_closest_center_pose(*ll, search_pt);
+
+  auto expected_point = make_point(1.0, 1.0, 0.0);
+  expect_point_eq_ros(out.position, expected_point);
+
+  auto expected_quat = create_quaternion_from_yaw(M_PI / 2);
+  expect_quat_eq(out.orientation, expected_quat);
+}
+
+// Test 23: get_closest_center_pose Incline Case
+TEST(GetClosestCenterPoseTest, getInclinePose)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  using autoware_utils_geometry::create_quaternion_from_yaw;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(2.0, 4.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(2.0, 2.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points = {p3, p4};
+  auto ll = create_safe_lanelet(left_points, right_points);
+
+  auto search_pt = lanelet::BasicPoint3d(1.2, 2.0, 0.0);
+  auto out = autoware::experimental::lanelet2_utils::get_closest_center_pose(*ll, search_pt);
+
+  auto expected_point = make_point(1.1, 2.1, 0.0);
+  expect_point_eq_ros(out.position, expected_point);
+
+  auto expected_quat = create_quaternion_from_yaw(M_PI / 4);
+  expect_quat_eq(out.orientation, expected_quat);
+}
+
+// Test 24: get_closest_center_pose Incline Down Case
+TEST(GetClosestCenterPoseTest, getInclineDownPose)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  using autoware_utils_geometry::create_quaternion_from_yaw;
+  auto p1 = lanelet::BasicPoint3d(2.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(2.0, 4.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points = {p3, p4};
+  auto ll = create_safe_lanelet(left_points, right_points);
+
+  auto search_pt = lanelet::BasicPoint3d(1.2, 2.0, 0.0);
+  auto out = autoware::experimental::lanelet2_utils::get_closest_center_pose(*ll, search_pt);
+
+  auto expected_point = make_point(1.1, 2.1, 0.0);
+  expect_point_eq_ros(out.position, expected_point);
+
+  // Yaw is from - pi to pi
+  auto expected_quat = create_quaternion_from_yaw(-3 * M_PI / 4);
+  expect_quat_eq(out.orientation, expected_quat);
+}
+
+// Test 25: get_arc_coordinates empty case
+TEST_F(GetArcCoordinates, get_arc_coordinateEmptyCase)
+{
+  auto empty_lanelet_sequence = lanelet::ConstLanelets{};
+
+  // random query pose
+  auto query = make_pose(1.5, 1.1);
+  auto arc_coord =
+    autoware::experimental::lanelet2_utils::get_arc_coordinates(empty_lanelet_sequence, query);
+  EXPECT_EQ(arc_coord.length, 0);
+  EXPECT_EQ(arc_coord.distance, 0);
+
+  // get_arc_coordinates_on_ego_centerline should give same result without waypoints
+  {
+    auto arc_coord_on_ego_centerline =
+      autoware::experimental::lanelet2_utils::get_arc_coordinates_on_ego_centerline(
+        empty_lanelet_sequence, query, lanelet_map_ptr_);
+    EXPECT_EQ(arc_coord_on_ego_centerline.length, 0);
+    EXPECT_EQ(arc_coord_on_ego_centerline.distance, 0);
+  }
+}
+
+// Test 26: get_arc_coordinates ordinary case
+TEST_F(GetArcCoordinates, get_arc_coordinateOrdinaryCase)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points1 = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points1 = {p3, p4};
+
+  auto ll1 = create_safe_lanelet(left_points1, right_points1);
+
+  auto p5 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p6 = lanelet::BasicPoint3d(6.0, 2.0, 0.0);
+  auto p7 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+  auto p8 = lanelet::BasicPoint3d(6.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points2 = {p5, p6};
+  std::vector<lanelet::BasicPoint3d> right_points2 = {p7, p8};
+
+  auto ll2 = create_safe_lanelet(left_points2, right_points2);
+
+  auto lanelet_sequence = lanelet::ConstLanelets{*ll1, *ll2};
+
+  // query is above the center of the first lanelet
+  {
+    auto query = make_pose(1.5, 1.1);
+    auto arc_coord =
+      autoware::experimental::lanelet2_utils::get_arc_coordinates(lanelet_sequence, query);
+    EXPECT_NEAR(arc_coord.length, 1.5, 1e-4);
+    EXPECT_NEAR(arc_coord.distance, 0.1, 1e-4);
+
+    // get_arc_coordinates_on_ego_centerline should give same result without waypoints
+    auto arc_coord_on_ego_centerline =
+      autoware::experimental::lanelet2_utils::get_arc_coordinates_on_ego_centerline(
+        lanelet_sequence, query, lanelet_map_ptr_);
+    EXPECT_NEAR(arc_coord_on_ego_centerline.length, 1.5, 1e-4);
+    EXPECT_NEAR(arc_coord_on_ego_centerline.distance, 0.1, 1e-4);
+  }
+
+  // query is below the center of the second lanelet
+  {
+    auto query = make_pose(4.5, 0.9);
+    auto arc_coord =
+      autoware::experimental::lanelet2_utils::get_arc_coordinates(lanelet_sequence, query);
+    EXPECT_NEAR(arc_coord.length, 4.5, 1e-4);
+    EXPECT_NEAR(arc_coord.distance, -0.1, 1e-4);
+
+    // get_arc_coordinates_on_ego_centerline should give same result without waypoints
+    auto arc_coord_on_ego_centerline =
+      autoware::experimental::lanelet2_utils::get_arc_coordinates_on_ego_centerline(
+        lanelet_sequence, query, lanelet_map_ptr_);
+    EXPECT_NEAR(arc_coord_on_ego_centerline.length, 4.5, 1e-4);
+    EXPECT_NEAR(arc_coord_on_ego_centerline.distance, -0.1, 1e-4);
+  }
+}
+
+// Test 27: get_lateral_distance_to_centerline ordinary case
+TEST(GetLateralDistanceToCenterline, get_lateral_distance_to_centerlineOrdinaryCase)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points = {p3, p4};
+
+  auto ll = create_safe_lanelet(left_points, right_points);
+
+  // query is above the center of lanelet
+  {
+    auto query = make_pose(1.5, 1.1);
+    auto distance =
+      autoware::experimental::lanelet2_utils::get_lateral_distance_to_centerline(*ll, query);
+    EXPECT_NEAR(distance, 0.1, 1e-4);
+  }
+
+  // query is below the center of lanelet
+  {
+    auto query = make_pose(1.5, 0.9);
+    auto distance =
+      autoware::experimental::lanelet2_utils::get_lateral_distance_to_centerline(*ll, query);
+    EXPECT_NEAR(distance, -0.1, 1e-4);
+  }
+}
+
+// Test 28: get_lateral_distance_to_centerline lanelet sequence
+TEST(GetLateralDistanceToCenterline, get_lateral_distance_to_centerlineLaneletSequence)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points1 = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points1 = {p3, p4};
+
+  auto ll1 = create_safe_lanelet(left_points1, right_points1);
+
+  auto p5 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p6 = lanelet::BasicPoint3d(6.0, 2.0, 0.0);
+  auto p7 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+  auto p8 = lanelet::BasicPoint3d(6.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points2 = {p5, p6};
+  std::vector<lanelet::BasicPoint3d> right_points2 = {p7, p8};
+
+  auto ll2 = create_safe_lanelet(left_points2, right_points2);
+
+  auto lanelet_sequence = lanelet::ConstLanelets{*ll1, *ll2};
+
+  // query is above the center of the first lanelet
+  {
+    auto query = make_pose(1.5, 1.1);
+    auto distance = autoware::experimental::lanelet2_utils::get_lateral_distance_to_centerline(
+      lanelet_sequence, query);
+    EXPECT_NEAR(distance, 0.1, 1e-4);
+  }
+
+  // query is below the center of the second lanelet
+  {
+    auto query = make_pose(4.5, 0.9);
+    auto distance = autoware::experimental::lanelet2_utils::get_lateral_distance_to_centerline(
+      lanelet_sequence, query);
+    EXPECT_NEAR(distance, -0.1, 1e-4);
+  }
+}
+
+// Test 29: combine_lanelets_shape with duplicate point
+TEST(LaneletManipulation, CombineLaneletsWithDuplicatePoint)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points1 = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points1 = {p3, p4};
+
+  auto ll1 = create_safe_lanelet(left_points1, right_points1);
+
+  auto p5 = lanelet::BasicPoint3d(3.0, 2.0, 0.0);
+  auto p6 = lanelet::BasicPoint3d(6.0, 2.0, 0.0);
+  auto p7 = lanelet::BasicPoint3d(3.0, 0.0, 0.0);
+  auto p8 = lanelet::BasicPoint3d(6.0, 0.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points2 = {p5, p6};
+  std::vector<lanelet::BasicPoint3d> right_points2 = {p7, p8};
+
+  auto ll2 = create_safe_lanelet(left_points2, right_points2);
+
+  const auto one_lanelet_opt =
+    autoware::experimental::lanelet2_utils::combine_lanelets_shape({*ll1, *ll2});
+  if (one_lanelet_opt.has_value()) {
+    const auto one_lanelet = one_lanelet_opt.value();
+
+    EXPECT_EQ(typeid(one_lanelet), typeid(lanelet::ConstLanelet))
+      << "one_lanelet is not lanelet::ConstLanelet.";
+    EXPECT_EQ(one_lanelet.leftBound().size(), 3);
+    EXPECT_EQ(one_lanelet.rightBound().size(), 3);
+  }
+}
+// Test 30: get_dirty_expanded_lanelet ordinary case
+TEST(LaneletManipulation, getExpandedLaneletOrdinaryCase)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 1.0);
+  auto p2 = lanelet::BasicPoint3d(3.0, 2.0, 1.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 1.0);
+  auto p4 = lanelet::BasicPoint3d(3.0, 0.0, 1.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points = {p3, p4};
+
+  auto ll = *create_safe_lanelet(left_points, right_points);
+
+  {
+    auto expanded_lanelet_opt =
+      autoware::experimental::lanelet2_utils::get_dirty_expanded_lanelet(ll, 1, 1);
+    ASSERT_TRUE(expanded_lanelet_opt.has_value());
+    if (expanded_lanelet_opt.has_value()) {
+      auto expanded_lanelet = expanded_lanelet_opt.value();
+
+      auto expanded_left_bound = expanded_lanelet.leftBound();
+      auto expanded_right_bound = expanded_lanelet.rightBound();
+
+      // check left bound
+      {
+        EXPECT_EQ(expanded_left_bound.size(), 2);
+        // check front
+        EXPECT_NEAR(expanded_left_bound.front().x(), 0.0, 1e-4);
+        EXPECT_NEAR(expanded_left_bound.front().y(), 3.0, 1e-4);
+        EXPECT_NEAR(expanded_left_bound.front().z(), 1.0, 1e-4);
+
+        // check back
+        EXPECT_NEAR(expanded_left_bound.back().x(), 3.0, 1e-4);
+        EXPECT_NEAR(expanded_left_bound.back().y(), 3.0, 1e-4);
+        EXPECT_NEAR(expanded_left_bound.back().z(), 1.0, 1e-4);
+      }
+
+      // check right bound
+      {
+        EXPECT_EQ(expanded_right_bound.size(), 2);
+        // check front
+        EXPECT_NEAR(expanded_right_bound.front().x(), 0.0, 1e-4);
+        EXPECT_NEAR(expanded_right_bound.front().y(), 1.0, 1e-4);
+        EXPECT_NEAR(expanded_right_bound.front().z(), 1.0, 1e-4);
+
+        // check back
+        EXPECT_NEAR(expanded_right_bound.back().x(), 3.0, 1e-4);
+        EXPECT_NEAR(expanded_right_bound.back().y(), 1.0, 1e-4);
+        EXPECT_NEAR(expanded_right_bound.back().z(), 1.0, 1e-4);
+      }
+    }
+  }
+
+  {
+    auto expanded_lanelet_opt =
+      autoware::experimental::lanelet2_utils::get_dirty_expanded_lanelet(ll, 1, -1);
+
+    ASSERT_TRUE(expanded_lanelet_opt.has_value());
+    if (expanded_lanelet_opt.has_value()) {
+      auto expanded_lanelet = expanded_lanelet_opt.value();
+
+      auto expanded_left_bound = expanded_lanelet.leftBound();
+      auto expanded_right_bound = expanded_lanelet.rightBound();
+
+      // check left bound
+      {
+        EXPECT_EQ(expanded_left_bound.size(), 2);
+        // check front
+        EXPECT_NEAR(expanded_left_bound.front().x(), 0.0, 1e-4);
+        EXPECT_NEAR(expanded_left_bound.front().y(), 3.0, 1e-4);
+        EXPECT_NEAR(expanded_left_bound.front().z(), 1.0, 1e-4);
+
+        // check back
+        EXPECT_NEAR(expanded_left_bound.back().x(), 3.0, 1e-4);
+        EXPECT_NEAR(expanded_left_bound.back().y(), 3.0, 1e-4);
+        EXPECT_NEAR(expanded_left_bound.back().z(), 1.0, 1e-4);
+      }
+
+      // check right bound
+      {
+        EXPECT_EQ(expanded_right_bound.size(), 2);
+        // check front
+        EXPECT_NEAR(expanded_right_bound.front().x(), 0.0, 1e-4);
+        EXPECT_NEAR(expanded_right_bound.front().y(), -1.0, 1e-4);
+        EXPECT_NEAR(expanded_right_bound.front().z(), 1.0, 1e-4);
+
+        // check back
+        EXPECT_NEAR(expanded_right_bound.back().x(), 3.0, 1e-4);
+        EXPECT_NEAR(expanded_right_bound.back().y(), -1.0, 1e-4);
+        EXPECT_NEAR(expanded_right_bound.back().z(), 1.0, 1e-4);
+      }
+    }
+  }
+}
+
+// Test 31: get_dirty_expanded_lanelet corner case
+TEST(LaneletManipulation, getExpandedLaneletCornerCase)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto left_p1 = lanelet::BasicPoint3d(-1.0, 1.0, 1.0);
+  auto left_p2 = lanelet::BasicPoint3d(0.0, 2.0, 1.0);
+  auto left_p3 = lanelet::BasicPoint3d(1.0, 1.0, 1.0);
+
+  auto right_p1 = lanelet::BasicPoint3d(-1.0, -1.0, 1.0);
+  auto right_p2 = lanelet::BasicPoint3d(0.0, 0.0, 1.0);
+  auto right_p4 = lanelet::BasicPoint3d(1.0, -1.0, 1.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points = {left_p1, left_p2, left_p3};
+  // std::vector<lanelet::BasicPoint3d> right_points = {right_p1, right_p2, right_p3, right_p4};
+  std::vector<lanelet::BasicPoint3d> right_points = {right_p1, right_p2, right_p4};
+
+  auto ll = *create_safe_lanelet(left_points, right_points);
+
+  auto expanded_lanelet_opt =
+    autoware::experimental::lanelet2_utils::get_dirty_expanded_lanelet(ll, 1, -1);
+
+  if (expanded_lanelet_opt.has_value()) {
+    auto expanded_lanelet = expanded_lanelet_opt.value();
+
+    auto expanded_left_bound = expanded_lanelet.leftBound();
+    auto expanded_right_bound = expanded_lanelet.rightBound();
+
+    // check left bound
+    {
+      EXPECT_EQ(expanded_left_bound.size(), 3);
+    }
+
+    // check right bound, number of points changes -> unknown behavior
+    {
+      ASSERT_FALSE((expanded_right_bound.size() == 3));
+    }
+  }
+}
+
+// Test 32: get_dirty_expanded_lanelets ordinary case
+TEST(LaneletManipulation, getExpandedLaneletsOrdinaryCase)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 1.0);
+  auto p2 = lanelet::BasicPoint3d(3.0, 2.0, 1.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 1.0);
+  auto p4 = lanelet::BasicPoint3d(3.0, 0.0, 1.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points1 = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points1 = {p3, p4};
+  auto ll1 = *create_safe_lanelet(left_points1, right_points1);
+
+  auto p5 = lanelet::BasicPoint3d(3.0, 2.0, 1.0);
+  auto p6 = lanelet::BasicPoint3d(6.0, 2.0, 1.0);
+  auto p7 = lanelet::BasicPoint3d(3.0, 0.0, 1.0);
+  auto p8 = lanelet::BasicPoint3d(6.0, 0.0, 1.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points2 = {p5, p6};
+  std::vector<lanelet::BasicPoint3d> right_points2 = {p7, p8};
+
+  auto ll2 = *create_safe_lanelet(left_points2, right_points2);
+
+  auto lls = lanelet::ConstLanelets{ll1, ll2};
+
+  {
+    auto expanded_lanelets_opt =
+      autoware::experimental::lanelet2_utils::get_dirty_expanded_lanelets(lls, 1, 1);
+    ASSERT_TRUE(expanded_lanelets_opt.has_value());
+    if (expanded_lanelets_opt.has_value()) {
+      auto expanded_lanelets = expanded_lanelets_opt.value();
+      ASSERT_EQ(expanded_lanelets.size(), 2);
+      auto left_points =
+        std::vector<std::vector<lanelet::BasicPoint3d>>{left_points1, left_points2};
+      auto right_points =
+        std::vector<std::vector<lanelet::BasicPoint3d>>{right_points1, right_points2};
+      for (size_t i = 0ul; i < expanded_lanelets.size(); i++) {
+        auto ll = expanded_lanelets[i];
+        EXPECT_EQ(ll.id(), lanelet::InvalId);
+        auto expanded_left_bound = ll.leftBound();
+        auto expanded_right_bound = ll.rightBound();
+        // check left bound
+        {
+          EXPECT_EQ(expanded_left_bound.size(), 2);
+          // check front
+          EXPECT_NEAR(expanded_left_bound.front().x(), left_points[i].front().x(), 1e-4);
+          EXPECT_NEAR(expanded_left_bound.front().y(), left_points[i].front().y() + 1.0, 1e-4);
+          EXPECT_NEAR(expanded_left_bound.front().z(), left_points[i].front().z(), 1e-4);
+
+          // check back
+          EXPECT_NEAR(expanded_left_bound.back().x(), left_points[i].back().x(), 1e-4);
+          EXPECT_NEAR(expanded_left_bound.back().y(), left_points[i].back().y() + 1.0, 1e-4);
+          EXPECT_NEAR(expanded_left_bound.back().z(), left_points[i].back().z(), 1e-4);
+        }
+
+        // check right bound
+        {
+          EXPECT_EQ(expanded_right_bound.size(), 2);
+          // check front
+          EXPECT_NEAR(expanded_right_bound.front().x(), right_points[i].front().x(), 1e-4);
+          EXPECT_NEAR(expanded_right_bound.front().y(), right_points[i].front().y() + 1.0, 1e-4);
+          EXPECT_NEAR(expanded_right_bound.front().z(), right_points[i].front().z(), 1e-4);
+
+          // check back
+          EXPECT_NEAR(expanded_right_bound.back().x(), right_points[i].back().x(), 1e-4);
+          EXPECT_NEAR(expanded_right_bound.back().y(), right_points[i].back().y() + 1.0, 1e-4);
+          EXPECT_NEAR(expanded_right_bound.back().z(), right_points[i].back().z(), 1e-4);
+        }
+      }
+    }
+  }
+  {
+    auto expanded_lanelets_opt =
+      autoware::experimental::lanelet2_utils::get_dirty_expanded_lanelets(lls, 1, -1);
+    ASSERT_TRUE(expanded_lanelets_opt.has_value());
+
+    if (expanded_lanelets_opt.has_value()) {
+      auto expanded_lanelets = expanded_lanelets_opt.value();
+      ASSERT_EQ(expanded_lanelets.size(), 2);
+      auto left_points =
+        std::vector<std::vector<lanelet::BasicPoint3d>>{left_points1, left_points2};
+      auto right_points =
+        std::vector<std::vector<lanelet::BasicPoint3d>>{right_points1, right_points2};
+      for (size_t i = 0ul; i < expanded_lanelets.size(); i++) {
+        auto ll = expanded_lanelets[i];
+        EXPECT_EQ(ll.id(), lanelet::InvalId);
+        auto expanded_left_bound = ll.leftBound();
+        auto expanded_right_bound = ll.rightBound();
+        // check left bound
+        {
+          EXPECT_EQ(expanded_left_bound.size(), 2);
+          // check front
+          EXPECT_NEAR(expanded_left_bound.front().x(), left_points[i].front().x(), 1e-4);
+          EXPECT_NEAR(expanded_left_bound.front().y(), left_points[i].front().y() + 1.0, 1e-4);
+          EXPECT_NEAR(expanded_left_bound.front().z(), left_points[i].front().z(), 1e-4);
+
+          // check back
+          EXPECT_NEAR(expanded_left_bound.back().x(), left_points[i].back().x(), 1e-4);
+          EXPECT_NEAR(expanded_left_bound.back().y(), left_points[i].back().y() + 1.0, 1e-4);
+          EXPECT_NEAR(expanded_left_bound.back().z(), left_points[i].back().z(), 1e-4);
+        }
+
+        // check right bound
+        {
+          EXPECT_EQ(expanded_right_bound.size(), 2);
+          // check front
+          EXPECT_NEAR(expanded_right_bound.front().x(), right_points[i].front().x(), 1e-4);
+          EXPECT_NEAR(expanded_right_bound.front().y(), right_points[i].front().y() - 1.0, 1e-4);
+          EXPECT_NEAR(expanded_right_bound.front().z(), right_points[i].front().z(), 1e-4);
+
+          // check back
+          EXPECT_NEAR(expanded_right_bound.back().x(), right_points[i].back().x(), 1e-4);
+          EXPECT_NEAR(expanded_right_bound.back().y(), right_points[i].back().y() - 1.0, 1e-4);
+          EXPECT_NEAR(expanded_right_bound.back().z(), right_points[i].back().z(), 1e-4);
+        }
+      }
+    }
+  }
+}
+
+// Test 33: get bound with offset - Ordinary Case (same length)
+TEST(LaneletManipulation, getBoundOrdinaryCase)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(2.0, 4.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(2.0, 2.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points = {p3, p4};
+  auto ll = *create_safe_lanelet(left_points, right_points);
+
+  // fine centerline (no offset)
+  {
+    auto centerline = autoware::experimental::lanelet2_utils::get_fine_centerline(ll, sqrt(2));
+    ASSERT_EQ(centerline.size(), 3) << "Size of centerline is not 3 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 1.0, 0.0);
+      expect_point_eq(centerline[0], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(1, 2.0, 0.0);
+      expect_point_eq(centerline[1], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(2, 3.0, 0.0);
+      expect_point_eq(centerline[2], test_point);
+    }
+  }
+
+  // centerline shift left
+  {
+    auto centerline =
+      autoware::experimental::lanelet2_utils::get_centerline_with_offset(ll, 0.5, sqrt(2));
+    ASSERT_EQ(centerline.size(), 3) << "Size of centerline is not 3 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 1.5, 0.0);
+      expect_point_eq(centerline[0], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(1, 2.5, 0.0);
+      expect_point_eq(centerline[1], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(2, 3.5, 0.0);
+      expect_point_eq(centerline[2], test_point);
+    }
+  }
+
+  // centerline shift right
+  {
+    auto centerline =
+      autoware::experimental::lanelet2_utils::get_centerline_with_offset(ll, -0.5, sqrt(2));
+    ASSERT_EQ(centerline.size(), 3) << "Size of centerline is not 3 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 0.5, 0.0);
+      expect_point_eq(centerline[0], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(1, 1.5, 0.0);
+      expect_point_eq(centerline[1], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(2, 2.5, 0.0);
+      expect_point_eq(centerline[2], test_point);
+    }
+  }
+
+  // right_bound shift **left**
+  {
+    auto right_bound =
+      autoware::experimental::lanelet2_utils::get_right_bound_with_offset(ll, -0.5, sqrt(2));
+    ASSERT_EQ(right_bound.size(), 3) << "Size of right_bound is not 3 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 0.5, 0.0);
+      expect_point_eq(right_bound[0], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(1, 1.5, 0.0);
+      expect_point_eq(right_bound[1], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(2, 2.5, 0.0);
+      expect_point_eq(right_bound[2], test_point);
+    }
+  }
+
+  // right_bound shift **right**
+  {
+    auto right_bound =
+      autoware::experimental::lanelet2_utils::get_right_bound_with_offset(ll, 0.5, sqrt(2));
+    ASSERT_EQ(right_bound.size(), 3) << "Size of right_bound is not 3 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, -0.5, 0.0);
+      expect_point_eq(right_bound[0], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(1, 0.5, 0.0);
+      expect_point_eq(right_bound[1], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(2, 1.5, 0.0);
+      expect_point_eq(right_bound[2], test_point);
+    }
+  }
+
+  // left_bound shift left
+  {
+    auto left_bound =
+      autoware::experimental::lanelet2_utils::get_left_bound_with_offset(ll, 0.5, sqrt(2));
+    ASSERT_EQ(left_bound.size(), 3) << "Size of left_bound is not 3 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 2.5, 0.0);
+      expect_point_eq(left_bound[0], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(1, 3.5, 0.0);
+      expect_point_eq(left_bound[1], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(2, 4.5, 0.0);
+      expect_point_eq(left_bound[2], test_point);
+    }
+  }
+
+  // left_bound shift right
+  {
+    auto left_bound =
+      autoware::experimental::lanelet2_utils::get_left_bound_with_offset(ll, -0.5, sqrt(2));
+    ASSERT_EQ(left_bound.size(), 3) << "Size of left_bound is not 3 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 1.5, 0.0);
+      expect_point_eq(left_bound[0], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(1, 2.5, 0.0);
+      expect_point_eq(left_bound[1], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(2, 3.5, 0.0);
+      expect_point_eq(left_bound[2], test_point);
+    }
+  }
+}
+
+// Test 34: get bound with offset - different length (the distance between each pair is not
+// constant)
+TEST(LaneletManipulation, getBoundDifferentLength)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(2.0, 4.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(3.0, 3.0, 0.0);  // right bound will be longer
+
+  std::vector<lanelet::BasicPoint3d> left_points = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points = {p3, p4};
+  auto ll = *create_safe_lanelet(left_points, right_points);
+
+  const auto calculate_magnitude = [](const double x, const double y) {
+    return sqrt(std::pow(x, 2) + std::pow(y, 2));
+  };
+
+  // fine centerline (no offset)
+  {
+    auto centerline = autoware::experimental::lanelet2_utils::get_fine_centerline(ll, sqrt(2));
+    // use longer bound to calculate num_segments
+    ASSERT_EQ(centerline.size(), 4) << "Size of centerline is not 4 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 1.0, 0.0);
+      expect_point_eq(centerline[0], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(5.0 / 6.0, 11.0 / 6.0, 0.0);
+      expect_point_eq(centerline[1], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(5.0 / 3.0, 8.0 / 3.0, 0.0);
+      expect_point_eq(centerline[2], test_point);
+    }
+    {
+      auto test_point = lanelet::BasicPoint3d(2.5, 3.5, 0.0);
+      expect_point_eq(centerline[3], test_point);
+    }
+  }
+
+  // centerline shift left
+  {
+    auto centerline =
+      autoware::experimental::lanelet2_utils::get_centerline_with_offset(ll, 0.5, sqrt(2));
+    ASSERT_EQ(centerline.size(), 4) << "Size of centerline is not 4 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 1.5, 0.0);
+      expect_point_eq(centerline[0], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 / 3.0 - 1.0), (8.0 / 3.0 - 1.0));
+      double test_x = 5.0 / 6.0 + (2.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 11.0 / 6.0 + (8.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(centerline[1], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((4.0 / 3.0 - 2.0), (10.0 / 3.0 - 2.0));
+      double test_x = 5.0 / 3.0 + (4.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 8.0 / 3.0 + (10.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(centerline[2], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 - 3.0), (4.0 - 3.0));
+      double test_x = 2.5 + (2.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 3.5 + (4.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(centerline[3], test_point);
+    }
+  }
+
+  // centerline shift right
+  {
+    auto centerline =
+      autoware::experimental::lanelet2_utils::get_centerline_with_offset(ll, -0.5, sqrt(2));
+    ASSERT_EQ(centerline.size(), 4) << "Size of centerline is not 4 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 0.5, 0.0);
+      expect_point_eq(centerline[0], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 / 3.0 - 1.0), (8.0 / 3.0 - 1.0));
+      double test_x = 5.0 / 6.0 - (2.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 11.0 / 6.0 - (8.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(centerline[1], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((4.0 / 3.0 - 2.0), (10.0 / 3.0 - 2.0));
+      double test_x = 5.0 / 3.0 - (4.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 8.0 / 3.0 - (10.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(centerline[2], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 - 3.0), (4.0 - 3.0));
+      double test_x = 2.5 - (2.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 3.5 - (4.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(centerline[3], test_point);
+    }
+  }
+
+  // right_bound shift **left**
+  {
+    auto right_bound =
+      autoware::experimental::lanelet2_utils::get_right_bound_with_offset(ll, -0.5, sqrt(2));
+    ASSERT_EQ(right_bound.size(), 4) << "Size of right_bound is not 4 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 0.5, 0.0);
+      expect_point_eq(right_bound[0], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 / 3.0 - 1.0), (8.0 / 3.0 - 1.0));
+      double test_x = 1.0 + (2.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 1.0 + (8.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(right_bound[1], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((4.0 / 3.0 - 2.0), (10.0 / 3.0 - 2.0));
+      double test_x = 2.0 + (4.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 2.0 + (10.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(right_bound[2], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 - 3.0), (4.0 - 3.0));
+      double test_x = 3.0 + (2.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 3.0 + (4.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(right_bound[3], test_point);
+    }
+  }
+
+  // right_bound shift **right**
+  {
+    auto right_bound =
+      autoware::experimental::lanelet2_utils::get_right_bound_with_offset(ll, 0.5, sqrt(2));
+    ASSERT_EQ(right_bound.size(), 4) << "Size of right_bound is not 4 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, -0.5, 0.0);
+      expect_point_eq(right_bound[0], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 / 3.0 - 1.0), (8.0 / 3.0 - 1.0));
+      double test_x = 1.0 - (2.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 1.0 - (8.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(right_bound[1], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((4.0 / 3.0 - 2.0), (10.0 / 3.0 - 2.0));
+      double test_x = 2.0 - (4.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 2.0 - (10.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(right_bound[2], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 - 3.0), (4.0 - 3.0));
+      double test_x = 3.0 - (2.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 3.0 - (4.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(right_bound[3], test_point);
+    }
+  }
+
+  // left_bound shift left
+  {
+    auto left_bound =
+      autoware::experimental::lanelet2_utils::get_left_bound_with_offset(ll, 0.5, sqrt(2));
+    ASSERT_EQ(left_bound.size(), 4) << "Size of left_bound is not 4 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 2.5, 0.0);
+      expect_point_eq(left_bound[0], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 / 3.0 - 1.0), (8.0 / 3.0 - 1.0));
+      double test_x = 2.0 / 3.0 + (2.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 8.0 / 3.0 + (8.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(left_bound[1], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((4.0 / 3.0 - 2.0), (10.0 / 3.0 - 2.0));
+      double test_x = 4.0 / 3.0 + (4.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 10.0 / 3.0 + (10.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(left_bound[2], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 - 3.0), (4.0 - 3.0));
+      double test_x = 2.0 + (2.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 4.0 + (4.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(left_bound[3], test_point);
+    }
+  }
+
+  // left_bound shift right
+  {
+    auto left_bound =
+      autoware::experimental::lanelet2_utils::get_left_bound_with_offset(ll, -0.5, sqrt(2));
+    ASSERT_EQ(left_bound.size(), 4) << "Size of left_bound is not 4 as expected!";
+    {
+      auto test_point = lanelet::BasicPoint3d(0, 1.5, 0.0);
+      expect_point_eq(left_bound[0], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 / 3.0 - 1.0), (8.0 / 3.0 - 1.0));
+      double test_x = 2.0 / 3.0 - (2.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 8.0 / 3.0 - (8.0 / 3.0 - 1.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(left_bound[1], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((4.0 / 3.0 - 2.0), (10.0 / 3.0 - 2.0));
+      double test_x = 4.0 / 3.0 - (4.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 10.0 / 3.0 - (10.0 / 3.0 - 2.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(left_bound[2], test_point);
+    }
+    {
+      double vec_right_to_left_mag = calculate_magnitude((2.0 - 3.0), (4.0 - 3.0));
+      double test_x = 2.0 - (2.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      double test_y = 4.0 - (4.0 - 3.0) / (2.0 * vec_right_to_left_mag);
+      auto test_point = lanelet::BasicPoint3d(test_x, test_y, 0.0);
+      expect_point_eq(left_bound[3], test_point);
+    }
+  }
+}
+
+// Test 35: is_in_lanelet ordinary case
+TEST(LaneletCheck, OrdinaryCaseIsInLanelet)
+{
+  using autoware::experimental::lanelet2_utils::create_safe_lanelet;
+  auto p1 = lanelet::BasicPoint3d(0.0, 2.0, 0.0);
+  auto p2 = lanelet::BasicPoint3d(2.0, 4.0, 0.0);
+  auto p3 = lanelet::BasicPoint3d(0.0, 0.0, 0.0);
+  auto p4 = lanelet::BasicPoint3d(2.0, 2.0, 0.0);
+
+  std::vector<lanelet::BasicPoint3d> left_points = {p1, p2};
+  std::vector<lanelet::BasicPoint3d> right_points = {p3, p4};
+  auto ll = *create_safe_lanelet(left_points, right_points);
+
+  // inside lanelet
+  {
+    auto query = make_pose(1.0, 1.0);
+    bool check = autoware::experimental::lanelet2_utils::is_in_lanelet(query, ll, 0);
+    EXPECT_TRUE(check);
+  }
+
+  // outside lanelet within radius of 1.0
+  {
+    auto query = make_pose(-1.0, 0.0);
+    bool check = autoware::experimental::lanelet2_utils::is_in_lanelet(query, ll, 1.0);
+    EXPECT_TRUE(check);
+  }
+
+  // outside lanelet within radius of 1.0 (negative value)
+  {
+    auto query = make_pose(-1.0, 0.0);
+    bool check = autoware::experimental::lanelet2_utils::is_in_lanelet(query, ll, -1.0);
+    EXPECT_TRUE(check);
+  }
+
+  // outside lanelet check if radius is expanded from the closest point
+  {
+    auto query = make_pose(0.0, 3.0);
+    bool check = autoware::experimental::lanelet2_utils::is_in_lanelet(query, ll, sqrt(2) / 2);
+    EXPECT_TRUE(check);
+  }
+
+  // outside lanelet outside radius range
+  {
+    auto query = make_pose(-2.0, 0.0);
+    bool check = autoware::experimental::lanelet2_utils::is_in_lanelet(query, ll, 1.0);
+    EXPECT_FALSE(check);
+  }
+}
+
+}  // namespace autoware::experimental
+
+int main(int argc, char ** argv)
+{
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

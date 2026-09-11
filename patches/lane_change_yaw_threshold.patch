@@ -1,0 +1,40 @@
+diff --git a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/path.cpp b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/path.cpp
+index 5d440a7..7cddd04 100644
+--- a/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/path.cpp
++++ b/hlfma_ws/src/autoware/universe/autoware_universe/planning/behavior_path_planner/autoware_behavior_path_lane_change_module/src/utils/path.cpp
+@@ -512,10 +512,31 @@ LaneChangePath construct_candidate_path(
+     throw std::logic_error("Intersect no lane change lines.");
+   }
+ 
+-  // HL FMA 9/8 실험B: 5도는 속도와 무관한 고정값이라 저속 회피에서 지나치게 보수적이다.
+-  // 3.0m 차로를 5도로 건너려면 직선 34m, S자 68m 가 필요해 정체 우회 구간에 들어가지 않는다.
+-  // 20도면 직선 8.2m, S자 약 16m. 차량 최대 조향각 0.48rad(27.5도, 회전반경 5.65m) 안이다.
+-  constexpr auto yaw_diff_th = autoware_utils::deg2rad(20.0);
++  // HL FMA 9/8: 이음매 각도 상한을 속도 비례로 계산한다.
++  //
++  // 원래 값은 deg2rad(5.0) 고정이었다. 이 검사는 준비/전이 구간 이음매의 방향 불연속을
++  // 걸러내는 건전성 검사인데, 차량이 실제로 낼 수 있는 방향 변화는 속도에 따라 다르다.
++  //   저속: 조향각 한계가 지배   R_min = wheel_base / tan(max_steer) = 5.65 m
++  //   고속: 횡가속도 한계가 지배 R_req = v^2 / a_lat_max
++  //   이음매각 한계 = 경로 점간격 / R
++  // 실측(직선 v=11.4 m/s)에서 정상 경로의 이음매각은 0.88~1.25도로, 이 식의
++  // 이론값 1.04도와 일치한다. 즉 정상 경로는 이미 물리 한계 근처에서 생성된다.
++  //
++  // 고정 5도는 약 5.2 m/s 기준값이라 저속 회피(정체 우회)에서 필요 이상으로 막고,
++  // 고속에서는 오히려 느슨하다. 속도 비례로 두면 양쪽이 모두 맞는다.
++  const auto yaw_diff_th = [&]() {
++    const auto & bpp = *common_data_ptr->bpp_param_ptr;
++    const auto v = std::abs(common_data_ptr->get_ego_speed());
++    const auto max_steer = bpp.vehicle_info.max_steer_angle_rad;
++    const auto r_geom =
++      (max_steer > 1e-3) ? bpp.wheel_base / std::tan(max_steer) : 5.0;  // 조향각 한계
++    const auto & lat_acc_map = common_data_ptr->lc_param_ptr->trajectory.lat_acc_map;
++    const auto a_lat = std::get<1>(lat_acc_map.find(v));               // 그 속도의 최대 횡가속도
++    const auto r_dyn = (a_lat > 1e-3) ? (v * v) / a_lat : r_geom;      // 횡가속도 한계
++    const auto r_req = std::max(r_geom, r_dyn);
++    const auto interval = std::max(bpp.input_path_interval, 0.1);
++    return std::clamp(interval / r_req, autoware_utils::deg2rad(1.0), interval / r_geom);
++  }();
+   if (
+     const auto yaw_diff_opt =
+       exceed_yaw_threshold(prepare_segment, shifted_path.path, yaw_diff_th)) {

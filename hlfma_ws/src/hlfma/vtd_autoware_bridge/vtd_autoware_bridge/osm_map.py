@@ -67,6 +67,9 @@ class OsmMap:
         self.nodes = {}      # id -> (x, y)
         self.node_z = {}     # id -> z (ele 태그, 없으면 0)
         self.ways = {}       # id -> [node id]
+        self.way_tags = {}   # id -> {k: v} (subtype/lane_change/color — 실선·차선변경 허용 판정용)
+        self._by_left_way = {}   # way id -> 그 way 를 왼쪽 경계로 쓰는 lanelet id (이웃 탐색)
+        self._by_right_way = {}  # way id -> 그 way 를 오른쪽 경계로 쓰는 lanelet id
         self.lanelets = {}   # id -> Lanelet
         self.tl_regelems = {}  # regelem id -> {'ref_line': way id, 'refers': [way id]}
         self._grid = {}      # (gx, gy) -> [lanelet id]
@@ -99,6 +102,7 @@ class OsmMap:
                 e.clear()
             elif tag == 'way':
                 self.ways[int(e.get('id'))] = [int(n.get('ref')) for n in e.findall('nd')]
+                self.way_tags[int(e.get('id'))] = {t.get('k'): t.get('v') for t in e.findall('tag')}
                 e.clear()
             elif tag == 'relation':
                 tags = {t.get('k'): t.get('v') for t in e.findall('tag')}
@@ -159,6 +163,8 @@ class OsmMap:
             ll.cum_s = cum
             ll.length = cum[-1]
             ll.tl_groups = [r for r in ll.regelems if r in self.tl_regelems]
+            self._by_left_way.setdefault(ll.left, ll.id)
+            self._by_right_way.setdefault(ll.right, ll.id)
             if ll.tl_groups:
                 ref = self.tl_regelems[ll.tl_groups[0]]['ref_line']
                 pts = self._way_pts(ref) if ref is not None else []
@@ -289,6 +295,27 @@ class OsmMap:
                     if d < best:
                         best, bz = d, self.node_z.get(n, 0.0)
         return bz
+
+    def neighbors(self, lid):
+        """(왼쪽 이웃 lanelet id, 오른쪽 이웃 lanelet id). 경계 way 를 공유하는 같은 방향 lanelet 만 (없으면 None).
+        익스포터 산출 맵은 이웃 차선이 경계 way 를 공유한다 (2480 중 1205 lanelet 이 왼쪽 경계 공유 확인, 9/7)."""
+        ll = self.lanelets.get(lid)
+        if ll is None:
+            return None, None
+        left = self._by_right_way.get(ll.left)    # 내 왼쪽 경계를 오른쪽 경계로 쓰는 lanelet = 왼쪽 이웃
+        right = self._by_left_way.get(ll.right)   # 내 오른쪽 경계를 왼쪽 경계로 쓰는 lanelet = 오른쪽 이웃
+        return (left if left != lid else None), (right if right != lid else None)
+
+    def boundary_solid(self, lid, side):
+        """side('left'|'right') 경계가 차선변경 금지(실선)인가. lane_change 태그 우선, 없으면 subtype.
+        주의: 익스포터 lane_change 태그는 섹션 중점 기준 근사 (todo0906) — 오탐 시 익스포터 정밀화가 선결."""
+        ll = self.lanelets.get(lid)
+        if ll is None:
+            return True
+        tags = self.way_tags.get(ll.left if side == 'left' else ll.right, {})
+        if 'lane_change' in tags:
+            return tags['lane_change'] != 'yes'
+        return tags.get('subtype', '').startswith('solid')
 
     def successors(self, lid):
         """왼쪽·오른쪽 경계의 끝 노드를 시작 노드로 갖는 lanelet들."""

@@ -22,6 +22,7 @@
     filter_activated_velocity_threshold: 1.0
     external_emergency_stop_heartbeat_timeout: 0.0
     stop_hold_acceleration: -1.5
+    # HL FMA 9/10: -5.5 로 올렸다가 되돌림. VTD 가 -4.74 명령에 -19.25 로 과반응했다.
     emergency_acceleration: -2.4
     moderate_stop_service_acceleration: -1.5
     stop_check_duration: 1.0
