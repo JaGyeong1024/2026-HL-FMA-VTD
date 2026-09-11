@@ -79,6 +79,12 @@ bool condition_to_stop(
   }
   // only stop after successively detecting collisions for some time
   if (current_collision->type == collision) {
+    if (current_collision->ego_collision_time > params.stop_ttc_threshold) {
+      explanation << "slowdown before stop since collision TTC "
+                  << current_collision->ego_collision_time << "s is above "
+                  << params.stop_ttc_threshold << "s";
+      return false;
+    }
     const auto previous_decision =
       history.decisions.empty() ? std::nullopt : std::make_optional(history.decisions.back().type);
     if (previous_decision == stop) {

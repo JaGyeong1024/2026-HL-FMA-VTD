@@ -32,6 +32,7 @@
 #include <limits>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -674,9 +675,64 @@ std::optional<size_t> getOverlappedLaneletId(const std::vector<DrivableLanes> & 
     return {};
   }
 
+  // HL FMA 9/10: 업스트림은 두 entry 의 폴리곤이 겹치면 곧바로 경로 순환으로 보고 그 지점
+  //   이후를 잘라낸다. cutOverlappedLanes 는 주행가능영역뿐 아니라 path.points 까지 비우고
+  //   다시 채우므로 오탐의 대가가 크다.
+  //   이 저장소의 lane_change generateDrivableLanes 는 차선변경 시 대상 차로를 여러 entry 에
+  //   '측방 파트너' 로 중복 등록한다. 대상 차로 lanelet 하나가 현재 차로 lanelet 여러 개에
+  //   걸치면 같은 id 가 연속된 entry 들에 들어가고, i 와 i+2 가 그 id 를 공유해 순환으로
+  //   오판된다. 그 결과 우회 복귀 중에 경로가 306m -> 25m 로 잘리고 주행가능영역이
+  //   2차로 6.4m 에서 1차로 3.2m 로 줄어, 자차 여유가 0.33m (반차폭 0.94m) 가 되어
+  //   영역 밖으로 나가고 급정지했다 (0910_044955 주행 t=54.2 / 61.1 / 63.1).
+  //   같은 id 가 i..j 사이에 '끊김 없이' 이어지면 측방 파트너가 길게 걸친 것이지 순환이
+  //   아니므로 건너뛴다. 끊겼다가 다시 나타나는 경우는 업스트림과 똑같이 순환으로 본다.
+  //   되돌리려면 아래 lanelet id 연속성 검사를 지우고 폴리곤 검사만 남긴다.
+  std::vector<std::set<lanelet::Id>> entry_ids(lanes.size());
+  for (size_t i = 0; i < lanes.size(); ++i) {
+    for (const auto & lanelet : utils::transformToLanelets(lanes.at(i))) {
+      entry_ids.at(i).insert(lanelet.id());
+    }
+  }
+
+  const auto spans_contiguously = [&entry_ids](const size_t i, const size_t j) {
+    for (const auto id : entry_ids.at(i)) {
+      if (entry_ids.at(j).count(id) == 0) {
+        continue;
+      }
+      bool unbroken = true;
+      for (size_t k = i + 1; k < j; ++k) {
+        if (entry_ids.at(k).count(id) == 0) {
+          unbroken = false;
+          break;
+        }
+      }
+      if (unbroken) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   for (size_t i = 0; i < lanes.size() - 2; ++i) {
     for (size_t j = i + 2; j < lanes.size(); ++j) {
+      if (spans_contiguously(i, j)) {
+        continue;
+      }
       if (overlaps(lanes.at(i), lanes.at(j))) {
+        // HL FMA 9/10 계측: 어떤 entry 쌍이 순환으로 판정됐는지 남긴다. 원인 파악용.
+        auto clock{rclcpp::Clock{RCL_ROS_TIME}};
+        std::stringstream ss;
+        ss << "DA_CUT i=" << i << " j=" << j << " n=" << lanes.size() << " ids_i=[";
+        for (const auto id : entry_ids.at(i)) ss << id << ",";
+        ss << "] ids_j=[";
+        for (const auto id : entry_ids.at(j)) ss << id << ",";
+        ss << "] shared=" << (std::any_of(
+                                entry_ids.at(i).begin(), entry_ids.at(i).end(),
+                                [&](const auto id) { return entry_ids.at(j).count(id) > 0; })
+                                ? "yes"
+                                : "no");
+        RCLCPP_WARN_STREAM_THROTTLE(
+          rclcpp::get_logger("behavior_path_planner").get_child("utils"), clock, 500, ss.str());
         return j;
       }
     }
@@ -691,6 +747,15 @@ std::vector<DrivableLanes> cutOverlappedLanes(
   const auto overlapped_lanelet_idx = getOverlappedLaneletId(lanes);
   if (!overlapped_lanelet_idx) {
     return lanes;
+  }
+
+  {
+    // HL FMA 9/10 계측: 주행가능영역과 경로가 함께 잘리는 순간을 기록한다.
+    auto clock{rclcpp::Clock{RCL_ROS_TIME}};
+    RCLCPP_WARN_STREAM_THROTTLE(
+      rclcpp::get_logger("behavior_path_planner").get_child("utils"), clock, 500,
+      "DA_TRUNC lanes " << lanes.size() << " -> " << *overlapped_lanelet_idx << ", path points "
+                        << path.points.size());
   }
 
   std::vector<DrivableLanes> shorten_lanes{lanes.begin(), lanes.begin() + *overlapped_lanelet_idx};

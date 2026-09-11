@@ -150,6 +150,11 @@
               "description": "[s] successive collision detection time required to start the stopping decision",
               "default": 0.3
             },
+            "ttc_threshold": {
+              "type": "number",
+              "description": "[s] stop when predicted collision TTC is at or below this value; otherwise slowdown",
+              "default": 4.0
+            },
             "off_time_buffer": {
               "type": "number",
               "description": "[s] successive non-collision detection time required to remove a stopping decision",
@@ -190,6 +195,7 @@
           },
           "required": [
             "on_time_buffer",
+            "ttc_threshold",
             "off_time_buffer",
             "distance_buffer",
             "deceleration_limit",

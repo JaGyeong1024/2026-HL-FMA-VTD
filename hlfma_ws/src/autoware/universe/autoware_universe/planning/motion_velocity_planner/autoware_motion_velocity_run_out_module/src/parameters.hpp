@@ -94,6 +94,7 @@ struct Parameters
     max_history_duration;  // [s]  calculated as the maximum duration among all buffer parameters
   double stop_on_time_buffer;   // [s] successive collision detection time required to start the
                                 // stopping decision
+  double stop_ttc_threshold;    // [s] stop when predicted collision TTC is at or below this value
   double stop_off_time_buffer;  // [s] successive non-collision detection time required to remove a
                                 // stopping decision
   double stop_distance_buffer;  // [m] longitudinal safety distance to keep between ego and the
@@ -185,6 +186,7 @@ struct Parameters
         node, ignore_collisions_ns + ".if_ego_arrives_first_and_cannot_stop.deceleration_limit");
     stop_off_time_buffer = getOrDeclareParameter<double>(node, ns + ".stop.off_time_buffer");
     stop_on_time_buffer = getOrDeclareParameter<double>(node, ns + ".stop.on_time_buffer");
+    stop_ttc_threshold = getOrDeclareParameter<double>(node, ns + ".stop.ttc_threshold");
     stop_distance_buffer = getOrDeclareParameter<double>(node, ns + ".stop.distance_buffer");
     stop_deceleration_limit = getOrDeclareParameter<double>(node, ns + ".stop.deceleration_limit");
     keep_stop_condition_time =
@@ -310,6 +312,7 @@ struct Parameters
     updateParam(params, ns + ".slowdown.distance_buffer", slowdown_distance_buffer);
     updateParam(params, ns + ".slowdown.deceleration_limit", slowdown_deceleration_limit);
     updateParam(params, ns + ".stop.on_time_buffer", stop_on_time_buffer);
+    updateParam(params, ns + ".stop.ttc_threshold", stop_ttc_threshold);
     updateParam(params, ns + ".stop.off_time_buffer", stop_off_time_buffer);
     updateParam(params, ns + ".stop.distance_buffer", stop_distance_buffer);
     updateParam(params, ns + ".stop.keep_condition.time", keep_stop_condition_time);

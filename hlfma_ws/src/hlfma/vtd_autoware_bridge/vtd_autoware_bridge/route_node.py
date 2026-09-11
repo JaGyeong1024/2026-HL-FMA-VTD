@@ -26,9 +26,12 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Pose
 from std_msgs.msg import Empty
-from autoware_adapi_v1_msgs.msg import RouteState
+from autoware_adapi_v1_msgs.msg import RouteState, OperationModeState
 from autoware_adapi_v1_msgs.srv import SetRoute, SetRoutePoints, ClearRoute, ChangeOperationMode
 from autoware_adapi_v1_msgs.msg import RouteSegment, RoutePrimitive
+from autoware_planning_msgs.msg import LaneletRoute
+
+from .route_reinject import MatchedPoint, filter_passed_points, Reinjector, ServiceResult
 
 from .osm_map import OsmMap
 
@@ -61,7 +64,14 @@ class RouteNode(Node):
         dp('goal_extend_m', 25.0)      # 종료 좌표에서 차선을 따라 앞으로 (후륜축 통과 보장)
         dp('lane_search_m', 8.0)       # CSV 점 ↔ lanelet 매칭 허용 거리
         dp('auto_engage', False)
-        dp('reinject_on_respawn', False)  # 리스폰 이벤트 시 경로 재주입 (실측 후 결정)
+        dp('reinject_on_respawn', True)   # 리스폰 이벤트 시 경로 재주입 (A13: stop→change_route_points→autonomous)
+        # MRM 비상정지(AEB 작동 등) 후 운전모드가 STOP 으로 떨어지면 스스로 돌아오지 않는다.
+        # 경로가 SET 이고 자율주행이 다시 '가능' 상태면 재진입한다 (9/7 시뮬 실주행에서 확인된 교착).
+        # (리스폰 재주입 A13 과는 별개 문제. **기본 끔** — 검증 중 비상정지를 가리지 않기 위해.
+        #  대회 당일 사용 여부는 따로 결정한다.)
+        dp('auto_reengage', True)
+        dp('reengage_grace_s', 2.0)     # [s] 가능 상태가 이만큼 지속되면 재진입
+        dp('reengage_max', 20)          # 한 주행에서 재진입 상한 (무한 반복 방지)
         dp('use_waypoints', True)      # 중간 짝점을 waypoints로 (false면 goal만)
         # False(기본)=set_route_points: mission_planner 가 차선변경을 이웃 묶인 multi-primitive 세그먼트로 만들어야
         #   behavior_path 의 lane_change 모듈이 발동한다(단일 primitive set_route 는 모듈이 침묵 → 차선변경 불가).
@@ -107,13 +117,33 @@ class RouteNode(Node):
         self.route_state = None
         self.ego = None
         self.create_subscription(RouteState, '/api/routing/state', self.on_route_state, latched)
+        self.create_subscription(OperationModeState, '/api/operation_mode/state',
+                                 self.on_op_mode, latched)
         self.create_subscription(Odometry, '/localization/kinematic_state', self.on_odom, 1)
-        if bool(g('reinject_on_respawn')):
+        self.reinject_on_respawn = bool(g('reinject_on_respawn'))
+        if self.reinject_on_respawn:
             self.create_subscription(Empty, '/vtd/respawn', self.on_respawn, 1)
+        # A13: 현재 경로(세그먼트 열)를 보관 → 리스폰 재주입 시 지나온 CSV 점 제외 기준 (adv_a13 D-4)
+        self.route_segs = []
+        self.create_subscription(LaneletRoute, '/planning/mission_planning/route', self.on_lanelet_route, latched)
+        self.reinject_pending = False
+        self.last_matched = []       # 마지막 build_request 의 (idx, lanelet, s)
         self.cli_clear = self.create_client(ClearRoute, '/api/routing/clear_route')
         self.cli_set = self.create_client(SetRoutePoints, '/api/routing/set_route_points')
         self.cli_set_seg = self.create_client(SetRoute, '/api/routing/set_route')
+        # A13: SET 상태에서 set_route_points 는 무조건 거부(adapi routing.cpp:225) → change_route_points (타입 동일)
+        self.cli_change = self.create_client(SetRoutePoints, '/api/routing/change_route_points')
+        self.cli_stop = self.create_client(ChangeOperationMode, '/api/operation_mode/change_to_stop')
+        self.reinjector = Reinjector(self._call_by_name, lambda m: self.get_logger().info(m))
         self.cli_engage = self.create_client(ChangeOperationMode, '/api/operation_mode/change_to_autonomous')
+        self.auto_reengage = bool(g('auto_reengage'))
+        self.reengage_grace = float(g('reengage_grace_s'))
+        self.reengage_max = int(g('reengage_max'))
+        self.op_mode = None          # 1=STOP 2=AUTONOMOUS
+        self.op_avail = None         # is_autonomous_mode_available
+        self.was_autonomous = False  # 한 번이라도 자율주행에 들어갔는가
+        self.avail_since = None      # 가능 상태가 된 시각
+        self.reengage_count = 0
         self.done = False
         self.attempts = 0
         self.full_lanelets = None
@@ -122,6 +152,18 @@ class RouteNode(Node):
     def on_route_state(self, msg):
         self.route_state = msg.state
 
+    def on_op_mode(self, msg):
+        self.op_mode = msg.mode
+        self.op_avail = msg.is_autonomous_mode_available
+        if msg.mode == OperationModeState.AUTONOMOUS:
+            self.was_autonomous = True
+            self.avail_since = None
+        elif msg.is_autonomous_mode_available:
+            if self.avail_since is None:
+                self.avail_since = time.time()
+        else:
+            self.avail_since = None
+
     def on_odom(self, msg):
         self.ego = msg.pose.pose.position
         o = msg.pose.pose.orientation
@@ -129,12 +171,57 @@ class RouteNode(Node):
                                   1.0 - 2.0 * (o.y * o.y + o.z * o.z))
 
     def on_respawn(self, _):
-        self.get_logger().warning('리스폰 이벤트 → 경로 재주입')
-        self.done = False
+        # 콜백 안에서 서비스를 부르지 않는다(spin 중첩 금지) → 플래그만 세우고 run 루프가 즉시 처리
+        self.get_logger().warning('리스폰 이벤트 → 경로 재주입 (stop → change_route_points → autonomous)')
+        self.reinjector.on_respawn()
+        self.attempts = 0
+        self.reinject_pending = True
+
+    def on_lanelet_route(self, msg):
+        self.route_segs = [[int(s.preferred_primitive.id)] + [int(p.id) for p in s.primitives
+                            if int(p.id) != int(s.preferred_primitive.id)] for s in msg.segments]
+
+    def _call_by_name(self, name, req):
+        """Reinjector 용: 서비스 이름 → 클라이언트. STOP/AUTO 는 빈 요청."""
+        cli = {Reinjector.STOP: self.cli_stop, Reinjector.CHANGE: self.cli_change, Reinjector.AUTO: self.cli_engage}[name]
+        if not cli.wait_for_service(timeout_sec=5.0):
+            return ServiceResult(False, -1, 'service not available')
+        r = self.call(cli, req if req is not None else ChangeOperationMode.Request(), timeout=30.0)
+        return ServiceResult(bool(r.status.success), int(r.status.code), str(r.status.message))
+
+    def _points_after_ego(self):
+        """지나온 CSV 점 제외 (현재 경로 세그먼트 열 + 자차 lanelet/s 기준). 경로 정보가 없으면 전 점."""
+        if not self.route_segs or not self.last_matched or self.ego is None:
+            return self.points
+        eh = getattr(self, 'ego_yaw', None)
+        lid = self.map.nearest_lanelet(self.ego.x, self.ego.y, heading=eh, avoid_dead_end=False)
+        if lid is None:
+            return self.points
+        seg_idx = next((k for k, seg in enumerate(self.route_segs) if lid in seg), None)
+        if seg_idx is None:
+            return self.points
+        _, ego_s, _ = self.map.project(lid, self.ego.x, self.ego.y)
+        keep = filter_passed_points(self.last_matched, self.route_segs, seg_idx, ego_s)
+        self.get_logger().info(f'재주입: 자차 lanelet {lid} 세그먼트 {seg_idx} s={ego_s:.1f} → CSV 점 {keep} 유지')
+        pts = [self.points[i] for i in keep]
+        # 시작 앵커는 자차 현재 위치 (첫 점이 지나간 경우 자차 위치를 첫 점으로)
+        if len(pts) < 2 or keep[0] != 0:
+            pts = [(self.ego.x, self.ego.y)] + pts
+        return pts
+
+    def reinject(self):
+        """A13 절차. 정지 상태에서 호출됨(리스폰 직후). 실패해도 기존 경로는 남는다."""
+        try:
+            req = self.build_request(self._points_after_ego())
+        except Exception as e:  # noqa
+            self.get_logger().error(f'재주입 경로 계산 실패: {e!r}')
+            return
+        ok = self.reinjector.run(req)
+        self.get_logger().info(f'재주입 결과: {"성공" if ok else "실패"} (attempt {self.reinjector.attempts})')
 
     # ---------------- 경로 계산
-    def build_request(self):
-        pts = self.points
+    def build_request(self, pts=None):
+        pts = list(pts) if pts is not None else self.points
         req = SetRoutePoints.Request()
         req.header.frame_id = 'map'
         req.option.allow_goal_modification = False
@@ -228,6 +315,7 @@ class RouteNode(Node):
             poses.append((px, py, h, lid, s, d))
             warn = (' ⚠ ' + ','.join(info['flags'])) if info['flags'] else ''
             self.get_logger().info(f'  점 {i}: ({x:.1f},{y:.1f}) → lanelet {lid} 오프셋 {d:.2f}m 방향차 {info["dh_deg"]:.0f}° 폭 {info["w"]:.1f}m heading {math.degrees(h):.0f}° → 중심선 ({px:.1f},{py:.1f}){warn}')
+        self.last_matched = [MatchedPoint(i, p[3], p[4]) for i, p in enumerate(poses)]  # A13 재주입 필터용
         # goal: 마지막 점에서 차선을 따라 goal_extend 앞
         x, y, h, lid, s, _ = poses[-1]
         route_set = {p[3] for p in poses}
@@ -378,7 +466,39 @@ class RouteNode(Node):
                         self.done = True
                     else:
                         self.wait(lambda: False, '재시도', timeout=3.0)
-            rclpy.spin_once(self, timeout_sec=0.5)
+            if self.reinject_pending:
+                self.reinject_pending = False
+                self.reinject()
+            self.check_reengage()
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+    def check_reengage(self):
+        """MRM 비상정지 등으로 자율주행이 풀렸을 때 스스로 복귀한다.
+        조건: auto_reengage / 이미 한 번 자율주행에 들어갔었고 / 경로 SET / 지금은 자율주행이 아니며
+        자율주행 '가능' 이 reengage_grace 초 이상 지속. 상한(reengage_max)까지만 시도한다."""
+        if not self.auto_reengage or not self.was_autonomous:
+            return
+        if self.route_state != RouteState.SET:
+            return
+        if self.op_mode == OperationModeState.AUTONOMOUS or not self.op_avail:
+            return
+        if self.avail_since is None or time.time() - self.avail_since < self.reengage_grace:
+            return
+        if self.reengage_count >= self.reengage_max:
+            self.get_logger().error(
+                f'자율주행 재진입 상한({self.reengage_max}) 도달 — 더 시도하지 않음')
+            self.auto_reengage = False
+            return
+        self.reengage_count += 1
+        self.avail_since = None
+        self.get_logger().warning(
+            f'자율주행이 풀림(mode={self.op_mode}) → 재진입 {self.reengage_count}/{self.reengage_max}')
+        try:
+            r = self.call(self.cli_engage, ChangeOperationMode.Request(), timeout=10.0)
+            self.get_logger().info(
+                f'  재진입: success={r.status.success} code={r.status.code} {r.status.message}')
+        except Exception as e:
+            self.get_logger().error(f'  재진입 실패: {e!r}')
 
     def call(self, client, req, timeout=15.0):
         fut = client.call_async(req)

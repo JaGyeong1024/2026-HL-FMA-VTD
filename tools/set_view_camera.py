@@ -1,7 +1,7 @@
 """VTD 관전 카메라 설정 — SCP(포트 48179)로 시점 변경.
 
 usage: .venv/bin/python set_view_camera.py [host] [preset]
-  preset: high(기본, 후방 16m·고도 20m 부감) / low(후방 10m·10m) / topdown / far(30m) / chase
+  preset: follow(기본, 후방 24m·고도 10m·아래 12°) / high / low / topdown / far / chase
 
 SCP 헤더: magic(u16)=40108, version(u16)=1, sender[64], receiver[64], len(i32) + XML
 카메라 명령 근거: VTD_UserManual 'Special Message Formats' — <Camera><PosRelative/>
@@ -15,11 +15,20 @@ MAGIC = 40108
 VERSION = 1
 
 PRESETS = {
+    # ★ 기본 — 판 사이 리셋 후 이 시점으로 고정 (2026-09-10 실측 확정).
+    # ego 뒤 24 m·높이 10 m 에서 아래로 12°. dp 는 rad, **양수 = 아래**
+    # (차량 좌표 x 전방·y 좌·z 상 → y축 양의 회전이 코를 내린다).
+    # 주의: <Rotation> 은 <Camera> 의 유효한 자식이 아니다(SCP 문서 확인) — 조용히 무시된다.
+    # 시점 지정은 ViewInertial / ViewRelative / ViewPlayer / ViewPos 만 유효.
+    "follow":  '<Camera name="birdCam" renderSurface="mainRS">'
+               '<PosRelative player="Ego" dx="-24.0" dy="0.0" dz="10.0"/>'
+               '<ViewRelative dh="0.0" dp="0.2094" dr="0.0"/>'
+               '<Set renderSurface="mainRS"/></Camera>',
     # 관전 화면(mainRS)만. 후방 15m·고도 20m 에서 ego 를 조준하되 피치를 들어 전방도 넓게.
     # <Set> 의 renderSurface 로 mainRS 에 한정 → LiDAR/Broadcast 프리뷰 시점은 안 건드림.
     "high":    '<Camera name="birdCam" renderSurface="mainRS">'
                '<PosRelative player="Ego" dx="-15.0" dy="0.0" dz="20.0"/>'
-               '<Rotation h="0.0" p="-0.61" r="0.0"/>'          # p=-35° 내려다봄 (전방 조망 확보)
+               '<Rotation h="0.0" p="-0.61" r="0.0"/>'          # ※ <Rotation> 은 무시된다(무효 태그). 피치는 ViewRelative 로 줄 것
                '<Set renderSurface="mainRS"/></Camera>',
     # 이전(ego 조준, 후방 15m·20m) — 피치 자동
     "aim":     '<Camera name="birdCam" renderSurface="mainRS"><PosRelative player="Ego" dx="-15.0" dy="0.0" dz="20.0"/>'
@@ -45,5 +54,5 @@ def send_scp(host, xml, port=48179):
 
 if __name__ == "__main__":
     host = sys.argv[1] if len(sys.argv) > 1 else "192.168.50.11"
-    preset = sys.argv[2] if len(sys.argv) > 2 else "high"
+    preset = sys.argv[2] if len(sys.argv) > 2 else "follow"
     send_scp(host, PRESETS[preset])

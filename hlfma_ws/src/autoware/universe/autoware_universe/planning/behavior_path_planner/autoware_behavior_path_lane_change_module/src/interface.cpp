@@ -293,16 +293,6 @@ bool LaneChangeInterface::canTransitFailureState()
 
   updateDebugMarker();
 
-  // HL FMA 9/10: 승인된 모듈이 Cancel/Abort 로 빠져 FAILURE 삭제되는 순간을 남긴다.
-  //   이때 경로가 승인 전 상태로 되돌아가 한 사이클 뚝 끊긴다. 이 전이는 마커로는
-  //   안 보인다(모듈이 같은 사이클에 삭제돼 마커가 발행되지 않는다). 주행당 몇 건뿐이라
-  //   상시 켜둔다. approved=1 이면 승인된 기동이 취소된 것이다.
-  if (state == LaneChangeStates::Cancel || state == LaneChangeStates::Abort) {
-    RCLCPP_INFO(
-      getLogger(), "HLFMA lc_transit: state=%s reason=%s approved=%d",
-      magic_enum::enum_name(state).data(), std::string(reason).c_str(), !isWaitingApproval());
-  }
-
   if (state == LaneChangeStates::Cancel) {
     updateRTCStatus(
       std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest(), true,

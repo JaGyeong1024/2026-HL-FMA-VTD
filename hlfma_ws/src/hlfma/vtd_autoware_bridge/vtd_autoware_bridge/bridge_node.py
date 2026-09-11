@@ -15,7 +15,7 @@ Autoware의 제어 출력을 9B 패킷으로 돌려보낸다. 토픽 이름은 a
   더미 인지     /perception/obstacle_segmentation/pointcloud (빈 점군), /perception/occupancy_grid_map/map (전부 free)
                 — motion/behavior_velocity_planner의 필수 구독(코드에 고정)을 채우기 위한 임시안 (개발계획_0902 §4-1)
   이벤트        /vtd/respawn (std_msgs/Empty) — 위치 점프 감지 시
-  원본 패킷     /vtd/raw_rx (1109B), /vtd/raw_tx (9B) — ros2 bag 기록용 (tools/record.sh)
+  원본 패킷     /vtd/raw_rx (1109B), /vtd/raw_tx (9B) — 필요 시 ros2 bag 으로 따로 기록
 
 송신 CtrlPacket(9B @20Hz) ← /control/command/control_cmd, /control/command/turn_indicators_cmd
   워치독: 제어 명령이 watchdog_timeout 이상 끊기면 조향 유지 + failsafe_accel 로 감속
@@ -85,19 +85,14 @@ class VtdAutowareBridge(Node):
         dp('ctrl_rate_hz', 20.0)
         dp('watchdog_timeout', 0.4)      # [s] 제어 명령 두절 판정
         dp('failsafe_accel', -3.0)       # [m/s²] 두절 시 감속
-        dp('jump_reset_dist', 2.0)       # [m] 한 프레임 이동이 이보다 크면 리스폰으로 판정
+        dp('jump_reset_dist', 10.0)       # [m] 한 프레임 이동이 이보다 크면 리스폰으로 판정
         dp('ego_z_mode', 'raw')          # 'raw': VTD z 그대로 (맵에 elevation 반영됨, 9/2) / 'zero': 맵이 z=0일 때
         dp('steer_report_tau', 0.2)      # [s] 조향 보고 1차 지연 (실측 조향 없음)
         dp('state4_go', True)            # state 4(적+좌회전 화살표)를 '가라'로 (개발계획_0902 §4-4)
         dp('flash_stop_time', 0.5)       # [s] state 6: 정지 유지 후 통과
         dp('flash_stop_dist', 8.0)       # [m] state 6: 정지선까지 이 거리 안에서 정지해야 인정
         dp('publish_dummy_perception', True)
-        # HL FMA 9/11: 4.0 -> 8.0. VTD 는 객체 예측경로를 주지 않아 브리지가 만든다.
-        #   4초면 13m/s 접근 차량이 52m 앞까지만 그려지는데, 좌회전으로 교차 지점을
-        #   지나는 데 6~8초가 걸린다. 상대 경로가 교차점에 닿기 전에 끊기면
-        #   intersection 모듈이 충돌 판정을 못 세워 정지할 이유를 못 찾는다.
-        #   되돌리려면 4.0
-        dp('predict_horizon', 8.0)       # [s] objects 예측 경로 길이
+        dp('predict_horizon', 8.0)       # [s] objects 예측 경로 길이 (차선변경 2회 기동이 6~8s)
         dp('report_period', 5.0)
 
         g = lambda k: self.get_parameter(k).value
@@ -115,11 +110,13 @@ class VtdAutowareBridge(Node):
 
         # 맵 + 신호등 라우터
         self.tl_router = None
+        self.omap = None          # 객체 예측의 차선 투영에 재사용 (중복 로드 방지)
         osm = g('map_osm')
         if osm:
             t0 = time.time()
             try:
-                self.tl_router = TrafficLightRouter(OsmMap(osm, self.get_logger()), self.get_logger())
+                self.omap = OsmMap(osm, self.get_logger())
+                self.tl_router = TrafficLightRouter(self.omap, self.get_logger())
                 self.get_logger().info(f'맵 로드 {time.time() - t0:.1f}s: {osm}')
             except Exception as e:
                 self.get_logger().error(f'맵 로드 실패 → 신호등 발행 안 함: {e}')
@@ -169,14 +166,19 @@ class VtdAutowareBridge(Node):
         # 상태 추정
         self.prev = None
         self.vx_f = self.wz_f = self.ax_f = self.prev_vx = 0.0
+        self.max_plausible_speed = 30.0   # [m/s] 이보다 크면 추정 이상으로 보고 버린다
+        # [m/s^2] 한 스텝의 속도 변화 한계. dt 가 패킷 '도착 시각' 기반이라 도착이 몰리면
+        # (누락 뒤 2배 이동 ÷ 짧은 dt) 로 과대 속도가 나온다 — 실측(9/8): pose 가 약 4개마다
+        # 하나씩 규칙적으로 누락되고 그때 55~60 km/h 스파이크가 0.2~0.6초 지속됐다.
+        # 차량 한계는 common.param.yaml limit 의 max_acc 2.0 / min_acc -4.0 이므로 여유를 둬 6.0.
+        self.max_accel_step = 6.0
+        # 리스폰 리셋 직후 한 샘플은 위 제한을 건너뛴다. 리셋으로 추정이 0 이 됐는데 차는
+        # 실제로 움직이는 경우, 제한이 걸리면 재획득이 0.3 m/s 씩만 되어 느려진다.
+        self.vel_reacquire = True
         self.steer_rep = 0.0
         self.last_pose = None          # (x, y, z, yaw) 더미 인지·로그용
         self.obj_hist = {}             # id -> (t, x, y, heading, speed)
-        self.obj_accel = {}            # id -> 평활된 가속도 [m/s^2] (VTD 미제공 -> 차분 추정)
-        # HL FMA 9/11: 위치 차분 속도추정 방어값. 아래 on_data 참조.
-        self.max_plausible_speed = 30.0   # [m/s] 이보다 크면 추정 이상으로 보고 버린다
-        self.max_accel_step = 6.0         # [m/s^2] 프레임간 속도 변화 한계
-        self.vel_reacquire = True         # 리셋 직후 한 프레임은 제한을 걸지 않는다
+        self.obj_accel = {}            # id -> 평활된 가속도 [m/s^2] (VTD 미제공 → 차분 추정)
         self.initialized = False
 
         # 신호등 상태
@@ -192,7 +194,7 @@ class VtdAutowareBridge(Node):
         self.rx_thread.start()
 
         self.create_timer(1.0 / float(g('ctrl_rate_hz')), self.tx_tick)
-        self.create_timer(1.0, self.init_state_tick)
+        self.create_timer(0.2, self.init_state_tick)
         self.create_timer(float(g('report_period')), self.report_tick)
         self.get_logger().info(f'브리지 시작: VTD {self.host}:{self.port}, state4_go={self.state4_go}, '
                                f'ego_z={"0" if self.ego_z_zero else "raw"}')
@@ -261,10 +263,9 @@ class VtdAutowareBridge(Node):
                 self.flash = {'lanelet': None, 'stopped_since': None, 'go': False}
                 self.pub_respawn.publish(Empty())
             elif 0.005 < dt < 0.5:
-                # HL FMA 9/11: 하한이 1e-4 였을 때, 패킷 두 개가 거의 동시에 도착하면
-                #   (네트워크 묶임) 수 cm 위치차가 수백 m/s 로 튀었다. 실측: 제어 명령
-                #   조향각속도 179 rad/s (dt=1e-5s), 전체 샘플의 6%가 dt<5ms.
-                #   VTD 20Hz 기준 정상 dt 는 0.05s 이므로 0.005s 미만은 갱신을 건너뛴다.
+                # dt 하한 1e-4 였을 때: 패킷 두 개가 거의 동시에 도착하면(네트워크 묶임)
+                # 2cm 위치차가 200m/s 로 튀었다. 실측 194.65 m/s 스파이크가 이것.
+                # VTD 20Hz 기준 정상 dt 는 0.05s 이므로 0.005s 미만은 갱신을 건너뛴다.
                 v = jump / dt
                 if dx * math.cos(st.heading) + dy * math.sin(st.heading) < 0:
                     v = -v
@@ -272,8 +273,8 @@ class VtdAutowareBridge(Node):
                     self.get_logger().warning(
                         f'속도 추정 이상 {v:.1f} m/s (dt={dt*1000:.1f}ms) → 무시')
                     v = self.vx_f
-                # 극단값만 걸러서는 60km/h 대 스파이크가 그대로 통과한다.
-                # 물리적으로 가능한 가속으로 한 번 더 제한한다.
+                # 물리적으로 가능한 가속으로 제한. 위 max_plausible_speed 는 극단값만 걸러
+                # 60 km/h 대 스파이크는 그대로 통과했다(30 m/s = 108 km/h).
                 step = self.max_accel_step * dt
                 v_clamped = v if self.vel_reacquire \
                     else min(max(v, self.vx_f - step), self.vx_f + step)
@@ -288,12 +289,13 @@ class VtdAutowareBridge(Node):
                 self.wz_f += a * (wrap(st.heading - self.prev[3]) / dt - self.wz_f)
                 self.ax_f += a * ((self.vx_f - self.prev_vx) / dt - self.ax_f)
                 self.prev_vx = self.vx_f
-        # HL FMA 9/11: dt 가 하한에 못 미치면 기준점을 옮기지 않는다. 옮기면 그 구간
-        #   이동거리가 버려져 속도가 낮게 나온다. 다음 패킷으로 누적되게 둔다.
+        # dt 가 하한에 못 미치면 기준점을 옮기지 않는다. 그래야 그 구간 이동거리가
+        # 다음 패킷으로 누적되어 보존된다(옮기면 그만큼 버려져 속도가 낮게 나온다).
         advance_prev = (self.prev is None) or not (0.0 < (t - self.prev[0]) <= 0.005)
-        # 조향 보고 필터용 dt 는 self.prev 를 덮기 전에 뽑아 둔다. 갱신 후에 계산하면
-        #   항상 하한(1e-3)이 되어 실효 시정수가 0.2s 가 아니라 약 10s 가 되고,
-        #   보고 조향이 명령을 못 따라가 추종이 밀린다.
+
+        # 조향 보고 필터용 dt. 아래에서 self.prev 를 t 로 덮으므로 여기서 미리 뽑아 둔다.
+        # (9/7 정적 감사: t - self.prev[0] 을 갱신 후에 계산해 항상 하한 1e-3 이 되고,
+        #  실효 시정수가 0.2s 가 아니라 약 10s 가 되어 조향 보고가 명령을 못 따라갔다.)
         self.steer_dt = 0.05 if self.prev is None else min(0.2, max(1e-3, t - self.prev[0]))
         if advance_prev:
             self.prev = (t, st.x, st.y, st.heading)
@@ -399,7 +401,9 @@ class VtdAutowareBridge(Node):
             seen.add(oid)
             if self.ego_z_zero:
                 z = 0.0
-            # id는 시나리오 내 유지(9/2 답변) → 이전 프레임으로 yaw rate 추정
+            # id는 시나리오 내 유지(9/2 답변) → 이전 프레임으로 yaw rate·가속도 추정.
+            # VTD 패킷에는 가속도가 없다(객체당 x,y,z,heading,speed,l,w,h). 급정지 NPC 를
+            # 등속으로 예측하면 실제보다 앞에 있다고 보므로 반드시 차분해서 반영한다.
             yaw_rate = 0.0
             accel = 0.0
             h = self.obj_hist.get(oid)
@@ -407,12 +411,10 @@ class VtdAutowareBridge(Node):
                 dt_h = t - h[0]
                 yaw_rate = wrap(heading - h[3]) / dt_h
                 yaw_rate = max(-1.0, min(1.0, yaw_rate))
-                # HL FMA 9/11: VTD 패킷에 가속도가 없다(x,y,z,heading,speed,l,w,h).
-                #   급정지하는 NPC 를 등속으로 예측하면 실제보다 앞에 있다고 보게 되어
-                #   충돌 판정이 어긋난다. 차분해서 반영한다.
-                if len(h) > 4:
-                    a_raw = max(-9.0, min(5.0, (speed - h[4]) / dt_h))
-                    accel = 0.5 * self.obj_accel.get(oid, 0.0) + 0.5 * a_raw
+                a_raw = (speed - h[4]) / dt_h
+                a_raw = max(-9.0, min(5.0, a_raw))
+                a_prev = self.obj_accel.get(oid, 0.0)
+                accel = 0.5 * a_prev + 0.5 * a_raw      # 가벼운 평활 (GT 라 노이즈는 없지만 단발 튐 방지)
             self.obj_accel[oid] = accel
             self.obj_hist[oid] = (t, x, y, heading, speed)
 
@@ -440,15 +442,28 @@ class VtdAutowareBridge(Node):
             path.time_step.sec = 0
             path.time_step.nanosec = 500_000_000
             path.confidence = 1.0
-            px, py, ph, pv = x, y, heading, speed
             n = int(self.predict_horizon / 0.5) + 1
+
+            # 차선 투영: 곡선에서 요레이트 외삽은 차선을 벗어난다. 자차 근처만 투영해 비용을 막는다.
+            lid = s_c = lat = None
+            if self.omap is not None and math.hypot(x - st.x, y - st.y) < 120.0:
+                try:
+                    lid = self.omap.nearest_lanelet(x, y, heading)
+                    if lid is not None:
+                        _, s_c, _ = self.omap.project(lid, x, y)
+                        cx, cy, ch, _ = self.omap.point_along(lid, s_c, 0.0)
+                        lat = -(x - cx) * math.sin(ch) + (y - cy) * math.cos(ch)
+                except Exception:
+                    lid = s_c = lat = None
+
+            px, py, ph, pv, travelled = x, y, heading, speed, 0.0
             for i in range(n):
                 q = Pose()
                 q.position.x, q.position.y, q.position.z = px, py, z
                 a, b, c, d = yaw_to_quat(ph)
                 q.orientation.x, q.orientation.y, q.orientation.z, q.orientation.w = a, b, c, d
                 path.path.append(q)
-                # HL FMA 9/11: 등속 -> 등가속. 감속으로 0 에 닿으면 멈춘다(후진 금지).
+                # 0.5초 등가속 전진. 감속으로 0 에 닿으면 거기서 멈춘다(후진 금지).
                 if accel < 0.0 and pv + accel * 0.5 < 0.0:
                     t_stop = -pv / accel
                     ds = pv * t_stop + 0.5 * accel * t_stop * t_stop
@@ -456,9 +471,16 @@ class VtdAutowareBridge(Node):
                 else:
                     ds = pv * 0.5 + 0.5 * accel * 0.25
                     pv = max(0.0, pv + accel * 0.5)
-                px += ds * math.cos(ph)
-                py += ds * math.sin(ph)
-                ph += yaw_rate * 0.5
+                travelled += ds
+                if lid is not None:
+                    nx, ny, nh, _ = self.omap.point_along(lid, s_c, travelled)
+                    px = nx - lat * math.sin(nh)
+                    py = ny + lat * math.cos(nh)
+                    ph = nh
+                else:
+                    px += ds * math.cos(ph)
+                    py += ds * math.sin(ph)
+                    ph += yaw_rate * 0.5
             k.predicted_paths.append(path)
             obj.kinematics = k
             obj.shape.type = Shape.BOUNDING_BOX

@@ -91,14 +91,22 @@ PathWithLaneId get_reference_path_from_target_lane(
   const double s_start = lane_change_start_arc_position.length;
   const double s_end = std::invoke([&]() {
     const auto dist_from_lc_start = s_start + lane_changing_length + forward_path_length;
+    // HL FMA 9/10: 대상 방향에 차선변경 구간이 없으면 calc_shift_intervals 가 빈 배열을 돌려주고
+    //   lane_changing_length 가 DBL_MAX 로 채워진다. 그러면 next_lc_buffer 가 -DBL_MAX 가 되어
+    //   `target_lane_length - next_lc_buffer` 가 inf 가 되고, 아래 길이 검사를 그냥 통과한다.
+    //   하지만 getCenterLinePath 는 s_end 를 대상 차로의 실제 길이로 잘라내므로 결과 경로가
+    //   lane_changing_length 보다 짧아지고, resamplePathWithSpline 의 보존 키가 경로 밖이 되어
+    //   std::invalid_argument("query_keys is out of base_keys") 로 behavior_planning 컨테이너가
+    //   SIGABRT 로 죽는다(0910_042310 주행 t=64.5). 실제 길이로 한 번 더 자른다.
+    //   되돌리려면 아래 std::min 들에서 target_lane_length 항을 뺀다.
     if (is_goal_in_route) {
       const double s_goal = autoware::experimental::lanelet2_utils::get_arc_coordinates(
                               target_lanes, route_handler.getGoalPose())
                               .length -
                             next_lc_buffer;
-      return std::min(dist_from_lc_start, s_goal);
+      return std::min({dist_from_lc_start, s_goal, target_lane_length});
     }
-    return std::min(dist_from_lc_start, target_lane_length - next_lc_buffer);
+    return std::min({dist_from_lc_start, target_lane_length - next_lc_buffer, target_lane_length});
   });
 
   constexpr double epsilon = 1e-4;
@@ -108,6 +116,23 @@ PathWithLaneId get_reference_path_from_target_lane(
 
   const auto lane_changing_reference_path =
     route_handler.getCenterLinePath(target_lanes, s_start, s_end);
+
+  // HL FMA 9/10: 위 검사는 호 좌표 추정치(s_end - s_start)로 하지만, getCenterLinePath 가
+  //   실제로 돌려주는 경로 길이는 그와 같다는 보장이 없다(중심선 리샘플·내부 클램프).
+  //   그래서 검사를 통과하고도 아래 보존 키(lane_changing_length)가 경로 밖이 되어
+  //   std::invalid_argument("query_keys is out of base_keys") 가 던져진다
+  //   (0910_053444 주행에서 16회). 실제 길이로 다시 검사한다.
+  //   되돌리려면 이 블록을 지운다.
+  double actual_length = 0.0;
+  for (auto it = lane_changing_reference_path.points.begin();
+       it != lane_changing_reference_path.points.end() &&
+       std::next(it) != lane_changing_reference_path.points.end();
+       ++it) {
+    actual_length += autoware_utils::calc_distance2d(*it, *std::next(it));
+  }
+  if (actual_length + epsilon < lane_changing_length) {
+    return PathWithLaneId();
+  }
 
   return autoware::behavior_path_planner::utils::resamplePathWithSpline(
     lane_changing_reference_path, resample_interval, true, {0.0, lane_changing_length});
@@ -566,7 +591,14 @@ std::vector<lane_change::TrajectoryGroup> generate_frenet_candidates(
   const auto & current_lanes = common_data_ptr->lanes_ptr->current;
   const auto & target_lanes = common_data_ptr->lanes_ptr->target;
   const auto direction = common_data_ptr->direction;
-  const auto current_lane_boundary = get_linestring_bound(current_lanes, direction);
+  // HL FMA 9/10: check_out_of_bound_paths 는 후보가 경계에 '닿지 않으면'(disjoint) 탈락시킨다.
+  //   경계선이 current_lanes 끝에서 끊기면 정상 후보도 폐기된다. 로컬 패치
+  //   trim_preferred_after_alternative 가 current_lanes 꼬리를 자르므로 특히 잘 발생한다
+  //   (0910_053444 t=62.3~ 'Path footprint exceeds target lane boundary' 연속).
+  //   경계 판정용으로만 차로열을 연장한다. 계획 대상 차로는 그대로다.
+  //   되돌리려면 extendLanes 를 빼고 current_lanes 를 그대로 넘긴다.
+  const auto current_lane_boundary = get_linestring_bound(
+    utils::extendLanes(common_data_ptr->route_handler_ptr, current_lanes), direction);
 
   for (const auto & metric : prep_metrics) {
     PathWithLaneId prepare_segment;
@@ -590,9 +622,24 @@ std::vector<lane_change::TrajectoryGroup> generate_frenet_candidates(
     const auto max_lane_changing_length = std::min(dist_to_end_from_lc_start, max_lc_len);
 
     constexpr auto resample_interval = 0.5;
-    const auto target_lane_reference_path = get_reference_path_from_target_lane(
-      common_data_ptr, lc_start_pose, max_lane_changing_length, resample_interval);
+    // HL FMA 9/10: 여기서 던져지는 보간 예외가 잡히지 않아 컨테이너 전체가 죽었다.
+    //   후보 하나를 버리고 계속하도록 한다. 되돌리려면 try/catch 를 벗긴다.
+    PathWithLaneId target_lane_reference_path;
+    try {
+      target_lane_reference_path = get_reference_path_from_target_lane(
+        common_data_ptr, lc_start_pose, max_lane_changing_length, resample_interval);
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(get_logger(), "대상 차로 기준경로 생성 실패, 후보 폐기: %s", e.what());
+      continue;
+    }
     if (target_lane_reference_path.points.empty()) {
+      // HL FMA 9/10 계측: 여기가 로그 없는 continue 라 'Generated 0 candidate paths' 의
+      //   원인이 보이지 않았다(0910_055823 t=63.2).
+      RCLCPP_DEBUG(
+        get_logger(),
+        "Reject: 대상 차로 기준경로가 비었다. max_lc_len=%.2f dist_to_end_from_lc_start=%.2f "
+        "prep_len=%.2f",
+        max_lane_changing_length, dist_to_end_from_lc_start, metric.length);
       continue;
     }
 
@@ -620,6 +667,8 @@ std::vector<lane_change::TrajectoryGroup> generate_frenet_candidates(
       init_sampling_parameters(common_data_ptr, metric, initial_state, reference_spline);
 
     if (!sampling_parameters_opt) {
+      // HL FMA 9/10 계측: 위와 같은 이유로 로그를 남긴다.
+      RCLCPP_DEBUG(get_logger(), "Reject: 샘플링 파라미터를 만들지 못했다.");
       continue;
     }
 

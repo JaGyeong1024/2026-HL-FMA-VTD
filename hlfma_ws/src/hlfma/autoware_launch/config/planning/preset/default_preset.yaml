@@ -14,7 +14,7 @@ launch:
       default: "true"   # HL FMA: 전방 막힘 시 차선변경 우회 (9/3 갓길 정차차량·사고 미우회 대응)
   - arg:
       name: launch_dynamic_obstacle_avoidance
-      default: "false"
+      default: "true"
   - arg:
       name: launch_sampling_planner_module
       default: "false" # Warning, experimental module, use only in simulations

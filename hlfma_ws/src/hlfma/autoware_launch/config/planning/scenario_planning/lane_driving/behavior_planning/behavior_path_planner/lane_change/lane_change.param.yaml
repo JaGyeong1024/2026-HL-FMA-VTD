@@ -9,15 +9,7 @@
       enable_stopped_vehicle_buffer: true
 
       # turn signal
-      #   HL FMA 9/10: calc_prepare_durations 의 조기반환 조건이 dist_to_terminal_start >=
-      #   base_link2front(3.808) + 이 값 이다. 10.0 이면 임계가 13.8m 라 대부분 구간에서
-      #   조기반환이 걸려 준비시간 후보가 (max_prepare_duration - 깜빡이 켠 시간) 1개로 고정된다.
-      #   그러면 시프트 시작점이 자차 앞 고정 거리에 놓여 자차와 같은 속도로 도망가고,
-      #   경로는 좌회전 차로까지 나와 있는데 기동이 영영 시작되지 않는다.
-      #   업스트림도 이 줄에 TODO: this check seems to cause scenario failures 를 달아뒀다.
-      #   400.0 이면 임계가 403.8m 라 조기반환이 사실상 꺼지고, 준비시간이 max~0 으로
-      #   샘플링되어 0초(즉시 시작) 후보가 생긴다. 되돌리려면 10.0
-      min_length_for_turn_signal_activation: 400.0 # [m]
+      min_length_for_turn_signal_activation: 10.0 # [m]
 
       # terminal path
       terminal_path:
@@ -30,8 +22,12 @@
         max_prepare_duration: 1.5   # HL FMA 9/7: 8.6m/s x 4.0s = 34m 준비구간 -> shift 시작점이 앞 정지차 바로 앞.
                                     #  obstacle_stop 이 앞차 14.5m 전에 세우므로 도달 불가. 1.5s -> 약 13m
         min_prepare_duration: 1.0
-        lateral_jerk: 3.0              # HL FMA 9/9: 신호등 정지선 때문에 available_length 가 21.9m 로 제한되는데
-                                       #  3.2m 전이에 22m 초과가 필요해 후보가 0개였다. 저크항 2a/j 를 절반으로.
+        # HL FMA 9/10: 병합 때 NG 값(3.0)이 들어왔다. 전이시간이 JG 대비 18% 길어져
+        #   (2*sqrt(3.2/1.5)+2*1.5/3.0=3.92s vs 2*sqrt(3.2/2.0)+2*2.0/5.0=3.33s)
+        #   코너링·차선변경이 느리다. JG 값으로 되돌린다. 되돌리려면 3.0
+        # HL FMA 9/10: 5.0 으로 올렸다가 되돌림. 855m 성공 조합(NG 3.0)을 유지한다.
+        #   감속 축만 따로 움직이기 위해 여기는 건드리지 않는다.
+        lateral_jerk: 3.0
         min_longitudinal_acc: -1.0
         max_longitudinal_acc: 1.0
         th_prepare_length_diff: 1.0
@@ -52,8 +48,16 @@
       # trajectory generation near terminal using frenet planner
       frenet:
         enable: true
-        use_entire_remaining_distance: false
-        th_yaw_diff: 10.0  # [deg]
+        use_entire_remaining_distance: true  # HL FMA 9/10: false 였다. 우회로 거리를 쓰고 나면
+                           #   복귀 마지막 홉 시점에 대상 차로 잔여 길이가 모자라
+                           #   frenet 후보가 0개가 됐다(0910_055823 t=63.2 Generated 0).
+                           #   남은 거리를 전부 쓰게 한다. 되돌리려면 false.
+        th_yaw_diff: 40.0  # HL FMA 9/10: 25.0 에서 상향. 25.17/25.03 deg 로 0.2도 차이로
+                           #   복귀 마지막 홉 후보가 전부 폐기됐다(0910_053444 t=62.0).
+                           #   다차로 복귀 중에는 자차가 비스듬한 것이 정상이다. 되돌리려면 25.0.
+        # (원래 주석) [deg] HL FMA 9/10(NG 미커밋분 반입): 10.0 으로는 다차로 기동 중
+        #   자차 요각(NG 실측 18.09도)이 임계를 넘어 frenet 후보가 통째로 기각되고,
+        #   비스듬한 자세에서 재계획이 영영 안 되는 교착이 된다. 되돌리려면 10.0
         th_curvature_smoothing: 0.1 # [/]
         th_average_curvature: 0.020 # [/]
 
@@ -116,8 +120,15 @@
       # lateral acceleration map
       lateral_acceleration:
         velocity: [0.0, 4.0, 10.0]
-        min_values: [1.5, 1.5, 1.5]      # HL FMA 9/9: 1.0 -> 1.5 (전이거리 추가 단축)
-        max_values: [2.0, 2.0, 2.0]      # HL FMA 9/9: 1.2 -> 2.0. 5m/s 에서 선회반경 v^2/a=12.5m, 기하 최소 5.65m 이내
+        min_values: [1.5, 1.5, 1.5]
+        # HL FMA 9/10: 2.0 -> 4.0. 우회 복귀가 활주로 부족으로 못 끝난다.
+        #   0910_063142 실측: 우회 시작 시점 활주로 100.6m, 우회에 64m, 복귀 1홉 16m,
+        #   2홉 13m 를 쓰고 3홉을 6.1m 남기고 시작해 후보가 나오지 않았다.
+        #   차로폭 3.2m 기준 lat_acc 2.0/jerk 3.0 은 약 2.5s(7m/s 에서 17.7m),
+        #   4.0/5.0 은 약 1.8s(12.5m)로 홉당 약 30% 단축된다.
+        #   이전에 되돌린 적이 있으나 그때는 플래너 크래시와 주행가능영역 결함이 남아 있어
+        #   원인 판정이 불가능했다. 되돌리려면 2.0.
+        max_values: [2.0, 2.0, 2.0]
 
       # target object
       target_object:
@@ -148,7 +159,7 @@
       # ego vehicle stuck detection
       stuck_detection:
         velocity: 0.5 # [m/s]
-        stop_time: 3.0 # [s]
+        stop_time: 2.0 # [s]
 
       # lane change cancel
       cancel:
@@ -175,15 +186,8 @@
         # At zero speed: stricter tolerance (to update lc path when ego is stopped)
         # At low speeds: higher tolerance (to allow ego to follow lc path)
         # At high speeds: stricter tolerance (to update lc path when ego is moving)
-        # HL FMA 9/10: 2.78 m/s 위 구간을 1.5->3.0, 0.8->2.0 으로 넓혔다.
-        #   기존 값이면 5 m/s 에서 허용 1.41 m 인데, 3차선->좌회전 차로 다차로 기동의
-        #   실측 횡편차가 1.46~1.60 m 라 매 기동마다 hasMissedLaneChangePath 가 걸린다.
-        #   그러면 승인된 lane_change_left 가 Cancel -> ModuleStatus::FAILURE 로 삭제되고
-        #   (planner_manager 는 뒤따르는 모듈도 함께 지운다) 경로가 승인 전 상태로 되돌아가
-        #   306m -> 21점 으로 한 사이클 끊긴 뒤 새 인스턴스가 처음부터 다시 계획한다.
-        #   업스트림 기본값은 1차선 변경을 전제한 값이다. 되돌리려면 1.5 / 0.8.
         velocity_points: [ 0.0, 0.1, 0.11, 2.77, 2.78, 20.0 ]   # [m/s] - velocity points for interpolation
-        lateral_thresholds: [ 3.0, 3.0, 5.0,  5.0,  3.0,   2.0 ]     # corresponding lateral thresholds [m]
+        lateral_thresholds: [ 3.0, 3.0, 5.0,  5.0,  1.5,   0.8 ]     # corresponding lateral thresholds [m]
 
       # debug
       publish_debug_marker: true
