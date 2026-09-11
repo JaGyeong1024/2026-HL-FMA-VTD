@@ -29,6 +29,10 @@ units:
     type: diag
     node: /adapi/node/routing
     name: state
+    # HL FMA 9/12: ADAPI 상태 진단은 1 s 주기로 갱신되는데 집계기 기본 timeout 도 1.0 s 라
+    #   조금만 늦어도 STALE → 자율모드 불가 → 비상정지(오늘 7개 주행에서 총 27회, 각 1 s 미만의 브레이크 펄스).
+    #   autoware-carla.yaml 과 같은 3.0 s. 되돌리려면 이 줄 삭제(기본 1.0)
+    timeout: 3.0
 
   - path: /autoware/planning/topic_rate_check/route
     type: diag
