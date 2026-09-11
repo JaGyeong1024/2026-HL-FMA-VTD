@@ -6,6 +6,7 @@
 #           DEBUG=0   플래너 디버그 로거(PLAN_*/LC_*) 끄기 (기본 1 = 켬. 대회 당일은 0)
 #           PCAP=0    VTD 이더넷 pcap 생략 (기본 1)
 #           RVIZ=1    rviz 도 띄움 (기본 0)
+#           TRACE=0   trace.py 생략 (bag 만; CPU 부하 절감)
 #
 #   결과:  test/<MMDD_HHMMSS>_<태그>/
 #     meta.txt        git rev·경로 CSV·환경
@@ -139,8 +140,10 @@ BAG_PID=$!
 echo "$P bag 시작 (pid $BAG_PID)"
 
 # ── 7. trace.py (JG 계측 — score.py 입력) ──────────────────────────────────
-setsid python3 "$ROOT/tools/trace.py" "$OUT/trace.jsonl" $((DUR + 120)) > "$OUT/trace.log" 2>&1 < /dev/null &
-TRACE_PID=$!
+if [ "${TRACE:-1}" = "1" ]; then   # TRACE=0: trace.py 생략 (459개 토픽 JSON 변환이 CPU 를 먹는다 — 9/11 부하 14/16)
+  setsid python3 "$ROOT/tools/trace.py" "$OUT/trace.jsonl" $((DUR + 120)) > "$OUT/trace.log" 2>&1 < /dev/null &
+  TRACE_PID=$!
+fi
 
 # ── 8. 기동 검증 (최대 120초): autoware 로그의 "Loaded node" 로 제어 노드 4개 + bridge 시작 앵커 ──
 #    ros2 node list 는 데몬 상태에 따라 비기도 하므로(부채 4-4) 로그를 1차 근거로 쓴다.
