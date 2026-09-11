@@ -31,6 +31,8 @@ units:
     type: diag
     node: vehicle_cmd_gate
     name: emergency_stop_operation
+    # HL FMA 9/12: 게이트 진단도 1 s 주기라 기본 timeout 1.0 에 STALE → 비상정지(0912_050738 2회). localization/routing state 와 동일 조치
+    timeout: 3.0
 
   - path: /autoware/system/emergency_stop_operation/control_command_gate
     type: diag
