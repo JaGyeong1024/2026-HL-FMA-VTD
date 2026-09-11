@@ -43,7 +43,7 @@
     max_d_effort: 0.0
     min_d_effort: 0.0
     lpf_vel_error_gain: 0.9
-    enable_integration_at_low_speed: false
+    enable_integration_at_low_speed: true  # HL FMA 묶음1: 저속 재출발 적분
     current_vel_threshold_pid_integration: 0.5
     time_threshold_before_pid_integration: 2.0
     ff_scale_min: 0.5

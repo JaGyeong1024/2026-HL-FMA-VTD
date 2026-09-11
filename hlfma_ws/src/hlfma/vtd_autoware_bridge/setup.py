@@ -22,6 +22,7 @@ setup(
             'bridge_node = vtd_autoware_bridge.bridge_node:main',
             'route_node = vtd_autoware_bridge.route_node:main',
             'blocked_route_detour = vtd_autoware_bridge.blocked_route_detour:main',
+            'pedestrian_proximity_slowdown = vtd_autoware_bridge.pedestrian_proximity_slowdown:main',
         ],
     },
 )

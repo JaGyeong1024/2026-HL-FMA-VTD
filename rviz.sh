@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rviz 만 별도 실행 (start_autonomous.sh 가 떠 있을 때). 종료해도 주행에 영향 없음.
+# rviz 만 별도 실행 (start.sh 가 떠 있을 때). 종료해도 주행에 영향 없음.
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-43}"
 source /opt/ros/jazzy/setup.bash
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

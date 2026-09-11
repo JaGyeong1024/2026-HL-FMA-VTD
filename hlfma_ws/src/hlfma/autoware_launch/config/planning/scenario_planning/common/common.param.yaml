@@ -13,22 +13,22 @@
 
 /**:
   ros__parameters:
-    max_vel: 12.8           # max velocity limit [m/s] (HL FMA: 46km/h, 제한 50 대비 마진. 평가는 VTD 실속도 기준)
+    max_vel: 13.3333        # max velocity limit [m/s] (48 km/h)
 
     # constraints param for normal driving
     normal:
-      # HL FMA 9/11: -1.0 -> -2.5 (JG 값). 이건 플래너가 계획해도 된다고 보는
-      #   최대 감속이다. -1.0 이면 13.1 m/s 에서 정지거리 v^2/2a = 86m 가 필요하다고
-      #   보므로, 좌회전 직후 40m 앞에 나타난 차량에 대해 정지점을 아예 못 꽂는다.
-      #   -2.5 면 34m 로 계획이 선다. 되돌리려면 -1.0
+      # HL FMA 9/10 실측: VTD Ioniq6 모델은 -2.4 근처까지만 정상 응답한다.
+      #   -3.5 로 올렸더니 계획이 -4.74 를 명령했고 VTD 가 -19.25 m/s^2 로 과반응해
+      #   13.4 -> 3.0 m/s 급정지 후 회복 못 하고 교착됐다(실측 03:35, (277.9,34.8)).
+      #   855m 성공 주행에서 관측된 실제 최대 감속은 -4.57(저속) 이고 명령은 -2.4 이하였다.
+      #   그 안쪽인 -2.5 까지만 연다. 12.8m/s 정지거리 82m -> 33m.
+      #   되돌리려면 -1.0. 더 올리지 말 것 — VTD 응답이 비선형이다.
       min_acc: -2.5         # min deceleration [m/ss]
-      max_acc: 1.0          # max acceleration [m/ss]
-      min_jerk: -1.0        # min jerk [m/sss]
-      max_jerk: 1.0         # max jerk [m/sss]
-
-    # constraints to be observed
+      max_acc: 1.3          # max acceleration [m/ss]
+      min_jerk: -1.2        # min jerk [m/sss]
+      max_jerk: 1.2         # max jerk [m/sss]
     limit:
-      min_acc: -4.0         # min deceleration limit [m/ss] (HL FMA 9/4: 보행자 급출현 -2.5로는 정지거리 32.2m > 가용 30.3m. 패킷 한계 -6.0)
-      max_acc: 1.0          # max acceleration limit [m/ss]
+      min_acc: -4.0         # min deceleration limit [m/ss]
+      max_acc: 1.5          # max acceleration limit [m/ss]
       min_jerk: -1.5        # min jerk limit [m/sss]
       max_jerk: 1.5         # max jerk limit [m/sss]

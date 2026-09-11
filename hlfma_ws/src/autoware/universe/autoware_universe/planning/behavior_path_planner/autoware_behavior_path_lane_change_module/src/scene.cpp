@@ -254,6 +254,14 @@ void NormalLaneChange::updateLaneChangeStatus()
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
   const auto [found_valid_path, found_safe_path] = getSafePath(status_.lane_change_path);
 
+  // HL FMA 9/10 판단추적: 이번 사이클의 차선변경 판단 결과.
+  //   is_valid_path 가 false 면 generateOutput 이 직전 모듈 경로(기준경로 토막)를 돌려준다.
+  RCLCPP_DEBUG(
+    logger_, "LC_JUDGE valid=%d safe=%d 후보경로점=%zu 현재차로=%zu 목표차로=%zu",
+    static_cast<int>(found_valid_path), static_cast<int>(found_safe_path),
+    status_.lane_change_path.path.points.size(), get_current_lanes().size(),
+    get_target_lanes().size());
+
   // Update status
   status_.is_valid_path = found_valid_path;
   status_.is_safe = found_safe_path;
@@ -355,15 +363,7 @@ TurnSignalInfo NormalLaneChange::get_current_turn_signal_info() const
 {
   const auto original_turn_signal_info = prev_module_output_.turn_signal_info;
 
-  // HL FMA 9/10: EXTERNAL_REQUEST 도 방향지시등을 내게 한다. 업스트림은 NORMAL 만
-  //   지시등을 만드는데, HL FMA 는 봉쇄 우회를 external_request_lane_change_right 로
-  //   수행하므로 그 기동에는 지시등이 아예 안 켜진다. 반면 승인 대기 중인
-  //   lane_change_left(NORMAL, direction_=LEFT)는 계속 좌측 등을 켜서, 우측으로
-  //   이동하는데 좌측 깜빡이가 들어오는 상태가 됐다.
-  //   되돌리려면 getModuleType() != LaneChangeModuleType::NORMAL 단독 조건으로.
-  if ((getModuleType() != LaneChangeModuleType::NORMAL &&
-       getModuleType() != LaneChangeModuleType::EXTERNAL_REQUEST) ||
-      get_current_lanes().empty()) {
+  if (getModuleType() != LaneChangeModuleType::NORMAL || get_current_lanes().empty()) {
     return original_turn_signal_info;
   }
 
@@ -475,6 +475,31 @@ BehaviorModuleOutput NormalLaneChange::generateOutput()
 {
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
   if (!status_.is_valid_path) {
+    // HL FMA 9/10: 여기서 바로 prev_module_output_ 을 돌려주면 출력이 '현재 차로 직진'으로
+    //   되돌아간다. 그 직진은 노선을 벗어나 30~42m 에서 끊기므로 안전한 폴백이 아니라 더
+    //   나쁜 상태다. 실측(0910_073426)에서 이 왕복이 1~8 사이클(0.1~0.8초)로 반복되며
+    //   경로가 307m <-> 30m 로 튀었고, 그때마다 감속과 자세 흐트러짐이 누적됐다.
+    //   마지막으로 유효했던 출력을 짧은 시간 동안 유지한다. 사이클 수가 아니라 시간으로
+    //   제한하는 이유는 플래너 주기가 부하에 따라 13~52ms 로 흔들리기 때문이다.
+    //   자차가 보관 경로에서 벗어나면 즉시 폐기한다.
+    //   되돌리려면 이 블록을 지우고 바로 prev_module_output_ 을 반환한다.
+    constexpr double hold_duration_s = 1.5;      // 실측 최대 튐 0.8초의 약 2배
+    constexpr double hold_lateral_limit_m = 1.5; // 자차가 보관 경로에서 이만큼 벗어나면 폐기
+    if (last_valid_output_time_ && last_valid_output_.path.points.size() > 1) {
+      const auto age = (clock_.now() - *last_valid_output_time_).seconds();
+      const auto lateral = std::abs(autoware::motion_utils::calcLateralOffset(
+        last_valid_output_.path.points, getEgoPose().position));
+      if (age >= 0.0 && age <= hold_duration_s && std::isfinite(lateral) &&
+          lateral <= hold_lateral_limit_m) {
+        RCLCPP_DEBUG(
+          logger_, "LC_HOLD 후보 생성 실패, 마지막 유효 출력 유지 (age=%.2fs lat=%.2fm)",
+          age, lateral);
+        return last_valid_output_;
+      }
+      RCLCPP_DEBUG(
+        logger_, "LC_HOLD 보관본 폐기 (age=%.2fs lat=%.2fm)", age, lateral);
+    }
+
     RCLCPP_DEBUG(logger_, "No valid path found. Returning previous module's path as output.");
     insert_stop_point(get_current_lanes(), prev_module_output_.path);
     return prev_module_output_;
@@ -518,6 +543,10 @@ BehaviorModuleOutput NormalLaneChange::generateOutput()
   set_signal_activation_time(
     output.turn_signal_info.turn_signal.command != turn_signal_info.turn_signal.command);
 
+  // HL FMA 9/10: 유효한 출력을 보관해 둔다(위 실패 분기에서 사용).
+  last_valid_output_ = output;
+  last_valid_output_time_ = clock_.now();
+
   return output;
 }
 
@@ -545,6 +574,16 @@ void NormalLaneChange::insert_stop_point(
 {
   autoware_utils::ScopedTimeTrack st(__func__, *time_keeper_);
   if (lanelets.empty()) {
+    return;
+  }
+
+  // HL FMA 9/10: 종점 정지는 '이 차로가 끝나기 전에 반드시 바꿔야 한다'는 의무 차선변경에만
+  //   의미가 있다. 선택적(외부요청) 차선변경은 못 해도 그냥 직진하면 되므로 차를 세울 이유가
+  //   없다. 그런데 external_request_lane_change_right 는 오른쪽 변경이 기하학적으로
+  //   가능하기만 하면 계속 요청 상태라, 우회가 끝난 뒤에도 교차로 정지선에 정지점을 꽂았다
+  //   (0910_071212 실측: 12초 구간에 no safe path 정지점 99회). 신호등 정지점과 겹쳐
+  //   감속을 키우고 경로 절단을 유발했다. 되돌리려면 이 블록을 지운다.
+  if (!utils::lane_change::is_mandatory_lane_change(common_data_ptr_->lc_type)) {
     return;
   }
 
@@ -607,6 +646,13 @@ void NormalLaneChange::insert_stop_point_on_current_lanes(
   });
 
   const auto terminal_stop_reason = status_.is_valid_path ? "no safe path" : "no valid path";
+  // HL FMA 9/10 판단추적: 어디에 왜 정지점을 꽂는지. dist_to_terminal_start 는 남은 차선변경을
+  //   위해 예약된 시작 한계, dist_to_last_fit_width 는 차폭이 안 맞아지는 지점이다.
+  RCLCPP_DEBUG(
+    logger_, "LC_STOP 사유=%s 정지거리=%.2f (terminal_start=%.2f 자차원차로내=%d)",
+    terminal_stop_reason, dist_to_terminal_stop, dist_to_terminal_start,
+    static_cast<int>(utils::isEgoWithinOriginalLane(
+      common_data_ptr_->lanes_polygon_ptr->current, getEgoPose(), *bpp_param_ptr)));
   if (
     filtered_objects_.current_lane.empty() ||
     !lane_change_parameters_->enable_stopped_vehicle_buffer) {
@@ -826,8 +872,41 @@ bool NormalLaneChange::hasFinishedLaneChange() const
       lanelet::utils::to2D(experimental::lanelet2_utils::from_ros(current_pose.position)));
   }
 
+  // HL FMA 9/10: 종료점을 지나지 못했더라도 자차 footprint 가 목표 차로 안에 온전히
+  //   들어왔고 요 편차가 크지 않으면 차선변경은 끝난 것으로 본다.
+  //   기존 판정은 종료점을 못 지나면 횡오차 0.1m + 요오차 1.0deg 를 요구하는데, 다차로
+  //   기동에서는 도달할 수 없고, 기동 중 신호에 정상 정차하면 자세가 개선될 수 없어
+  //   영구 교착이 된다(0910_071212: 정지 후 2200 사이클 전부 RUNNING, 초록불에도 재출발
+  //   불가). 모듈이 끝나지 않으면 종점 정지점도 계속 꽂힌다.
+  //   footprint 포함은 중심점 포함보다 엄격하므로 두 차로에 걸친 상태를 완료로 오판하지 않는다.
+  //   되돌리려면 이 블록을 지운다.
+  {
+    const auto & target_polygon = common_data_ptr_->lanes_polygon_ptr->target;
+    const auto & footprint = common_data_ptr_->transient_data.current_footprint;
+    const auto yaw_dev = utils::lane_change::calc_angle_to_lanelet_segment(
+      target_lanes, current_pose);
+    if (
+      boost::geometry::within(footprint, target_polygon) &&
+      yaw_dev < lane_change_parameters_->th_finish_judge_yaw_diff * 10.0) {
+      RCLCPP_DEBUG(
+        logger_, "LC_FINISH 목표 차로에 온전히 진입해 완료 처리. yaw=%.3f", yaw_dev);
+      return true;
+    }
+  }
+
   const auto yaw_deviation_to_centerline =
     utils::lane_change::calc_angle_to_lanelet_segment(target_lanes, current_pose);
+
+  // HL FMA 9/10 계측: 차선변경이 끝나지 않고 RUNNING 에 머무는 원인을 숫자로 남긴다.
+  //   신호에 정상 정차하면 자세가 개선될 수 없어 영구 교착이 된다(0910_061728 t=100~115,
+  //   150 사이클 연속 'Transit from RUNNING to RUNNING'). 판정되면 이 로그는 지운다.
+  RCLCPP_DEBUG(
+    logger_,
+    "LC_FINISH dist_to_end=%.3f buf=%.3f passed=%d yaw=%.3f(th %.3f) lat=%.3f(th %.3f) v=%.2f",
+    dist_to_lane_change_end, finish_judge_buffer, static_cast<int>(has_passed_end_pose),
+    yaw_deviation_to_centerline, lane_change_parameters_->th_finish_judge_yaw_diff,
+    common_data_ptr_->transient_data.target_lanes_ego_arc.distance,
+    lane_change_parameters_->th_finish_judge_lateral_diff, getEgoVelocity());
 
   if (yaw_deviation_to_centerline > lane_change_parameters_->th_finish_judge_yaw_diff) {
     return false;
@@ -1169,6 +1248,14 @@ bool NormalLaneChange::get_lane_change_paths(LaneChangePaths & candidate_paths) 
     RCLCPP_WARN(logger_, "target_lane_neighbors_polygon_2d is empty. Not expected.");
     return false;
   }
+
+  // HL FMA 9/10: 여기서 lane_changing_length 가 DBL_MAX 인 경우를 막으려 했으나 되돌렸다.
+  //   외부요청 차선변경(우회)은 목표가 선호 차로 방향이 아니므로
+  //   getLateralIntervalsToPreferredLane 이 정상적으로 빈 배열을 돌려주고, 그 결과
+  //   DBL_MAX 가 되는 것이 우회에서는 정상 상태다. generate_frenet_candidates 의
+  //   std::min(dist_to_end_from_lc_start, max_lc_len) 이 이미 유한값으로 잘라준다.
+  //   막았더니 우회 후보가 전부 사라졌다(0910_044602 주행, 14회 차단).
+  //   크래시는 get_reference_path_from_target_lane 의 s_end 클램프만으로 닫힌다.
 
   const auto & current_lanes = get_current_lanes();
 
@@ -2116,13 +2203,8 @@ bool NormalLaneChange::is_ego_in_current_or_target_lanes() const
     return true;
   }
 
-  // HL FMA 9/10: 다차로 기동에서는 자차가 current 도 target 도 아닌 중간 차로를 지난다
-  //   (3차선 current, 좌회전 포켓 target 이면 그 사이 차로들). 업스트림은 1차선 변경을
-  //   전제해 이 경우를 EgoOutOfLanes 로 보고 Cancel 하고, 승인된 lane_change_left 가
-  //   ModuleStatus::FAILURE 로 삭제된다. planner_manager 는 뒤따르는 모듈까지 함께 지우므로
-  //   경로가 승인 전(306m -> 21점)으로 되돌아갔다가 새 인스턴스가 처음부터 다시 계획한다.
-  //   자차 차로에서 좌/우 몇 칸 안에 current 나 target 에 닿으면 기동 중으로 본다.
-  //   되돌리려면 아래 블록을 지우고 return in_target 으로.
+  // 다차로 기동 중에는 자차가 current/target 사이의 중간 차로를 통과한다.
+  // 좌우 연결을 따라 current 또는 target 차로에 닿으면 정상 기동 중으로 인정한다.
   const auto routing_graph_ptr = common_data_ptr_->route_handler_ptr->getRoutingGraphPtr();
   if (!routing_graph_ptr) {
     return false;

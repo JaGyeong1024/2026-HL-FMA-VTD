@@ -28,17 +28,25 @@ class BlockedRouteDetour(Node):
         p = self.declare_parameter
         p('object_stop_speed_mps', 0.3)
         p('blocked_time_s', 0.4); p('detection_distance_m', 80.0); p('input_timeout_s', 1.0)
-        # HL FMA 9/11: 45.0 -> 26.0 (JG 값). 좌회전 직후 blocker=40.3m 에서
-        #   available = max(0, 40.3-45.0) = 0 이라 속도제한 0 이 나가고, 차가 멈추면
-        #   blocker 거리도 안 변해 영구 교착이었다(4회 재현, 정지점 433.5/-24.9).
-        #   되돌리려면 45.0
+        # HL FMA 9/10: hold_distance 45.0 은 도입 커밋(b260f4f, 메시지에 "미검증")부터
+        #   근거 없이 유지된 값이다. 실제 필요치 = 접근속도에서 차선변경 1회를 끝낼 거리:
+        #     준비  max_prepare_duration 1.5 s
+        #     전이  shift 3.2m, lat_acc 1.5, jerk 3.0 -> 2*sqrt(3.2/1.5)+2*1.5/3.0 = 3.9 s
+        #     버퍼  backward_length_buffer 3.0 + lane_change_finish_judge_buffer 2.0 = 5 m
+        #   -> 4.0 m/s * (1.5+3.9) + 5 = 26.6 m
+        #   45 는 2배 과대라, 노변 정지물체 45m 뒤부터 available=0 이 되어 하한 1.0 m/s 로
+        #   30초씩 기어갔다(실측 02:40 주행 t=106~137, 3.6 kph). 채점 항목 8 위험.
+        #   ★ lane_change.param.yaml 의 max_prepare_duration / lateral_acceleration /
+        #     lateral_jerk 를 바꾸면 이 값을 다시 계산할 것. 되돌리려면 45.0
         p('hold_distance_m', 26.0); p('approach_speed_mps', 4.0); p('approach_deceleration_mps2', 1.5)
-        # HL FMA 9/11: 접근 속도 하한(JG 값). 위 식이 0 을 뱉는 구간에서도 기어가게 해
-        #   교착을 막는다. 실제 정지는 obstacle_stop/AEB 가 담당하고 이 값은
-        #   '원하는 속도' 상한일 뿐이다(set_approach_limit 주석 참조). 되돌리려면 0.0
+        # HL FMA 9/10 (NG 미커밋분 반입): 접근 제한 하한. 0 까지 내려가면
+        #   velocity_smoother 가 궤적 전체를 0 으로 만들어 차가 못 움직이고,
+        #   blocker 거리도 안 변해 영구 교착이 된다(NG 실측: 좌회전 통과 후
+        #   blocker=40.83 < hold_distance=45.0 에서 정지). 블로커 앞 정지는
+        #   obstacle_stop 이 자체 마진으로 담당한다. 되돌리려면 0.0
         p('min_approach_speed_mps', 1.0)
         p('clear_time_s', 1.0)
-        p('lookahead_m', 100.0); p('path_lateral_margin_m', 2.2); p('retry_interval_s', 0.4)   # HL FMA 9/10: 2.0 이면 13m/s 에서 승인 요청 사이에 26m 를 지나간다. 그동안 모듈은 WaitingForApproval 이라 매 주기 경로를 새로 그려(interface.cpp:110) 경로가 뚝뚝 끊긴다. 0.4 로 줄여 후보가 유효해지는 즉시 승인이 나가게 한다. 되돌리려면 2.0
+        p('lookahead_m', 100.0); p('path_lateral_margin_m', 2.2); p('retry_interval_s', 1.0)
         g = lambda n: self.get_parameter(n).value
         self.obj_stop_v = float(g('object_stop_speed_mps'))
         self.lookahead, self.margin, self.retry = float(g('lookahead_m')), float(g('path_lateral_margin_m')), float(g('retry_interval_s'))
@@ -46,8 +54,8 @@ class BlockedRouteDetour(Node):
         self.detection_distance = float(g('detection_distance_m'))
         self.input_timeout = float(g('input_timeout_s'))
         self.hold_distance = float(g('hold_distance_m'))
-        self.min_approach_speed = float(g('min_approach_speed_mps'))
         self.approach_speed = float(g('approach_speed_mps'))
+        self.min_approach_speed = float(g('min_approach_speed_mps'))
         self.approach_deceleration = float(g('approach_deceleration_mps2'))
         self.clear_time = float(g('clear_time_s'))
         if min(self.hold_distance, self.approach_speed, self.approach_deceleration) <= 0:
@@ -239,6 +247,22 @@ class BlockedRouteDetour(Node):
         self.clear_pub.publish(msg)
         self.limit_active = False
 
+    def regulatory_ahead_m(self):
+        """다음 규제요소(신호등/교차로/횡단보도/정지선)까지 최단 거리. 없으면 None.
+
+        HL FMA 9/10 계측용. 우회를 시작할 때 '복귀할 자리가 남았는가'를 판단하려면
+        종점까지 거리가 필요하다. 지금은 기록만 하고 판단에는 쓰지 않는다.
+        """
+        best = None
+        for message in self.regulatory_factors.values():
+            for factor in getattr(message, 'factors', []) or []:
+                d = getattr(factor, 'distance', None)
+                if d is None or d < 0.0:
+                    continue
+                if best is None or d < best:
+                    best = d
+        return best
+
     def safe_choices(self, keys, blocker=None):
         now = time.monotonic()
         choices = []
@@ -260,11 +284,7 @@ class BlockedRouteDetour(Node):
                 if (st.safe and not st.auto_mode
                         and st.state.type == State.WAITING_FOR_EXECUTION
                         and math.isfinite(st.start_distance) and math.isfinite(st.finish_distance)
-                        # HL FMA 9/10: 시작점이 자차보다 조금 뒤여도 승인 대상에 남긴다.
-                        #   준비시간 오름차순 적용 후 후보가 start=0.32 처럼 0 에 붙어 나오는데,
-                        #   >= 0.0 이면 자차가 조금만 더 가도 음수가 되어 그 주기를 통째로 놓치고,
-                        #   놓친 만큼 재계획이 이어져 경로가 끊긴다. 되돌리려면 0.0
-                        and st.start_distance >= -2.0 and st.finish_distance > 0.0
+                        and st.start_distance >= 0.0 and st.finish_distance > 0.0
                         and clear >= required):
                     choices.append((clear, key, st))
         return choices
@@ -283,12 +303,7 @@ class BlockedRouteDetour(Node):
         running = [(key, st) for key, statuses in self.status.items()
                    if self.fresh('status_' + key, now) for st in statuses
                    if st.state.type in (State.RUNNING, State.ABORTING)
-                   # HL FMA 9/10: 이미 끝난 기동을 RUNNING 으로 붙잡고 있으면 이 가드가 영구히
-                   #   걸려 다음 승인 요청을 아예 못 보낸다. 실측: 우측 우회가 start=-46.24
-                   #   finish=0.33 로 46m 뒤에서 끝났는데 state=1 이라, lane_change_left 가
-                   #   safe=True/start=0.32/finish=27.21 인 정상 후보를 들고도 cmd=0 으로 대기했고
-                   #   DETOUR request 가 우측 1건만 나갔다. 종료분은 가드에서 뺀다.
-                   #   되돌리려면 아래 finish_distance 조건을 지운다.
+                   # 완료 지점이 이미 자차 뒤/근처면 stale RUNNING으로 보고 다음 복귀를 허용한다.
                    and not (math.isfinite(st.finish_distance) and st.finish_distance <= 0.5)]
         if running:
             # Never send an opposing command mid-maneuver. Only release the
@@ -310,9 +325,6 @@ class BlockedRouteDetour(Node):
 
         if self.pending is not None and not self.pending.done():
             return
-        # HL FMA 9/10 검토: 여기서 committed 일 때 retry 를 건너뛰어 uuid 교체를 따라잡게
-        #   해봤으나 RTC 항목 수가 10 -> 9 로 거의 안 줄었다(플래너 쪽 취소를 막고 나면
-        #   churn 자체가 낮아 retry 가 병목이 아니다). 발행률만 올라가므로 되돌렸다.
         if self.committed is not None and now - self.last_request < self.retry:
             return
         if now - self.last_request < self.retry:
@@ -327,6 +339,11 @@ class BlockedRouteDetour(Node):
             choices = self.safe_choices(('left', 'right'), b)
         if not choices:
             return
+        # HL FMA 9/10: 우회 방향을 노선 요구 방향으로 우선하려 했으나 되돌렸다.
+        #   근거로 쓴 route_left / route_right RTC 후보는 우회가 끝난 뒤에야 생겨서,
+        #   우회를 결정하는 시점에는 존재하지 않는다(0910_071212: 방향 선호 0회 발동).
+        #   제대로 하려면 path_with_lane_id 의 lane_id 열과 지도로 '앞으로 어느 쪽
+        #   몇 칸을 가야 하는지'를 직접 계산해야 한다.
         clear, key, st = max(choices, key=lambda x: x[0])
         cli = self.rtc_clients[key]
         if not cli.service_is_ready():

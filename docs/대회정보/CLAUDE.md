@@ -3,7 +3,7 @@
 ## 세션 시작 시 (순서대로, 반드시)
 
 1. **`대회정보.md` 읽기** — 대회 스펙·통신·인프라·결정사항의 통합 맥락 (항상 최신 유지. 문서 구조는 §12)
-2. **최신 `todo*.md` 읽기** — 세션 핸드오프: "지난 세션에서 한 것 / 이번 세션에서 할 것 / 기술부채" (현재 최신: `todo0903.md`)
+2. **최신 `todo*.md` 읽기** — 세션 핸드오프: "지난 세션에서 한 것 / 이번 세션에서 할 것 / 기술부채" (현재 최신: `todo0910.md`)
 3. 관련 심화 문서 (필요 시): `런타임_노드그래프.md`(실측 노드·토픽 연결, 최종궤적=/planning/trajectory) · `주행리뷰_및_노드감사_0903.md`(근본원인·능력·노드감사) · `autoware_통합_검토_0901.md`
 4. Redmine 미답변 질의가 있으면 답 달렸는지 사용자에게 확인 요청 (목록은 최신 todo 상단. 9/2 기준 미답변 없음)
 
@@ -20,6 +20,25 @@
 
 - 새 `todoMMDD.md` 작성 또는 기존 갱신: **이번 세션에서 한 것 + 다음 세션에서 할 것** 구조로
 - 갱신한 문서는 제어기 PC `~/2026-HL-FMA-VTD/docs/대회정보/`에 동기화 + git 커밋 (사용자 명의, 커밋 메시지에 Claude 흔적 남기지 않기)
+
+## 개발 흐름 — 디렉터리·브랜치 (2026-09-06 확정, JG/MY/NG 공통)
+
+제어기 PC 디렉터리 구성:
+- `~/2026-HL-FMA-VTD/` = **main 만**. 실주행으로 검증된 코드. 대회 당일 실행 디렉터리. **여기서 편집하지 않는다.**
+- `~/2026-HL-FMA-VTD-JG/`, `-MY/`, `-NG/` = 개인 작업본. 각각 `develop-jg`·`develop-my`·`develop-ng` 브랜치. **완전 독립 빌드**(hlfma_ws 전체를 자기 안에서 빌드, main 의 install 을 참조하지 않음). `~/.bashrc` 는 어떤 install 도 source 하지 않고, 각 디렉터리의 `start_*.sh` 가 자기 install 을 source 한다.
+- `hlfma_ws/src/autoware`(업스트림)도 git 추적. 업스트림 수정 = 일반 소스 커밋(`patches/` 방식 폐지, `hlfma.repos` 재현 불필요).
+
+이슈 하나를 푸는 순서 (모든 사람 동일):
+1. 개인 디렉터리에서 최신 main 반영: `git fetch origin && git merge origin/main`
+2. 수정 (설정 yaml·브리지·런치·업스트림 소스 모두 자기 디렉터리 안에서)
+3. 빌드: `cd hlfma_ws && colcon build --symlink-install` (증분. 업스트림 C++ 을 고쳤으면 그 패키지도 빌드됨)
+4. 실주행 검증 + 녹화: `./record.sh 이름` (meta 에 git_rev 가 남아 나중에 대조 가능)
+5. 커밋·푸시: `git add -A && git commit && git push` (zip 백업 금지 — 커밋이 백업)
+6. main 머지 (검증된 것만): `cd ~/2026-HL-FMA-VTD && git pull && git merge --ff-only origin/develop-xx && git push`
+   - ff 가 안 되면 개인 디렉터리에서 1번을 다시 하고 재검증
+7. main 디렉터리 적용: `cd ~/2026-HL-FMA-VTD/hlfma_ws && colcon build --symlink-install` (바뀐 패키지만 증분) → main 디렉터리에서 재확인 주행
+
+규칙: 실주행은 한 번에 한 디렉터리만(VTD 9910 단일 접속). 검증 근거 없는 변경은 main 에 올리지 않는다. 디렉터리를 `cp -r` 로 복제하지 않는다(build/install 이 원본 경로를 가리킴) — 새 작업본은 `git clone` 후 전체 빌드.
 
 ## 장비 접속 (비번 둘 다 `a`)
 
