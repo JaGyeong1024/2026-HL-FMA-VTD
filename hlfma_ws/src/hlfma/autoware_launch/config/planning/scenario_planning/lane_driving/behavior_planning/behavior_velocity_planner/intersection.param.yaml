@@ -68,8 +68,10 @@
           default_velocity: 2.778
           minimum_default_velocity: 1.388
         fully_prioritized:
-          collision_start_margin_time: 2.0
-          collision_end_margin_time: 0.0
+          # HL FMA 9/12: 녹색+화살표면 완전 우선이 되어 여유 2.0/0.0 + 대향차가 설 수 있으면 무시 → VTD 대향차는
+          #   신호와 무관하게 들어와 4 m 앞에서야 정지(0912_050738 t=80s). 비우선과 같은 여유로. 되돌리려면 2.0 / 0.0
+          collision_start_margin_time: 4.0
+          collision_end_margin_time: 3.0
         partially_prioritized:
           collision_start_margin_time: 3.0
           collision_end_margin_time: 2.0
@@ -82,8 +84,10 @@
           object_dist_to_stopline: 10.0
         ignore_on_amber_traffic_light:
           object_expected_deceleration:
-            car: 2.0
-            bike: 5.0
+            # HL FMA 9/12: 대향차가 이 감속으로 정지선/자차 차로 앞에 설 수 있으면 안전으로 무시하는 값. VTD 대향차는
+            #   서지 않으므로 사실상 무시하지 않게 0.3. 되돌리려면 car 2.0 / bike 5.0
+            car: 0.3
+            bike: 0.3
         ignore_on_red_traffic_light:
           object_margin_to_path: 2.0
         avoid_collision_by_acceleration:
