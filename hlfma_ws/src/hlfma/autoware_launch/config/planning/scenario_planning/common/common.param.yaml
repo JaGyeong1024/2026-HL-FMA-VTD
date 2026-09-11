@@ -23,7 +23,7 @@
       #   855m 성공 주행에서 관측된 실제 최대 감속은 -4.57(저속) 이고 명령은 -2.4 이하였다.
       #   그 안쪽인 -2.5 까지만 연다. 12.8m/s 정지거리 82m -> 33m.
       #   되돌리려면 -1.0. 더 올리지 말 것 — VTD 응답이 비선형이다.
-      min_acc: -2.5         # min deceleration [m/ss]
+      min_acc: -2.0         # min deceleration [m/ss]  HL FMA 9/12: -2.5 -> -2.0. VTD 실제 감속 한계 -2.3 아래로 두어 제어기가 추종 가능하게(정지선 앞 2단 정지 원인). 되돌리려면 -2.5
       max_acc: 1.3          # max acceleration [m/ss]
       min_jerk: -1.2        # min jerk [m/sss]
       max_jerk: 1.2         # max jerk [m/sss]
