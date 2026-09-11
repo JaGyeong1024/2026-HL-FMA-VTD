@@ -61,7 +61,7 @@ class RouteNode(Node):
         dp = self.declare_parameter
         dp('route_csv', '')
         dp('map_osm', '')
-        dp('goal_extend_m', 25.0)      # 종료 좌표에서 차선을 따라 앞으로 (후륜축 통과 보장)
+        dp('goal_extend_m', 25.0)        # 마지막 CSV 좌표 이후 차선을 따라 25 m 직진
         dp('lane_search_m', 8.0)       # CSV 점 ↔ lanelet 매칭 허용 거리
         dp('auto_engage', False)
         dp('reinject_on_respawn', True)   # 리스폰 이벤트 시 경로 재주입 (A13: stop→change_route_points→autonomous)
