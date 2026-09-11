@@ -302,7 +302,9 @@ class BlockedRouteDetour(Node):
             return
         running = [(key, st) for key, statuses in self.status.items()
                    if self.fresh('status_' + key, now) for st in statuses
-                   if st.state.type in (State.RUNNING, State.ABORTING)]
+                   if st.state.type in (State.RUNNING, State.ABORTING)
+                   # 완료 지점이 이미 자차 뒤/근처면 stale RUNNING으로 보고 다음 복귀를 허용한다.
+                   and not (math.isfinite(st.finish_distance) and st.finish_distance <= 0.5)]
         if running:
             # Never send an opposing command mid-maneuver. Only release the
             # waiting speed limit once the planner reports execution, not on send.

@@ -2199,7 +2199,38 @@ bool NormalLaneChange::is_ego_in_current_or_target_lanes() const
   const auto in_target =
     utils::lane_change::is_lanelet_in_lanelet_collections(target_lanes, current_lane);
 
-  return in_target;
+  if (in_target) {
+    return true;
+  }
+
+  // 다차로 기동 중에는 자차가 current/target 사이의 중간 차로를 통과한다.
+  // 좌우 연결을 따라 current 또는 target 차로에 닿으면 정상 기동 중으로 인정한다.
+  const auto routing_graph_ptr = common_data_ptr_->route_handler_ptr->getRoutingGraphPtr();
+  if (!routing_graph_ptr) {
+    return false;
+  }
+  constexpr int max_steps = 4;
+  const auto reaches_known_lane = [&](const bool to_left) {
+    lanelet::ConstLanelet lane = current_lane;
+    for (int i = 0; i < max_steps; ++i) {
+      const auto next = to_left ? routing_graph_ptr->left(lane) : routing_graph_ptr->right(lane);
+      const auto adjacent =
+        to_left ? routing_graph_ptr->adjacentLeft(lane) : routing_graph_ptr->adjacentRight(lane);
+      const auto step = next ? next : adjacent;
+      if (!step) {
+        return false;
+      }
+      lane = *step;
+      if (
+        utils::lane_change::is_lanelet_in_lanelet_collections(current_lanes, lane) ||
+        utils::lane_change::is_lanelet_in_lanelet_collections(target_lanes, lane)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  return reaches_known_lane(true) || reaches_known_lane(false);
 }
 
 bool NormalLaneChange::hasMissedLaneChangePath() const

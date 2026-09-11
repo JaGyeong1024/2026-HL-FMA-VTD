@@ -26,6 +26,7 @@
 
       stop:  # emergency stop when detecting a collision
         on_time_buffer: 0.3   # [s] successive collision detection time required to start the stopping decision
+        ttc_threshold: 4.0    # [s] stop when the predicted collision TTC reaches this value
         off_time_buffer: 1.0  # [s] successive non-collision detection time required to remove a stopping decision
         distance_buffer: 2.5  # [m] longitudinal safety distance to keep between ego and the collision position
         deceleration_limit: 5.0  # [m/s²] if a stop causes a deceleration higher than this limit, an ERROR diagnostic is published

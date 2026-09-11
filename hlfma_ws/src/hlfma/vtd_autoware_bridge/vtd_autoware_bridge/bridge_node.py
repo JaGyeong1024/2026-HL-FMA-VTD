@@ -85,7 +85,7 @@ class VtdAutowareBridge(Node):
         dp('ctrl_rate_hz', 20.0)
         dp('watchdog_timeout', 0.4)      # [s] 제어 명령 두절 판정
         dp('failsafe_accel', -3.0)       # [m/s²] 두절 시 감속
-        dp('jump_reset_dist', 2.0)       # [m] 한 프레임 이동이 이보다 크면 리스폰으로 판정
+        dp('jump_reset_dist', 10.0)       # [m] 한 프레임 이동이 이보다 크면 리스폰으로 판정
         dp('ego_z_mode', 'raw')          # 'raw': VTD z 그대로 (맵에 elevation 반영됨, 9/2) / 'zero': 맵이 z=0일 때
         dp('steer_report_tau', 0.2)      # [s] 조향 보고 1차 지연 (실측 조향 없음)
         dp('state4_go', True)            # state 4(적+좌회전 화살표)를 '가라'로 (개발계획_0902 §4-4)
