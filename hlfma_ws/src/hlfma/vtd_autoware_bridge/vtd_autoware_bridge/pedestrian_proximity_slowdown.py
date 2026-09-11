@@ -22,7 +22,7 @@ class PedestrianProximitySlowdown(Node):
         super().__init__('pedestrian_proximity_slowdown')
         p = self.declare_parameter
         p('lateral_distance_m', 10.0)
-        p('lookahead_distance_m', 40.0)  # 9/12 사용자 결정: 50 -> 40. 계산상 47->25 km/h 에 30 m 필요해 객체 10 m 앞에서 25 도달(튀어나옴 시점 17 m 에선 ~31 km/h, 정지거리 21 m 로 여유 없음). 되돌리려면 50.0
+        p('lookahead_distance_m', 50.0)  # 9/12 사용자 결정: 60 -> 40 -> 50. 47->25 km/h 감속에 30 m 필요, 자전거 튀어나옴(자차 17 m 앞) 전에 25 도달하려면 50 필요. 되돌리려면 60.0
         p('normal_slowdown_speed_mps', 6.94)  # 9/12: 35->25 km/h. 35 로는 도로변 자전거가 튀어나올 때 못 섬(0912_044131 t=34s 0.6 m)
         p('school_zone_slowdown_speed_mps', 6.94)
         p('school_zone_limit_kph', 30.0)
