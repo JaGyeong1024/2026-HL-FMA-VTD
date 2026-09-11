@@ -78,7 +78,10 @@ class PedestrianProximitySlowdown(Node):
 
     @staticmethod
     def is_pedestrian(obj):
-        return any(c.label == ObjectClassification.PEDESTRIAN and c.probability > 0.0 for c in obj.classification)
+        # 9/12: 자전거도 대상. 도로변에 선 자전거 옆을 48 km/h 로 지나다 튀어나오면 못 선다(03:24 bag t=31s).
+        #   보행자와 같은 35/25 km/h 제한으로 미리 줄여 두고, 실제 정지는 run_out/road_user_stop 이 맡는다.
+        return any(c.label in (ObjectClassification.PEDESTRIAN, ObjectClassification.BICYCLE) and c.probability > 0.0
+                   for c in obj.classification)
 
     def nearby_pedestrian(self):
         if not self.path or not self.objects or not self.odom or len(self.path.points) < 2:

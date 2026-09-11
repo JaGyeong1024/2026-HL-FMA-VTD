@@ -73,6 +73,7 @@ OBJECT_LABEL = {
     size_classifier.UNKNOWN: ObjectClassification.UNKNOWN,
     size_classifier.CAR: ObjectClassification.CAR,
     size_classifier.MOTORCYCLE: ObjectClassification.MOTORCYCLE,
+    size_classifier.BICYCLE: ObjectClassification.BICYCLE,
     size_classifier.PEDESTRIAN: ObjectClassification.PEDESTRIAN,
 }
 
@@ -479,7 +480,8 @@ class VtdAutowareBridge(Node):
             cls.label = OBJECT_LABEL[size_classifier.classify(dim_x, dim_y, dim_z, self.size_th)]
             cls.probability = 1.0
             obj.classification.append(cls)
-            is_ped = cls.label == ObjectClassification.PEDESTRIAN
+            # 보행자·자전거(교통약자): 차선 투영 없이 직선 예측 (아래 주석)
+            is_ped = cls.label in (ObjectClassification.PEDESTRIAN, ObjectClassification.BICYCLE)
 
             k = PredictedObjectKinematics()
             qx, qy, qz, qw = yaw_to_quat(heading)
@@ -495,7 +497,8 @@ class VtdAutowareBridge(Node):
             n = int(self.predict_horizon / 0.5) + 1
 
             # 차선 투영: 곡선에서 요레이트 외삽은 차선을 벗어난다. 자차 근처만 투영해 비용을 막는다.
-            # 보행자는 투영하지 않고 걷는 방향 그대로 직선 예측한다. 투영하면 차로를 가로지르는 보행자도
+            # 보행자·자전거는 투영하지 않고 진행 방향 그대로 직선 예측한다(9/12: 자전거 추가 — 도로변에서
+            #   직각으로 튀어나오는 자전거를 차로 방향으로 투영하면 run_out 이 못 본다, 03:24 bag t=31s). 투영하면 차로를 가로지르는 보행자도
             #   옆 간격을 유지한 채 차로 방향으로 걷는 것으로 예측돼 run_out 이 자차 차로 진입을 미리 못 본다
             #   (9/12 NG 코드 재현: 횡단 각도 45~90° 모두 8초 동안 옆 간격 그대로). 요레이트도 쓰지 않는다 —
             #   8초 지평에서는 모퉁이를 도는 잠깐의 회전율이 제자리를 도는 예측이 된다.
