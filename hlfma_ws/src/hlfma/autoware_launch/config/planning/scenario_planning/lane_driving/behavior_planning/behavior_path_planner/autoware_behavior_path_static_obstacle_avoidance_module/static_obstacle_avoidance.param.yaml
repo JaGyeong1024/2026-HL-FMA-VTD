@@ -334,10 +334,13 @@
         # lateral constraints
         lateral:
           velocity: [1.39, 4.17, 11.1]                  # [m/s]
-          max_accel_values: [0.5, 0.5, 0.5]             # [m/ss]
+          # HL FMA 9/12: 저속 구간 횡가속·저크 상향. 기본값(0.5 / 0.2)이면 3.2 m 옆 차로로 비키는 데 ~3.6 s
+          #   = 4 m/s 에서 ~15 m 라 정지차 간격 13~19 m 인 S자에서 비켰다 돌아올 길이가 안 나온다(NG 04:06 주행 고착).
+          #   1.5 m/s² 는 0.15 g, 4 m/s 에서 조향 ~10°. 속도 구간 [1.39, 4.17, 11.1] m/s. 되돌리려면 [0.5,0.5,0.5] / [0.2,0.2,0.2]
+          max_accel_values: [1.5, 1.0, 0.5]             # [m/ss]
           min_jerk_values:
-            avoid: [0.2, 0.2, 0.2]                      # [m/sss]
-            return: [0.2, 0.2, 0.2]                     # [m/sss]
+            avoid: [1.0, 0.5, 0.2]                      # [m/sss]
+            return: [1.0, 0.5, 0.2]                     # [m/sss]
           max_jerk_values: [3.0, 3.0, 3.0]              # [m/sss]
 
         # longitudinal constraints

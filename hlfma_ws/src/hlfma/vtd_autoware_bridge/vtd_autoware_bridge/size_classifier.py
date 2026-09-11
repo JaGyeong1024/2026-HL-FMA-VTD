@@ -11,7 +11,8 @@ from dataclasses import dataclass
 
 UNKNOWN = 'unknown'
 CAR = 'car'
-MOTORCYCLE = 'motorcycle'
+MOTORCYCLE = 'motorcycle'  # 현재 미사용 (이륜은 BICYCLE 로 낸다, 아래 규칙 3)
+BICYCLE = 'bicycle'
 PEDESTRIAN = 'pedestrian'
 
 
@@ -33,9 +34,13 @@ def classify(length, width, height, th=SizeThresholds()):
     if length >= th.car_min_length:
         return CAR          # 2. 차량
     if th.two_wheel_min_length <= length <= th.two_wheel_max_length:
-        # 3. 자전거·오토바이. 크기로는 둘을 못 가르므로 기존대로 MOTORCYCLE 하나로 둔다
-        #    (road_user_stop 은 bicycle 만, 정적 회피는 motorcycle 을 차량으로 다뤄 라벨에 따라 거동이 바뀐다).
-        return MOTORCYCLE
+        # 3. 자전거·오토바이. 크기로는 둘을 못 가른다(자전거 1.90x0.70x1.80 / 오토바이 2.0x0.6x1.7).
+        #    9/12 결정: BICYCLE 로 낸다. 시나리오의 이륜은 자전거이고, 자전거 라벨이어야
+        #    도로이용자 정지(road_user_stop)·큰 회피 여유·접근 감속·직선 예측이 걸린다
+        #    (MOTORCYCLE 이면 셋 다 안 걸려 03:24 bag 에서 튀어나온 자전거를 42 km/h 로 0.4 m 지나쳤다).
+        #    달리는 이륜차는 BICYCLE 라벨로도 obstacle_cruise 추종 대상이라 추종·추월 거동은 같다.
+        #    되돌리려면 MOTORCYCLE 을 돌려준다.
+        return BICYCLE
     if length <= th.ped_max_length and width <= th.ped_max_width and height >= th.ped_min_height:
         return PEDESTRIAN   # 4. 어린이~성인, 휠체어 탑승자
     return UNKNOWN          # 5. 그 외 (빈 휠체어 등)

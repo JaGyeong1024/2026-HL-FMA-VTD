@@ -2,7 +2,7 @@
 import pytest
 
 from vtd_autoware_bridge.size_classifier import (
-    CAR, MOTORCYCLE, PEDESTRIAN, UNKNOWN, SizeThresholds, classify,
+    CAR, BICYCLE, PEDESTRIAN, UNKNOWN, SizeThresholds, classify,
 )
 
 # (이름, L, W, H, 기대 분류) — 문서 §1 실측값
@@ -11,11 +11,11 @@ MEASURED = [
     ('성인 여성', 0.55, 0.63, 1.62, PEDESTRIAN),
     ('남자 어린이', 0.50, 0.60, 1.35, PEDESTRIAN),
     ('여자 어린이', 0.50, 0.60, 1.42, PEDESTRIAN),
-    ('자전거 탄 사람', 1.90, 0.70, 1.80, MOTORCYCLE),
-    ('빈 자전거', 1.90, 0.65, 1.10, MOTORCYCLE),
+    ('자전거 탄 사람', 1.90, 0.70, 1.80, BICYCLE),
+    ('빈 자전거', 1.90, 0.65, 1.10, BICYCLE),
     ('휠체어 탄 사람', 1.01, 0.70, 1.80, PEDESTRIAN),
     ('빈 휠체어', 1.01, 0.62, 0.92, UNKNOWN),
-    ('오토바이(탑승)', 2.0, 0.6, 1.7, MOTORCYCLE),
+    ('오토바이(탑승)', 2.0, 0.6, 1.7, BICYCLE),
     ('승용차', 4.4, 1.8, 1.4, CAR),
     ('라바콘', 0.30, 0.30, 0.32, UNKNOWN),
 ]
