@@ -680,6 +680,10 @@ class VtdAutowareBridge(Node):
         g = self.tl_guard
         vs, T = self.tl_guard_vstar, self.tl_guard_yellow
         may_turn_yellow = state in (0, 3, 5) or (state == 4 and self.state4_go)
+        # 9/12: 적(1)·황(2)도 같은 제한. 47 km/h 에서 적색 정지선까지 -2 로 100 m 감속하면 제동 잔류(시정수 1.2 s)로
+        #   정지선 몇 m 전에 서고 기어간다(0912_044131). 35 로 접근하면 감속 구간이 짧아 깔끔히 선다(사용자 관찰).
+        #   제한은 최고속도일 뿐 정지·통과 판단은 그대로 Autoware 신호등 모듈. 되돌리려면 아래 줄 삭제
+        may_turn_yellow = may_turn_yellow or state in (1, 2)
         s = None if dist is None else dist - self.tl_guard_front - self.tl_guard_stop_margin
         v = self.vx_f
         want, reason = False, ''
