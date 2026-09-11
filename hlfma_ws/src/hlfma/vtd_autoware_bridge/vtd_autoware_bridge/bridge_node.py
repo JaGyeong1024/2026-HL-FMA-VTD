@@ -29,6 +29,7 @@ import socket
 import struct
 import threading
 import time
+from dataclasses import fields
 
 import rclpy
 from rclpy.node import Node
@@ -52,11 +53,13 @@ from autoware_perception_msgs.msg import (
     TrafficLightElement, TrafficLightGroup, TrafficLightGroupArray,
 )
 from autoware_planning_msgs.msg import LaneletRoute
+from autoware_internal_planning_msgs.msg import VelocityLimit, VelocityLimitClearCommand
 from autoware_adapi_v1_msgs.msg import LocalizationInitializationState
 
 from .protocol import DATA_SIZE, unpack_data, pack_ctrl
 from .osm_map import OsmMap
 from .tl_router import TrafficLightRouter
+from . import size_classifier
 
 MAX_STEER_RAD = 0.48
 ACCEL_MIN, ACCEL_MAX = -6.0, 3.0
@@ -64,6 +67,14 @@ _TL = TrafficLightElement
 
 # VTD tl_state (대회정보.md §6): 0 미할당 / 1 적 / 2 황 / 3 녹 / 4 좌회전 / 5 녹+좌 / 6 점멸
 STATE_NAME = {0: 'none', 1: 'red', 2: 'amber', 3: 'green', 4: 'left', 5: 'green+left', 6: 'flash'}
+
+# size_classifier 분류 → Autoware 라벨
+OBJECT_LABEL = {
+    size_classifier.UNKNOWN: ObjectClassification.UNKNOWN,
+    size_classifier.CAR: ObjectClassification.CAR,
+    size_classifier.MOTORCYCLE: ObjectClassification.MOTORCYCLE,
+    size_classifier.PEDESTRIAN: ObjectClassification.PEDESTRIAN,
+}
 
 
 def yaw_to_quat(yaw):
@@ -91,9 +102,27 @@ class VtdAutowareBridge(Node):
         dp('state4_go', True)            # state 4(적+좌회전 화살표)를 '가라'로 (개발계획_0902 §4-4)
         dp('flash_stop_time', 0.5)       # [s] state 6: 정지 유지 후 통과
         dp('flash_stop_dist', 8.0)       # [m] state 6: 정지선까지 이 거리 안에서 정지해야 인정
+        # HL FMA 9/12: 신호 접근 속도 제한(황색 딜레마 제거). 녹색·미할당 신호로 다가갈 때, 언제 황색이
+        #   켜져도 '설 수 있다' 또는 '황색 안에 정지선 통과' 중 하나가 되는 속도까지만 낮춘다.
+        #   VTD 는 신호 주기를 안 주지만 황색은 전 신호 3.0 s 로 고정이다(로그 4,333회 중 95%).
+        #   아래 네 값은 Autoware 신호등 모듈의 통과 판정과 같아야 한다(다르면 둘이 어긋난다):
+        #     yellow_s  = traffic_light.param yellow_lamp_period
+        #     stop_decel/stop_jerk/delay_s = behavior_velocity_planner_common max_accel/max_jerk/system_delay
+        dp('tl_guard_enable', True)
+        dp('tl_guard_yellow_s', 2.75)      # [s] 황색 3.0 s - 인지 지연·정지점~정지선 여유
+        dp('tl_guard_stop_decel', 2.4)     # [m/s^2] VTD 가 정상 응답하는 감속 (JG 253496d7 실측)
+        dp('tl_guard_stop_jerk', 5.0)      # [m/s^3]
+        dp('tl_guard_delay_s', 0.5)        # [s]
+        dp('tl_guard_stop_margin_m', 1.0)  # [m] = traffic_light.param stop_margin (범퍼가 정지선 1 m 전)
+        dp('tl_guard_front_m', 3.808)      # [m] 후륜축(base_link) -> 앞범퍼
+        dp('tl_guard_slow_decel', 1.5)     # [m/s^2] 제한 속도까지 줄이는 감속 (시작 거리 계산용)
+        dp('tl_guard_margin_m', 3.0)       # [m] 시작 거리 여유
         dp('publish_dummy_perception', True)
         dp('predict_horizon', 8.0)       # [s] objects 예측 경로 길이 (차선변경 2회 기동이 6~8s)
         dp('report_period', 5.0)
+        # 객체 크기 분류 경계값 object_class.* — 기본값과 근거는 size_classifier.SizeThresholds
+        for f in fields(size_classifier.SizeThresholds):
+            dp('object_class.' + f.name, f.default)
 
         g = lambda k: self.get_parameter(k).value
         self.host, self.port = g('vtd_host'), int(g('vtd_port'))
@@ -107,6 +136,23 @@ class VtdAutowareBridge(Node):
         self.flash_stop_time = float(g('flash_stop_time'))
         self.flash_stop_dist = float(g('flash_stop_dist'))
         self.predict_horizon = float(g('predict_horizon'))
+        self.size_th = size_classifier.SizeThresholds(**{
+            f.name: float(g('object_class.' + f.name)) for f in fields(size_classifier.SizeThresholds)})
+        self.get_logger().info(f'객체 크기 분류 경계값: {self.size_th}')
+        self.tl_guard_enable = bool(g('tl_guard_enable'))
+        self.tl_guard_yellow = float(g('tl_guard_yellow_s'))
+        self.tl_guard_stop_decel = float(g('tl_guard_stop_decel'))
+        self.tl_guard_stop_jerk = float(g('tl_guard_stop_jerk'))
+        self.tl_guard_delay = float(g('tl_guard_delay_s'))
+        self.tl_guard_stop_margin = float(g('tl_guard_stop_margin_m'))
+        self.tl_guard_front = float(g('tl_guard_front_m'))
+        self.tl_guard_slow_decel = float(g('tl_guard_slow_decel'))
+        self.tl_guard_margin = float(g('tl_guard_margin_m'))
+        self.tl_guard_vstar = self._tl_guard_safe_speed()
+        self.tl_guard = {'active': False, 'lanelet': None, 'last_pub': -1e9}
+        self.get_logger().info(
+            f'신호 접근 제한: 딜레마 없는 속도 {self.tl_guard_vstar:.2f} m/s '
+            f'({self.tl_guard_vstar * 3.6:.1f} km/h), enable={self.tl_guard_enable}')
 
         # 맵 + 신호등 라우터
         self.tl_router = None
@@ -140,6 +186,9 @@ class VtdAutowareBridge(Node):
         self.pub_objects = mk(PredictedObjects, '/perception/object_recognition/objects', qos)
         self.pub_tl = mk(TrafficLightGroupArray, '/perception/traffic_light_recognition/traffic_signals', qos)
         self.pub_respawn = mk(Empty, '/vtd/respawn', qos)
+        # 신호 접근 제한: 다른 노드(blocked_route_detour, pedestrian_proximity_slowdown)와 같은 경로·QoS
+        self.pub_vlim = mk(VelocityLimit, '/planning/scenario_planning/max_velocity_candidates', latched)
+        self.pub_vlim_clear = mk(VelocityLimitClearCommand, '/planning/scenario_planning/clear_velocity_limit', latched)
         # 원본 패킷 기록용 (ros2 bag 에 담기도록): 수신 DataPacket 1109B / 송신 CtrlPacket 9B
         self.pub_raw_rx = mk(UInt8MultiArray, '/vtd/raw_rx', 10)
         self.pub_raw_tx = mk(UInt8MultiArray, '/vtd/raw_tx', 10)
@@ -421,15 +470,15 @@ class VtdAutowareBridge(Node):
             obj = PredictedObject()
             obj.object_id = UUID(uuid=list(struct.pack('<IIII', oid & 0xFFFFFFFF, 0, 0, 0)))
             obj.existence_probability = 1.0
+            # 분류는 발행하는 shape 크기로 한다. 높이가 비어(≤0.1) 1.6 으로 채운 객체를
+            # 낮은 정지물(UNKNOWN)로 떨어뜨리지 않기 위해서다.
+            dim_x, dim_y = max(length, 0.3), max(width, 0.3)
+            dim_z = height if height > 0.1 else 1.6
             cls = ObjectClassification()
-            if length < 1.2 and width < 1.2:
-                cls.label = ObjectClassification.PEDESTRIAN
-            elif length < 2.8:
-                cls.label = ObjectClassification.MOTORCYCLE
-            else:
-                cls.label = ObjectClassification.CAR
+            cls.label = OBJECT_LABEL[size_classifier.classify(dim_x, dim_y, dim_z, self.size_th)]
             cls.probability = 1.0
             obj.classification.append(cls)
+            is_ped = cls.label == ObjectClassification.PEDESTRIAN
 
             k = PredictedObjectKinematics()
             qx, qy, qz, qw = yaw_to_quat(heading)
@@ -445,8 +494,14 @@ class VtdAutowareBridge(Node):
             n = int(self.predict_horizon / 0.5) + 1
 
             # 차선 투영: 곡선에서 요레이트 외삽은 차선을 벗어난다. 자차 근처만 투영해 비용을 막는다.
+            # 보행자는 투영하지 않고 걷는 방향 그대로 직선 예측한다. 투영하면 차로를 가로지르는 보행자도
+            #   옆 간격을 유지한 채 차로 방향으로 걷는 것으로 예측돼 run_out 이 자차 차로 진입을 미리 못 본다
+            #   (9/12 NG 코드 재현: 횡단 각도 45~90° 모두 8초 동안 옆 간격 그대로). 요레이트도 쓰지 않는다 —
+            #   8초 지평에서는 모퉁이를 도는 잠깐의 회전율이 제자리를 도는 예측이 된다.
+            #   되돌리려면 아래 두 곳의 is_ped 조건을 뺀다.
+            pred_yaw_rate = 0.0 if is_ped else yaw_rate
             lid = s_c = lat = None
-            if self.omap is not None and math.hypot(x - st.x, y - st.y) < 120.0:
+            if self.omap is not None and not is_ped and math.hypot(x - st.x, y - st.y) < 120.0:
                 try:
                     lid = self.omap.nearest_lanelet(x, y, heading)
                     if lid is not None:
@@ -480,13 +535,13 @@ class VtdAutowareBridge(Node):
                 else:
                     px += ds * math.cos(ph)
                     py += ds * math.sin(ph)
-                    ph += yaw_rate * 0.5
+                    ph += pred_yaw_rate * 0.5
             k.predicted_paths.append(path)
             obj.kinematics = k
             obj.shape.type = Shape.BOUNDING_BOX
-            obj.shape.dimensions.x = max(length, 0.3)
-            obj.shape.dimensions.y = max(width, 0.3)
-            obj.shape.dimensions.z = height if height > 0.1 else 1.6
+            obj.shape.dimensions.x = dim_x
+            obj.shape.dimensions.y = dim_y
+            obj.shape.dimensions.z = dim_z
             msg.objects.append(obj)
         for oid in [k for k in self.obj_hist if k not in seen]:
             if t - self.obj_hist[oid][0] > 2.0:
@@ -580,6 +635,83 @@ class VtdAutowareBridge(Node):
                 f"lanelet {cur['entry']} 정지선 {dist if dist is None else round(dist, 1)}m, "
                 f"규제요소 {cur['groups']}개에 {self._color_name(color)} 발행")
         self.tl_last = cur
+        self.tl_approach_guard(st.tl_state, entry, dist, t)
+
+    # ------------------------------------------------------------ 신호 접근 속도 제한 (황색 딜레마)
+    def _tl_judge_dist(self, v):
+        """Autoware 신호등 통과 판정의 정지 필요거리(정지점 기준).
+        behavior_velocity_planner_common calcJudgeLineDistWithJerkLimit 과 같은 식, 현재 가속 0 가정."""
+        if v <= 0.0:
+            return 0.0
+        acc, jerk = -self.tl_guard_stop_decel, -self.tl_guard_stop_jerk
+        x1 = v * self.tl_guard_delay
+        v2 = v + acc * acc / (2.0 * jerk)
+        if v2 <= 0.0:
+            t2 = -(acc + math.sqrt(-2.0 * jerk * v)) / jerk
+            return max(0.0, x1 + v * t2 + jerk * t2 ** 3 / 6.0)
+        t2 = acc / jerk
+        x2 = v * t2 + jerk * t2 ** 3 / 6.0
+        x3 = -v2 * v2 / (2.0 * acc)
+        return max(0.0, x1 + x2 + x3)
+
+    def _tl_guard_safe_speed(self):
+        """정지 필요거리 <= 황색 도달거리 가 되는 최고 속도 (이 속도 이하면 딜레마 구간이 없다)."""
+        lo, hi = 0.1, 30.0
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            if self._tl_judge_dist(mid) <= mid * self.tl_guard_yellow:
+                lo = mid
+            else:
+                hi = mid
+        return lo
+
+    def tl_approach_guard(self, state, entry, dist, t):
+        """녹색·미할당 신호로 다가갈 때 딜레마 구간에 들어가기 전에 속도를 v* 로 제한한다.
+        v* 에서는 정지 필요거리 = 황색 도달거리라, 황색이 언제 켜져도 서거나 지나갈 수 있다.
+        시작 거리 = v*·T + (v² - v*²)/(2·slow_decel): 이 거리에서 줄이기 시작하면 감속 도중에도
+        '설 수 있다'가 유지된다. 한 번 걸면 정지점이 v* 의 황색 도달거리 안에 들어올 때까지 유지.
+        적·황·점멸이면 Autoware 신호등 모듈/점멸 상태기계가 처리하므로 해제한다."""
+        if not self.tl_guard_enable:
+            return
+        g = self.tl_guard
+        vs, T = self.tl_guard_vstar, self.tl_guard_yellow
+        may_turn_yellow = state in (0, 3, 5) or (state == 4 and self.state4_go)
+        s = None if dist is None else dist - self.tl_guard_front - self.tl_guard_stop_margin
+        v = self.vx_f
+        want, reason = False, ''
+        if entry is None or s is None:
+            reason = '다음 정지선 없음'
+        elif not may_turn_yellow:
+            reason = f'state {state}'
+        elif s <= vs * T:
+            reason = f'정지점 {s:.1f}m 가 제한속도의 황색 도달거리 안'
+        elif g['active'] and g['lanelet'] == entry.lanelet_id:
+            want = True
+        elif v > vs + 0.2 and s > v * T:
+            start = vs * T + (v * v - vs * vs) / (2.0 * self.tl_guard_slow_decel) + self.tl_guard_margin
+            want = s <= start
+        if want:
+            if not g['active'] or g['lanelet'] != entry.lanelet_id:
+                self.get_logger().info(
+                    f'HLFMA 신호 접근 제한: lanelet {entry.lanelet_id} 정지점 {s:.1f}m state {state}, '
+                    f'{v * 3.6:.0f} -> {vs * 3.6:.0f} km/h (48km/h 기준 딜레마 '
+                    f'{13.33 * T:.0f}~{self._tl_judge_dist(13.33):.0f}m)')
+            g['active'], g['lanelet'] = True, entry.lanelet_id
+            if t - g['last_pub'] >= 0.2:
+                msg = VelocityLimit()
+                msg.stamp = self.get_clock().now().to_msg()
+                msg.max_velocity = float(vs)
+                msg.sender = 'tl_dilemma_guard'
+                self.pub_vlim.publish(msg)
+                g['last_pub'] = t
+        elif g['active']:
+            clr = VelocityLimitClearCommand()
+            clr.stamp = self.get_clock().now().to_msg()
+            clr.sender = 'tl_dilemma_guard'
+            clr.command = True
+            self.pub_vlim_clear.publish(clr)
+            self.get_logger().info(f"HLFMA 신호 접근 제한 해제: lanelet {g['lanelet']} ({reason})")
+            g['active'], g['lanelet'] = False, None
 
     @staticmethod
     def _color_name(c):

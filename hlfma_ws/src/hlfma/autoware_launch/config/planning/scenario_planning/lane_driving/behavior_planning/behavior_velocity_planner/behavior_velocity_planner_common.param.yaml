@@ -1,6 +1,10 @@
 /**:
   ros__parameters:
-    max_accel: -2.8
+    # HL FMA 9/12: -2.8 -> -2.4. 신호등 통과 판정(정지 가능한가)의 감속 가정. VTD Ioniq6 는 -2.4 근처까지만
+    #   정상 응답한다(JG 253496d7). -2.8 이면 실제로는 못 서는 거리(48km/h 기준 약 5 m 폭)에서도 "선다"를
+    #   골라 정지선을 넘는다. 이 값을 쓰는 곳은 traffic_light, occlusion_spot, roundabout 뿐이다.
+    #   브리지 tl_guard_stop_decel 과 같아야 한다. 되돌리려면 -2.8
+    max_accel: -2.4
     max_jerk: -5.0
     system_delay: 0.5
     delay_response_time: 0.5
