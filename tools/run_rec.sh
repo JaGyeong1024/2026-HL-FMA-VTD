@@ -133,7 +133,7 @@ REC_RE+='|^/control/command/(control_cmd|turn_indicators_cmd|hazard_lights_cmd)$
 REC_RE+='|^/system/(operation_mode/state|fail_safe/mrm_state|emergency/.*)$'
 REC_RE+='|^/api/(routing|operation_mode|planning)/.*'
 REC_RE+='|^/vtd/.*|^/diagnostics$'
-REC_RE+='|^/control/.*'                                   # 제어기 내부(경사 보상 진단 등)
+# (9/12 제외) /control/.* 전체: debug·marker·processing_time 까지 잡혀 bag 기록이 CPU 87 %, 궤적·제어명령 주기 저하로 비상정지 유발. 제어명령은 위 줄에 있음
 REC_RE+='|^/planning/.*virtual_wall.*|^/planning/velocity_factors'  # 정지 사유 가상벽
 ( trap - INT; exec ros2 bag record -o "$OUT/bag" -e "$REC_RE" ) </dev/null >"$OUT/record.log" 2>&1 &
 BAG_PID=$!
