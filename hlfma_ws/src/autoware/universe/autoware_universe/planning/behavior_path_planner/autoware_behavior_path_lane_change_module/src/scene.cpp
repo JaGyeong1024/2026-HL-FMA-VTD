@@ -355,7 +355,15 @@ TurnSignalInfo NormalLaneChange::get_current_turn_signal_info() const
 {
   const auto original_turn_signal_info = prev_module_output_.turn_signal_info;
 
-  if (getModuleType() != LaneChangeModuleType::NORMAL || get_current_lanes().empty()) {
+  // HL FMA 9/10: EXTERNAL_REQUEST 도 방향지시등을 내게 한다. 업스트림은 NORMAL 만
+  //   지시등을 만드는데, HL FMA 는 봉쇄 우회를 external_request_lane_change_right 로
+  //   수행하므로 그 기동에는 지시등이 아예 안 켜진다. 반면 승인 대기 중인
+  //   lane_change_left(NORMAL, direction_=LEFT)는 계속 좌측 등을 켜서, 우측으로
+  //   이동하는데 좌측 깜빡이가 들어오는 상태가 됐다.
+  //   되돌리려면 getModuleType() != LaneChangeModuleType::NORMAL 단독 조건으로.
+  if ((getModuleType() != LaneChangeModuleType::NORMAL &&
+       getModuleType() != LaneChangeModuleType::EXTERNAL_REQUEST) ||
+      get_current_lanes().empty()) {
     return original_turn_signal_info;
   }
 
@@ -2104,7 +2112,43 @@ bool NormalLaneChange::is_ego_in_current_or_target_lanes() const
   const auto in_target =
     utils::lane_change::is_lanelet_in_lanelet_collections(target_lanes, current_lane);
 
-  return in_target;
+  if (in_target) {
+    return true;
+  }
+
+  // HL FMA 9/10: 다차로 기동에서는 자차가 current 도 target 도 아닌 중간 차로를 지난다
+  //   (3차선 current, 좌회전 포켓 target 이면 그 사이 차로들). 업스트림은 1차선 변경을
+  //   전제해 이 경우를 EgoOutOfLanes 로 보고 Cancel 하고, 승인된 lane_change_left 가
+  //   ModuleStatus::FAILURE 로 삭제된다. planner_manager 는 뒤따르는 모듈까지 함께 지우므로
+  //   경로가 승인 전(306m -> 21점)으로 되돌아갔다가 새 인스턴스가 처음부터 다시 계획한다.
+  //   자차 차로에서 좌/우 몇 칸 안에 current 나 target 에 닿으면 기동 중으로 본다.
+  //   되돌리려면 아래 블록을 지우고 return in_target 으로.
+  const auto routing_graph_ptr = common_data_ptr_->route_handler_ptr->getRoutingGraphPtr();
+  if (!routing_graph_ptr) {
+    return false;
+  }
+  constexpr int max_steps = 4;
+  const auto reaches_known_lane = [&](const bool to_left) {
+    lanelet::ConstLanelet lane = current_lane;
+    for (int i = 0; i < max_steps; ++i) {
+      const auto next = to_left ? routing_graph_ptr->left(lane) : routing_graph_ptr->right(lane);
+      const auto adjacent =
+        to_left ? routing_graph_ptr->adjacentLeft(lane) : routing_graph_ptr->adjacentRight(lane);
+      const auto step = next ? next : adjacent;
+      if (!step) {
+        return false;
+      }
+      lane = *step;
+      if (
+        utils::lane_change::is_lanelet_in_lanelet_collections(current_lanes, lane) ||
+        utils::lane_change::is_lanelet_in_lanelet_collections(target_lanes, lane)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  return reaches_known_lane(true) || reaches_known_lane(false);
 }
 
 bool NormalLaneChange::hasMissedLaneChangePath() const

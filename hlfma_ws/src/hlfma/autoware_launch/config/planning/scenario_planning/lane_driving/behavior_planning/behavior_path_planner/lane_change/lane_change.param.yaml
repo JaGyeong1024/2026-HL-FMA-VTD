@@ -175,8 +175,15 @@
         # At zero speed: stricter tolerance (to update lc path when ego is stopped)
         # At low speeds: higher tolerance (to allow ego to follow lc path)
         # At high speeds: stricter tolerance (to update lc path when ego is moving)
+        # HL FMA 9/10: 2.78 m/s 위 구간을 1.5->3.0, 0.8->2.0 으로 넓혔다.
+        #   기존 값이면 5 m/s 에서 허용 1.41 m 인데, 3차선->좌회전 차로 다차로 기동의
+        #   실측 횡편차가 1.46~1.60 m 라 매 기동마다 hasMissedLaneChangePath 가 걸린다.
+        #   그러면 승인된 lane_change_left 가 Cancel -> ModuleStatus::FAILURE 로 삭제되고
+        #   (planner_manager 는 뒤따르는 모듈도 함께 지운다) 경로가 승인 전 상태로 되돌아가
+        #   306m -> 21점 으로 한 사이클 끊긴 뒤 새 인스턴스가 처음부터 다시 계획한다.
+        #   업스트림 기본값은 1차선 변경을 전제한 값이다. 되돌리려면 1.5 / 0.8.
         velocity_points: [ 0.0, 0.1, 0.11, 2.77, 2.78, 20.0 ]   # [m/s] - velocity points for interpolation
-        lateral_thresholds: [ 3.0, 3.0, 5.0,  5.0,  1.5,   0.8 ]     # corresponding lateral thresholds [m]
+        lateral_thresholds: [ 3.0, 3.0, 5.0,  5.0,  3.0,   2.0 ]     # corresponding lateral thresholds [m]
 
       # debug
       publish_debug_marker: true
