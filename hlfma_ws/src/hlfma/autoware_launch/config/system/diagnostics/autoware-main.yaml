@@ -78,3 +78,4 @@ units:
     type: diag
     node: /adapi/node/mrm_request
     name: delegate
+    timeout: 3.0  # HL FMA 9/12: 1 s 주기 진단 + 기본 timeout 1.0 → STALE 오판 비상정지 방지
