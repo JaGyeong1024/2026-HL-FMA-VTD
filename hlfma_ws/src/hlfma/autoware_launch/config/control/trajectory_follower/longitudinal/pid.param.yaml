@@ -13,7 +13,7 @@
 
 /**:
   ros__parameters:
-    delay_compensation_time: 0.1 # {OVERRIDE}
+    delay_compensation_time: 0.5  # HL FMA 9/12: 0.1 -> 0.5. VTD 제동 응답 시정수 ≈1.2 s 실측(0912_044131 bag 적합). 되돌리려면 0.1 # {OVERRIDE}
 
     enable_smooth_stop: true
     enable_overshoot_emergency: false # {OVERRIDE}
@@ -79,7 +79,7 @@
 
     # acceleration limit
     max_acc: 3.0
-    min_acc: -5.0
+    min_acc: -3.0  # HL FMA 9/12: -5.0 -> -3.0. 실제 감속은 -2.3 m/s² 에서 포화하므로 그 밖의 명령은 적분 폭주·제동 잔류만 만든다(정지선 11 m 전 정지). 되돌리려면 -5.0
 
     # jerk limit
     max_jerk: 2.0
