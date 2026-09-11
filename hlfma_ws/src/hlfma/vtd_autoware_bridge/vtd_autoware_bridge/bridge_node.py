@@ -92,7 +92,12 @@ class VtdAutowareBridge(Node):
         dp('flash_stop_time', 0.5)       # [s] state 6: 정지 유지 후 통과
         dp('flash_stop_dist', 8.0)       # [m] state 6: 정지선까지 이 거리 안에서 정지해야 인정
         dp('publish_dummy_perception', True)
-        dp('predict_horizon', 4.0)       # [s] objects 예측 경로 길이
+        # HL FMA 9/11: 4.0 -> 8.0. VTD 는 객체 예측경로를 주지 않아 브리지가 만든다.
+        #   4초면 13m/s 접근 차량이 52m 앞까지만 그려지는데, 좌회전으로 교차 지점을
+        #   지나는 데 6~8초가 걸린다. 상대 경로가 교차점에 닿기 전에 끊기면
+        #   intersection 모듈이 충돌 판정을 못 세워 정지할 이유를 못 찾는다.
+        #   되돌리려면 4.0
+        dp('predict_horizon', 8.0)       # [s] objects 예측 경로 길이
         dp('report_period', 5.0)
 
         g = lambda k: self.get_parameter(k).value
@@ -166,7 +171,12 @@ class VtdAutowareBridge(Node):
         self.vx_f = self.wz_f = self.ax_f = self.prev_vx = 0.0
         self.steer_rep = 0.0
         self.last_pose = None          # (x, y, z, yaw) 더미 인지·로그용
-        self.obj_hist = {}             # id -> (t, x, y, heading)
+        self.obj_hist = {}             # id -> (t, x, y, heading, speed)
+        self.obj_accel = {}            # id -> 평활된 가속도 [m/s^2] (VTD 미제공 -> 차분 추정)
+        # HL FMA 9/11: 위치 차분 속도추정 방어값. 아래 on_data 참조.
+        self.max_plausible_speed = 30.0   # [m/s] 이보다 크면 추정 이상으로 보고 버린다
+        self.max_accel_step = 6.0         # [m/s^2] 프레임간 속도 변화 한계
+        self.vel_reacquire = True         # 리셋 직후 한 프레임은 제한을 걸지 않는다
         self.initialized = False
 
         # 신호등 상태
@@ -245,19 +255,48 @@ class VtdAutowareBridge(Node):
             if jump > self.jump_reset_dist:
                 self.get_logger().warning(f'위치 점프 {jump:.1f}m → 리스폰 판정, 추정기 리셋')
                 self.vx_f = self.wz_f = self.ax_f = self.prev_vx = 0.0
+                self.vel_reacquire = True
                 self.obj_hist.clear()
+                self.obj_accel.clear()
                 self.flash = {'lanelet': None, 'stopped_since': None, 'go': False}
                 self.pub_respawn.publish(Empty())
-            elif 1e-4 < dt < 0.5:
+            elif 0.005 < dt < 0.5:
+                # HL FMA 9/11: 하한이 1e-4 였을 때, 패킷 두 개가 거의 동시에 도착하면
+                #   (네트워크 묶임) 수 cm 위치차가 수백 m/s 로 튀었다. 실측: 제어 명령
+                #   조향각속도 179 rad/s (dt=1e-5s), 전체 샘플의 6%가 dt<5ms.
+                #   VTD 20Hz 기준 정상 dt 는 0.05s 이므로 0.005s 미만은 갱신을 건너뛴다.
                 v = jump / dt
                 if dx * math.cos(st.heading) + dy * math.sin(st.heading) < 0:
                     v = -v
+                if abs(v) > self.max_plausible_speed:
+                    self.get_logger().warning(
+                        f'속도 추정 이상 {v:.1f} m/s (dt={dt*1000:.1f}ms) → 무시')
+                    v = self.vx_f
+                # 극단값만 걸러서는 60km/h 대 스파이크가 그대로 통과한다.
+                # 물리적으로 가능한 가속으로 한 번 더 제한한다.
+                step = self.max_accel_step * dt
+                v_clamped = v if self.vel_reacquire \
+                    else min(max(v, self.vx_f - step), self.vx_f + step)
+                self.vel_reacquire = False
+                if abs(v_clamped - v) > 0.5:
+                    self.get_logger().warning(
+                        f'속도 변화 제한 {v:.1f}→{v_clamped:.1f} m/s '
+                        f'(dt={dt*1000:.1f}ms, 한계 {step:.2f} m/s)', throttle_duration_sec=2.0)
+                v = v_clamped
                 a = 0.35
                 self.vx_f += a * (v - self.vx_f)
                 self.wz_f += a * (wrap(st.heading - self.prev[3]) / dt - self.wz_f)
                 self.ax_f += a * ((self.vx_f - self.prev_vx) / dt - self.ax_f)
                 self.prev_vx = self.vx_f
-        self.prev = (t, st.x, st.y, st.heading)
+        # HL FMA 9/11: dt 가 하한에 못 미치면 기준점을 옮기지 않는다. 옮기면 그 구간
+        #   이동거리가 버려져 속도가 낮게 나온다. 다음 패킷으로 누적되게 둔다.
+        advance_prev = (self.prev is None) or not (0.0 < (t - self.prev[0]) <= 0.005)
+        # 조향 보고 필터용 dt 는 self.prev 를 덮기 전에 뽑아 둔다. 갱신 후에 계산하면
+        #   항상 하한(1e-3)이 되어 실효 시정수가 0.2s 가 아니라 약 10s 가 되고,
+        #   보고 조향이 명령을 못 따라가 추종이 밀린다.
+        self.steer_dt = 0.05 if self.prev is None else min(0.2, max(1e-3, t - self.prev[0]))
+        if advance_prev:
+            self.prev = (t, st.x, st.y, st.heading)
         self.last_pose = (st.x, st.y, z, st.heading)
         qx, qy, qz, qw = yaw_to_quat(st.heading)
 
@@ -312,7 +351,7 @@ class VtdAutowareBridge(Node):
         # 조향 보고: 실측값이 없어 명령값에 1차 지연을 씌운 근사 (개발계획_0902 §4 '임시 아님' 항목)
         with self.cmd_lock:
             target = self.cmd_steer
-        dt_s = 0.05 if self.prev is None else min(0.2, max(1e-3, t - self.prev[0]))
+        dt_s = getattr(self, 'steer_dt', 0.05)
         self.steer_rep += (target - self.steer_rep) * min(1.0, dt_s / max(self.steer_tau, 1e-3))
         steer = SteeringReport()
         steer.stamp = stamp
@@ -362,11 +401,20 @@ class VtdAutowareBridge(Node):
                 z = 0.0
             # id는 시나리오 내 유지(9/2 답변) → 이전 프레임으로 yaw rate 추정
             yaw_rate = 0.0
+            accel = 0.0
             h = self.obj_hist.get(oid)
             if h is not None and 1e-3 < t - h[0] < 1.0:
-                yaw_rate = wrap(heading - h[3]) / (t - h[0])
+                dt_h = t - h[0]
+                yaw_rate = wrap(heading - h[3]) / dt_h
                 yaw_rate = max(-1.0, min(1.0, yaw_rate))
-            self.obj_hist[oid] = (t, x, y, heading)
+                # HL FMA 9/11: VTD 패킷에 가속도가 없다(x,y,z,heading,speed,l,w,h).
+                #   급정지하는 NPC 를 등속으로 예측하면 실제보다 앞에 있다고 보게 되어
+                #   충돌 판정이 어긋난다. 차분해서 반영한다.
+                if len(h) > 4:
+                    a_raw = max(-9.0, min(5.0, (speed - h[4]) / dt_h))
+                    accel = 0.5 * self.obj_accel.get(oid, 0.0) + 0.5 * a_raw
+            self.obj_accel[oid] = accel
+            self.obj_hist[oid] = (t, x, y, heading, speed)
 
             obj = PredictedObject()
             obj.object_id = UUID(uuid=list(struct.pack('<IIII', oid & 0xFFFFFFFF, 0, 0, 0)))
@@ -392,7 +440,7 @@ class VtdAutowareBridge(Node):
             path.time_step.sec = 0
             path.time_step.nanosec = 500_000_000
             path.confidence = 1.0
-            px, py, ph = x, y, heading
+            px, py, ph, pv = x, y, heading, speed
             n = int(self.predict_horizon / 0.5) + 1
             for i in range(n):
                 q = Pose()
@@ -400,8 +448,16 @@ class VtdAutowareBridge(Node):
                 a, b, c, d = yaw_to_quat(ph)
                 q.orientation.x, q.orientation.y, q.orientation.z, q.orientation.w = a, b, c, d
                 path.path.append(q)
-                px += speed * 0.5 * math.cos(ph)
-                py += speed * 0.5 * math.sin(ph)
+                # HL FMA 9/11: 등속 -> 등가속. 감속으로 0 에 닿으면 멈춘다(후진 금지).
+                if accel < 0.0 and pv + accel * 0.5 < 0.0:
+                    t_stop = -pv / accel
+                    ds = pv * t_stop + 0.5 * accel * t_stop * t_stop
+                    pv = 0.0
+                else:
+                    ds = pv * 0.5 + 0.5 * accel * 0.25
+                    pv = max(0.0, pv + accel * 0.5)
+                px += ds * math.cos(ph)
+                py += ds * math.sin(ph)
                 ph += yaw_rate * 0.5
             k.predicted_paths.append(path)
             obj.kinematics = k
@@ -413,6 +469,7 @@ class VtdAutowareBridge(Node):
         for oid in [k for k in self.obj_hist if k not in seen]:
             if t - self.obj_hist[oid][0] > 2.0:
                 del self.obj_hist[oid]
+                self.obj_accel.pop(oid, None)
         self.pub_objects.publish(msg)
 
     # ------------------------------------------------------------ traffic light

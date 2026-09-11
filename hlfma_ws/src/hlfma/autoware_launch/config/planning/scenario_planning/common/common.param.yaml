@@ -17,7 +17,11 @@
 
     # constraints param for normal driving
     normal:
-      min_acc: -1.0         # min deceleration [m/ss]
+      # HL FMA 9/11: -1.0 -> -2.5 (JG 값). 이건 플래너가 계획해도 된다고 보는
+      #   최대 감속이다. -1.0 이면 13.1 m/s 에서 정지거리 v^2/2a = 86m 가 필요하다고
+      #   보므로, 좌회전 직후 40m 앞에 나타난 차량에 대해 정지점을 아예 못 꽂는다.
+      #   -2.5 면 34m 로 계획이 선다. 되돌리려면 -1.0
+      min_acc: -2.5         # min deceleration [m/ss]
       max_acc: 1.0          # max acceleration [m/ss]
       min_jerk: -1.0        # min jerk [m/sss]
       max_jerk: 1.0         # max jerk [m/sss]
