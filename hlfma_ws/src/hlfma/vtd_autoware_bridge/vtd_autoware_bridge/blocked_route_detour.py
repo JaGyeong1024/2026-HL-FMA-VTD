@@ -46,7 +46,7 @@ class BlockedRouteDetour(Node):
         #   obstacle_stop 이 자체 마진으로 담당한다. 되돌리려면 0.0
         p('min_approach_speed_mps', 1.0)
         p('clear_time_s', 1.0)
-        p('lookahead_m', 100.0); p('path_lateral_margin_m', 2.2); p('retry_interval_s', 2.0)
+        p('lookahead_m', 100.0); p('path_lateral_margin_m', 2.2); p('retry_interval_s', 1.0)
         g = lambda n: self.get_parameter(n).value
         self.obj_stop_v = float(g('object_stop_speed_mps'))
         self.lookahead, self.margin, self.retry = float(g('lookahead_m')), float(g('path_lateral_margin_m')), float(g('retry_interval_s'))

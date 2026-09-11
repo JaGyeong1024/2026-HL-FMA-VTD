@@ -5,6 +5,7 @@ responsibility of the motion velocity planner run_out module.
 """
 import math
 import time
+import xml.etree.ElementTree as ET
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -21,14 +22,20 @@ class PedestrianProximitySlowdown(Node):
         super().__init__('pedestrian_proximity_slowdown')
         p = self.declare_parameter
         p('lateral_distance_m', 10.0)
-        p('lookahead_distance_m', 60.0)
-        p('slowdown_speed_mps', 6.94)
+        p('lookahead_distance_m', 50.0)
+        p('normal_slowdown_speed_mps', 9.7222)
+        p('school_zone_slowdown_speed_mps', 6.94)
+        p('school_zone_limit_kph', 30.0)
+        p('map_osm', '')
         p('clear_time_s', 1.0)
         p('input_timeout_s', 1.0)
         g = lambda name: self.get_parameter(name).value
         self.lateral = float(g('lateral_distance_m'))
         self.lookahead = float(g('lookahead_distance_m'))
-        self.speed = float(g('slowdown_speed_mps'))
+        self.normal_speed = float(g('normal_slowdown_speed_mps'))
+        self.school_zone_speed = float(g('school_zone_slowdown_speed_mps'))
+        self.school_zone_limit_kph = float(g('school_zone_limit_kph'))
+        self.school_zone_lane_ids = self.load_school_zone_lane_ids(str(g('map_osm')))
         self.clear_time = float(g('clear_time_s'))
         self.timeout = float(g('input_timeout_s'))
         self.path = self.objects = self.odom = None
@@ -42,6 +49,28 @@ class PedestrianProximitySlowdown(Node):
         self.limit_pub = self.create_publisher(VelocityLimit, '/planning/scenario_planning/max_velocity_candidates', qos)
         self.clear_pub = self.create_publisher(VelocityLimitClearCommand, '/planning/scenario_planning/clear_velocity_limit', qos)
         self.create_timer(0.2, self.tick)
+
+    def load_school_zone_lane_ids(self, map_osm):
+        lane_ids = set()
+        if not map_osm:
+            self.get_logger().warning('map_osm is empty; school-zone pedestrian slowdown is unavailable')
+            return lane_ids
+        try:
+            for _, elem in ET.iterparse(map_osm, events=('end',)):
+                if elem.tag != 'relation':
+                    if elem.tag in ('node', 'way'):
+                        elem.clear()
+                    continue
+                tags = {tag.get('k'): tag.get('v') for tag in elem.findall('tag')}
+                if tags.get('type') == 'lanelet' and 'speed_limit' in tags:
+                    speed_kph = float(tags['speed_limit'].split()[0])
+                    if speed_kph <= self.school_zone_limit_kph:
+                        lane_ids.add(int(elem.get('id')))
+                elem.clear()
+        except (OSError, ValueError, ET.ParseError) as error:
+            self.get_logger().error(f'failed to load school-zone lanelets from {map_osm}: {error}')
+        self.get_logger().info(f'loaded {len(lane_ids)} school-zone lanelets')
+        return lane_ids
 
     def receive(self, name, msg):
         setattr(self, name, msg)
@@ -83,11 +112,21 @@ class PedestrianProximitySlowdown(Node):
                 return True
         return False
 
+    def in_school_zone(self):
+        if not self.path or not self.odom or not self.path.points:
+            return False
+        ego = self.odom.pose.pose.position
+        nearest = min(
+            self.path.points,
+            key=lambda q: (q.point.pose.position.x - ego.x) ** 2 +
+            (q.point.pose.position.y - ego.y) ** 2)
+        return any(lane_id in self.school_zone_lane_ids for lane_id in nearest.lane_ids)
+
     def publish_limit(self):
         msg = VelocityLimit()
         msg.stamp = self.get_clock().now().to_msg()
         msg.sender = 'pedestrian_proximity_slowdown'
-        msg.max_velocity = self.speed
+        msg.max_velocity = self.school_zone_speed if self.in_school_zone() else self.normal_speed
         self.limit_pub.publish(msg)
         self.limit_active = True
 

@@ -26,7 +26,10 @@
   <node pkg="vtd_autoware_bridge" exec="pedestrian_proximity_slowdown" name="pedestrian_proximity_slowdown" output="screen">
     <param name="lateral_distance_m" value="10.0"/>
     <param name="lookahead_distance_m" value="60.0"/>
-    <param name="slowdown_speed_mps" value="6.94"/>
+    <param name="normal_slowdown_speed_mps" value="9.7222"/> <!-- 35 km/h -->
+    <param name="school_zone_slowdown_speed_mps" value="6.94"/> <!-- 25 km/h -->
+    <param name="school_zone_limit_kph" value="30.0"/>
+    <param name="map_osm" value="$(var map_osm)"/>
     <param name="clear_time_s" value="1.0"/>
   </node>
 

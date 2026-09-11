@@ -16,7 +16,7 @@
         effective_deceleration_opposing_traffic: 4.0 # Setting a higher value brings the final stop-margin closer to the ideal value above
 
         min_on_duration: 0.3  # [s] minimum duration needed before a decision can be triggered
-        min_off_duration: 1.0  # [s] minimum duration needed before a decision can be canceled
+        min_off_duration: 0.5  # [s] minimum duration needed before a decision can be canceled
         update_distance_th: 0.5 # [m] minimum distance threshold to update stop point
 
         hold_stop_velocity_threshold: 0.01 # The maximum ego velocity to hold stopping [m/s]
@@ -89,7 +89,7 @@
         min_object_length: 0.1 # [m] minimum object length to consider for stop planning
 
         min_velocity_to_reach_collision_point: 2.0 # minimum velocity margin to calculate time to reach collision [m/s]
-        stop_obstacle_hold_time_threshold : 1.0 # maximum time for holding closest stop obstacle
+        stop_obstacle_hold_time_threshold : 0.5 # maximum time for holding closest stop obstacle
 
         outside_obstacle: # Parameters for predicting if an obstacle will cut in. Pointcloud obstacles are not supported.
           estimation_time_horizon: 1.0
