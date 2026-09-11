@@ -7,6 +7,7 @@
 #           PCAP=0    VTD 이더넷 pcap 생략 (기본 1)
 #           RVIZ=1    rviz 도 띄움 (기본 0)
 #           TRACE=0   trace.py 생략 (bag 만; CPU 부하 절감)
+#           BAG=0     bag 도 생략 (pcap+로그만. 판정: python3 tools/pcap_judge.py <OUT>/net/vtd.pcap hlfma_ws/src/hlfma/vtd_autoware_bridge)
 #
 #   결과:  test/<MMDD_HHMMSS>_<태그>/
 #     meta.txt        git rev·경로 CSV·환경
@@ -135,9 +136,13 @@ REC_RE+='|^/api/(routing|operation_mode|planning)/.*'
 REC_RE+='|^/vtd/.*|^/diagnostics$'
 # (9/12 제외) /control/.* 전체: debug·marker·processing_time 까지 잡혀 bag 기록이 CPU 87 %, 궤적·제어명령 주기 저하로 비상정지 유발. 제어명령은 위 줄에 있음
 REC_RE+='|^/planning/.*virtual_wall.*|^/planning/velocity_factors'  # 정지 사유 가상벽
-( trap - INT; exec ros2 bag record -o "$OUT/bag" -e "$REC_RE" ) </dev/null >"$OUT/record.log" 2>&1 &
-BAG_PID=$!
-echo "$P bag 시작 (pid $BAG_PID)"
+if [ "${BAG:-1}" = "1" ]; then   # BAG=0: bag 생략 (pcap+로그만; tools/pcap_judge.py 로 접촉·속도·신호 판정)
+  ( trap - INT; exec ros2 bag record -o "$OUT/bag" -e "$REC_RE" ) </dev/null >"$OUT/record.log" 2>&1 &
+  BAG_PID=$!
+  echo "$P bag 시작 (pid $BAG_PID)"
+else
+  echo "$P bag 생략 (BAG=0)"
+fi
 
 # ── 7. trace.py (JG 계측 — score.py 입력) ──────────────────────────────────
 if [ "${TRACE:-1}" = "1" ]; then   # TRACE=0: trace.py 생략 (459개 토픽 JSON 변환이 CPU 를 먹는다 — 9/11 부하 14/16)
