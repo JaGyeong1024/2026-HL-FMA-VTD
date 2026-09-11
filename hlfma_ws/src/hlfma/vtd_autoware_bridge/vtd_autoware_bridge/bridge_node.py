@@ -123,16 +123,14 @@ class VtdAutowareBridge(Node):
         #   5.5 m/s 정지거리 9.3 m). 0912_050738·054114 둘 다 34 km/h 로 적색 정지선 통과.
         dp('tl_unknown_cap_mps', 5.5)      # [m/s] 미할당 신호 정지선 접근 상한 (20 km/h)
         dp('tl_unknown_dist_m', 45.0)      # [m] 이 거리 안에 미할당 정지선이 있으면 상한 적용
-        # 9/12: 좌회전 교차로 서행. 시나리오의 대향차는 자차가 정지선을 넘는 순간 출발해(정지선에 서 있으면
-        #   영영 안 온다) 80 m 를 4 초에 달려온다(0 -> 70 km/h). 정지선 앞에서 기다리는 것으로는 못 피하고,
-        #   20 km/h 로 지나가면 좌회전 도중 대향 차로에서 충돌한다(0912_054114 t=85s, 062716 t=73s 실측).
-        #   경로가 좌회전인 교차로에서는 정지선 전후로 서행해, 대향차가 움직이기 시작하면 대향 차로 앞에서
-        #   설 수 있게 한다(정지·통과 판단은 Autoware 교차로/정지 모듈). 끄려면 isec_left_cap_mps 를 크게.
-        dp('isec_left_cap_mps', 3.33)      # [m/s] 좌회전 교차로 상한 (12 km/h). 대향차 도달(+4 s) 시점에 대향 차로 3.5 m 앞
-        #   정지선 8 m 전에 갑자기 걸면 35 -> 12 km/h 에 5 m/s^2 이 필요해 검증기 과감속이 난다. 25 m 전부터
-        #   걸면 1.7 m/s^2 로 완만하다. 적색이면 어차피 그 전에 더 줄이므로 정지선 정지 거동에는 영향이 없다
-        #   (좌회전 교차로에만 적용되므로 다른 신호 정지는 그대로).
-        dp('isec_before_m', 25.0)          # [m] 정지선 이 거리 전부터 적용
+        # 9/12: 교차로 서행. 시나리오의 대향·교차 차량은 자차가 정지선을 넘는 순간 출발해(정지선에 서 있으면
+        #   영영 오지 않는다) 80 m 를 4 초에 달려온다(0 -> 70 km/h). 20 km/h 로 지나가면 정확히 그 시점에
+        #   대향 차로 한가운데에서 만난다(0912_054114 t=85s, 0912_062716 t=73s 사각형 겹침 실측).
+        #   정지선을 넘은 뒤부터만 12 km/h 로 제한한다(정지선 전 감속은 신호 정지 거동에 영향을 주므로 안 건다).
+        #   12 km/h 면 대향차 도달(+4 s) 시점에 대향 차로 3.5 m 앞이고, 그전에 서면 그들이 지나간 뒤 간다.
+        #   정지·통과 판단 자체는 Autoware 교차로/동적장애물 정지 모듈. 끄려면 isec_cap_mps 를 크게.
+        dp('isec_cap_mps', 3.33)           # [m/s] 정지선 통과 후 상한 (12 km/h)
+        dp('isec_trigger_m', 0.5)          # [m] 정지점까지 남은 거리가 이 값 이하면 '정지선 통과'로 본다
         dp('isec_after_m', 22.0)           # [m] 정지선을 지난 뒤 이 거리까지 유지
         # 9/12: 차로 방향과 어긋나게 달리는 차(끼어들기)는 차선 투영 대신 직선 예측. 투영하면 옆 차로에 머무는 것으로
         #   예측돼 정지 모듈이 못 본다(0912_054114 t=844s 옆 차로에서 들어와 서는 차와 24 km/h 접촉).
@@ -171,8 +169,8 @@ class VtdAutowareBridge(Node):
         self.tl_unknown_cap = float(g('tl_unknown_cap_mps'))
         self.tl_unknown_dist = float(g('tl_unknown_dist_m'))
         self.cutin_yaw = math.radians(float(g('cutin_yaw_deg')))
-        self.isec_left_cap = float(g('isec_left_cap_mps'))
-        self.isec_before = float(g('isec_before_m'))
+        self.isec_cap = float(g('isec_cap_mps'))
+        self.isec_trigger = float(g('isec_trigger_m'))
         self.isec_after = float(g('isec_after_m'))
         self.isec_hold = 0.0          # 정지선을 지난 뒤 남은 서행 거리 [m]
         self.isec_last_t = None       # 서행 거리 적분용
@@ -699,20 +697,6 @@ class VtdAutowareBridge(Node):
                 hi = mid
         return lo
 
-    def _route_turns_left(self, entry):
-        """정지선 lanelet 부터 경로상 다음 2 개 안에 좌회전(turn_direction=left) lanelet 이 있는가."""
-        if self.omap is None or self.tl_router is None or entry is None:
-            return False
-        ids = self.tl_router.route_ids
-        i = getattr(entry, 'route_idx', None)
-        if i is None or not ids:
-            return False
-        for lid in ids[i:i + 3]:
-            ll = self.omap.lanelets.get(lid)
-            if ll is not None and ll.tags.get('turn_direction') == 'left':
-                return True
-        return False
-
     def tl_approach_guard(self, state, entry, dist, t):
         """녹색·미할당 신호로 다가갈 때 딜레마 구간에 들어가기 전에 속도를 v* 로 제한한다.
         v* 에서는 정지 필요거리 = 황색 도달거리라, 황색이 언제 켜져도 서거나 지나갈 수 있다.
@@ -745,19 +729,17 @@ class VtdAutowareBridge(Node):
         elif v > vs + 0.2 and s > v * T:
             start = vs * T + (v * v - vs * vs) / (2.0 * self.tl_guard_slow_decel) + self.tl_guard_margin
             want = s <= start
-        # ── 좌회전 교차로 서행 (위 dp('isec_left_cap_mps') 주석 참조) ──────────────
+        # ── 교차로 서행: 정지선을 넘은 뒤 isec_after 만큼 (위 dp('isec_cap_mps') 주석 참조) ────
         dt = 0.0 if self.isec_last_t is None else max(0.0, min(0.5, t - self.isec_last_t))
         self.isec_last_t = t
-        if s is not None and entry is not None and -1.0 < s <= self.isec_before and self._route_turns_left(entry):
-            self.isec_hold = self.isec_after
+        if s is not None and s <= self.isec_trigger:
+            self.isec_hold = self.isec_after          # 정지선 통과 순간부터 재충전
         elif self.isec_hold > 0.0:
             self.isec_hold = max(0.0, self.isec_hold - max(0.0, self.vx_f) * dt)
         if self.isec_hold > 0.0:
             if not want:
                 want, reason = True, ''
-            limit = min(limit, self.isec_left_cap)
-            if entry is not None:
-                g['lanelet'] = entry.lanelet_id if not g['active'] else g['lanelet']
+            limit = min(limit, self.isec_cap)
 
         if want:
             if not g['active'] or g['lanelet'] != entry.lanelet_id:
