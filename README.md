@@ -38,24 +38,22 @@
 
 - **차량**: 아이오닉 6 (VTD `HyundaiIoniq6_23_Dyn`)
 - **입출력**: VTD TCP 9910 — 20 Hz로 자차 위치·주변 객체 30개·진행방향 신호 상태를 받고, 조향·가속·방향지시등 명령을 보냄
-- **소프트웨어**: Ubuntu 24.04, ROS 2 Jazzy, Autoware (소스 포함, 일부 수정)
+- **소프트웨어**: Ubuntu 24.04, ROS 2 Jazzy, Autoware
 
 ## 아키텍처
 
-[Autoware](https://github.com/autowarefoundation/autoware) 스택을 기반으로 합니다.
-VTD는 센서 원시 데이터 대신 자차 위치·주변 객체 목록·진행방향 신호 상태를 직접 주기 때문에,
-Autoware의 **Sensing · Localization · Perception · Vehicle Interface는 끄고** 그 자리를
-`vtd_autoware_bridge`가 채웁니다. **Map · Planning · Control · System은 Autoware를 그대로** 씁니다.
+[Autoware](https://github.com/autowarefoundation/autoware) 기반. Sensing · Localization · Perception · Vehicle Interface 자리에
+`vtd_autoware_bridge`, Map · Planning · Control · System은 Autoware.
 
-| Autoware 서브시스템 | 구성 |
+| 서브시스템 | 구성 |
 |---|---|
-| Sensing · Localization | 끔 — 브리지가 VTD 자차 위치로 `/localization/kinematic_state`, `/tf`, 초기화 상태 발행 |
-| Perception | 끔 — 브리지가 VTD 객체로 `/perception/object_recognition/objects`, 신호 상태로 신호등 발행. planning이 필수로 구독하는 점군·점유격자는 빈 데이터 |
+| Sensing · Localization | `vtd_autoware_bridge` — VTD 자차 위치 → `/localization/kinematic_state`, `/tf` |
+| Perception | `vtd_autoware_bridge` — VTD 객체 → `/perception/object_recognition/objects`, VTD 신호 상태 → 신호등 |
 | Map | Lanelet2 (`map/`, local 좌표 = VTD 월드 좌표) |
-| Planning | 그대로 사용. 정적/동적 장애물 회피, 차선변경(일반·외부요청), 신호·교차로·횡단보도·정지선, run_out 등 활성화 |
-| Control | 그대로 사용. 횡방향 MPC, 종방향 PID, `vehicle_cmd_gate` |
-| Vehicle Interface | 끔 — 브리지가 `vehicle_cmd_gate` 출력을 받아 VTD 제어 패킷(조향·가속·방향지시등)으로 전송 |
-| System · ADAPI | 그대로 사용 (진단, 운행 모드 전환, 경로 설정 API) |
+| Planning | Autoware |
+| Control | Autoware (횡방향 MPC, 종방향 PID) |
+| Vehicle Interface | `vtd_autoware_bridge` — `/control/command/control_cmd` → VTD 제어 패킷 |
+| System · ADAPI | Autoware |
 
 ### vtd_autoware_bridge 노드
 
@@ -72,7 +70,7 @@ Autoware의 **Sensing · Localization · Perception · Vehicle Interface는 끄�
 hlfma_ws/src/
   hlfma/                    팀 작성 패키지
     vtd_autoware_bridge/      VTD ↔ Autoware 브리지, 경로 주입, 우회·감속 노드 (+ pytest)
-    autoware_launch/          대회용 런치·파라미터 (끈 서브시스템, 플래닝 모듈 선택, 튜닝값)
+    autoware_launch/          런치·파라미터 (서브시스템·플래닝 모듈 구성)
     hlfma_vehicle_launch/     아이오닉 6 차량 제원 (vehicle_model:=hlfma_vehicle)
   autoware/                 Autoware 소스 (core · universe · launcher · sensor_component)
 map/                        리빙랩 Lanelet2 맵 (local 좌표 = VTD 월드 좌표)
@@ -81,12 +79,15 @@ mock_vtd.py                 VTD 모의 서버 (시뮬 PC 없이 전체 스택 �
 start.sh / stop.sh / rviz.sh
 ```
 
-### Autoware 수정
+### Autoware 소스
 
-리빙랩 맵과 대회 시나리오에서 드러난 문제를 업스트림 소스에서 직접 고쳤습니다.
-주요 대상은 `behavior_path_planner`의 차선변경·정적 장애물 회피 모듈
-(다차로 우회, 후보 경로 소멸, 범위 밖 접근 크래시, 실선 너머 회피 금지)과
-`route_handler`(맵 위상 순환 시 무한 루프)입니다.
+`hlfma_ws/src/autoware/` 중 업스트림과 다른 패키지:
+
+- `autoware_behavior_path_lane_change_module`
+- `autoware_behavior_path_static_obstacle_avoidance_module`
+- `autoware_behavior_path_planner`, `autoware_behavior_path_planner_common`
+- `autoware_motion_velocity_run_out_module`
+- `autoware_route_handler`
 
 ## 빌드 및 실행
 
