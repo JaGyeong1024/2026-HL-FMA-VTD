@@ -40,36 +40,67 @@
 - **입출력**: VTD TCP 9910 — 20 Hz로 자차 위치·주변 객체 30개·진행방향 신호 상태를 받고, 조향·가속·방향지시등 명령을 보냄
 - **소프트웨어**: Ubuntu 24.04, ROS 2 Jazzy, Autoware (소스 포함, 일부 수정)
 
-Autoware의 판단·제어를 그대로 쓰고, 인지·측위·차량 인터페이스 자리를 **VTD 브리지**가 대신 채웁니다.
-VTD는 센서 원시 데이터 없이도 객체 목록과 신호 상태를 주기 때문에, 브리지가 이를 Autoware 토픽으로
-바꿔 넣고 Autoware의 제어 출력을 다시 VTD 패킷으로 돌려보냅니다.
-
 ## 아키텍처
+
+[Autoware](https://github.com/autowarefoundation/autoware) 스택을 기반으로 합니다.
+VTD는 센서 원시 데이터 대신 자차 위치·주변 객체 목록·진행방향 신호 상태를 직접 주기 때문에,
+Autoware의 **Sensing · Localization · Perception · Vehicle Interface는 끄고** 그 자리를
+`vtd_autoware_bridge`가 채웁니다. **Map · Planning · Control · System은 Autoware를 그대로** 씁니다.
 
 ```mermaid
 flowchart LR
-  VTD["VTD<br/>(시뮬 PC)"]
-  subgraph BR["vtd_autoware_bridge"]
-    B["bridge_node"]
-    R["route_node"]
-    D["blocked_route_detour"]
-    P["pedestrian_proximity_slowdown"]
-  end
+  VTD["VTD"]
+
   subgraph AW["Autoware"]
-    PL["planning<br/>behavior_path · behavior/motion_velocity"]
-    CT["control<br/>MPC (횡) · PID (종)"]
-    SY["system · ADAPI"]
+    direction LR
+    MAP["Map<br/>Lanelet2"]
+    subgraph PLN["Planning"]
+      direction TB
+      MIS["mission_planner"] --> BPP["behavior_path_planner<br/>회피 · 차선변경"]
+      BPP --> BVP["behavior_velocity_planner<br/>신호 · 교차로 · 횡단보도"]
+      BVP --> MOT["path_optimizer<br/>motion_velocity_planner"]
+      MOT --> VS["velocity_smoother<br/>planning_validator"]
+    end
+    subgraph CTL["Control"]
+      direction TB
+      TF["trajectory_follower<br/>MPC · PID"] --> GATE["vehicle_cmd_gate"]
+    end
+    SYS["System · ADAPI"]
   end
-  CSV[("경로 CSV")] --> R
-  VTD -- "DataPacket 1109 B @20 Hz" --> B
-  B -- "측위 · 차량 상태<br/>객체 · 신호등" --> PL
-  R -- "set_route_points<br/>engage" --> SY
-  D -- "차선변경 승인 · 접근 속도 제한" --> PL
-  P -- "보행자 예방 감속" --> PL
-  PL --> CT
-  CT -- "control_cmd" --> B
-  B -- "CtrlPacket 9 B" --> VTD
+
+  subgraph BR["vtd_autoware_bridge"]
+    direction TB
+    BIN["bridge_node<br/>Localization · Perception 대체"]
+    BOUT["bridge_node<br/>Vehicle Interface 대체"]
+    RN["route_node"]
+    DT["blocked_route_detour"]
+    PS["pedestrian_proximity_slowdown"]
+  end
+
+  VTD -- "DataPacket 1109 B, 20 Hz" --> BIN
+  BIN -- "자차 상태 · 객체 · 신호등" --> PLN
+  MAP --> PLN
+  VS -- "/planning/trajectory" --> TF
+  GATE -- "control_cmd" --> BOUT
+  BOUT -- "CtrlPacket 9 B" --> VTD
+  RN -- "경로 주입 · engage" --> SYS
+  SYS --> MIS
+  DT -- "차선변경 승인 (RTC)" --> BPP
+  DT -- "속도 제한" --> VS
+  PS -- "속도 제한" --> VS
 ```
+
+| Autoware 서브시스템 | 구성 |
+|---|---|
+| Sensing · Localization | 끔 — 브리지가 VTD 자차 위치로 `/localization/kinematic_state`, `/tf`, 초기화 상태 발행 |
+| Perception | 끔 — 브리지가 VTD 객체로 `/perception/object_recognition/objects`, 신호 상태로 신호등 발행. planning이 필수로 구독하는 점군·점유격자는 빈 데이터 |
+| Map | Lanelet2 (`map/`, local 좌표 = VTD 월드 좌표) |
+| Planning | 그대로 사용. 정적/동적 장애물 회피, 차선변경(일반·외부요청), 신호·교차로·횡단보도·정지선, run_out 등 활성화 |
+| Control | 그대로 사용. 횡방향 MPC, 종방향 PID, `vehicle_cmd_gate` |
+| Vehicle Interface | 끔 — 브리지가 `vehicle_cmd_gate` 출력을 받아 VTD 제어 패킷(조향·가속·방향지시등)으로 전송 |
+| System · ADAPI | 그대로 사용 (진단, 운행 모드 전환, 경로 설정 API) |
+
+### vtd_autoware_bridge 노드
 
 | 노드 | 역할 |
 |---|---|
@@ -77,9 +108,6 @@ flowchart LR
 | `route_node` | 대회 경로 CSV(`seq,x,y`)를 lanelet 중심선에 투영해 waypoint·goal로 주입하고 자율주행 전환까지 요청. 리스폰 시 지나온 점을 빼고 재주입 |
 | `blocked_route_detour` | 정지 차량군에 막히기 전 감속하면서 Autoware 외부요청 차선변경(RTC)을 승인해 우회 |
 | `pedestrian_proximity_slowdown` | 경로 좌우 10 m 안의 보행자·자전거에 대해 충돌 경로에 들어오기 전 예방 감속 (보호구역 별도 상한) |
-
-인지·측위·센싱·차량 인터페이스는 런치에서 끄고 브리지로 대체합니다. planning이 필수로 구독하는
-점유격자·점군은 브리지가 빈 데이터로 채웁니다.
 
 ## 구성
 
