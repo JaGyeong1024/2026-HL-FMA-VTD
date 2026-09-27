@@ -4,28 +4,15 @@
 CLAUDE.local.md
 .mcp.json
 
-# ROS 2 build artifacts
-ros2_ws/build/
-ros2_ws/install/
-ros2_ws/log/
 __pycache__/
 *.pyc
 
-# hlfma_ws: 업스트림 소스는 hlfma.repos로 재현 (vcs import), 빌드 산출물 제외
-# hlfma_ws/src/autoware/
+# hlfma_ws 빌드 산출물
 hlfma_ws/build/
 hlfma_ws/install/
 hlfma_ws/log/
 
-# 런타임 로그
+# 런타임 로그·주행 기록
 autoware.log
-
-# 주행 기록 (record.sh 출력: bag·pcap·로그)
 test/
-
-# Bridge regression tests (root test/ recordings remain ignored).
-!hlfma_ws/src/hlfma/vtd_autoware_bridge/test/
-!hlfma_ws/src/hlfma/vtd_autoware_bridge/test/test_blocked_route_detour.py
-
-# 백업 zip 은 저장소 밖으로
 *.zip

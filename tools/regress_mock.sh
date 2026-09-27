@@ -6,13 +6,13 @@
 #   4 경로 주입 후 /perception/traffic_light_recognition/traffic_signals 발행
 #   5 engage 후 /control/command/control_cmd 발행     6 mock 차량 이동 (최고속 > 1 m/s)
 #   7 발행자 없는 구독 토픽 0 (tools/check_topic_contract.sh)
-# 사용: bash tools/regress_mock.sh [route.csv]   (기본 docs/대회정보/route_example.csv)
+# 사용: bash tools/regress_mock.sh [route.csv]   (기본 tools/route_example.csv)
 #   환경: MOCK_ARGS="--x .. --y .. --hdg .. --z .." (mock 시작 pose, 기본 route_example 시작점), OBS_SEC=주행 관찰 시간(기본 90)
 #   예) 4.9km 실경로: MOCK_ARGS="--x 447.23 --y -234.05 --hdg <h> --z 44.16" OBS_SEC=600 bash tools/regress_mock.sh tools/real_route_path1.csv
 # 로그: ~/hlfma/logs/regress_mock/
 set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ROUTE="${1:-$ROOT/docs/대회정보/route_example.csv}"
+ROUTE="${1:-$ROOT/tools/route_example.csv}"
 OUT="$HOME/hlfma/logs/regress_mock"; mkdir -p "$OUT"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-43}"
 source /opt/ros/jazzy/setup.bash

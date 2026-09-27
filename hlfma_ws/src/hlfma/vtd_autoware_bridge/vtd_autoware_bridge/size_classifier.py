@@ -1,7 +1,7 @@
 """VTD objects 크기(L×W×H) → 객체 분류.
 
 VTD TCP 9910 objects 에는 종류가 없어 크기로 가른다. 규칙과 경계값의 근거는
-docs/대회정보/object_bbox_based_classification.md (9/12 VTD 실측 11종). 경계값은 실측 사이 빈 구간의 중간이다.
+docs/object_bbox_based_classification.md (9/12 VTD 실측 11종). 경계값은 실측 사이 빈 구간의 중간이다.
 규칙은 위에서부터 차례로 적용한다. 값은 브리지 파라미터 object_class.* 로 바꿀 수 있다.
 
 9/1 첫 브리지부터 쓰던 규칙(L<1.2·W<1.2 → 보행자, L<2.8 → 이륜, 그 외 차량)은 라바콘을 보행자로

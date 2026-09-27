@@ -1,137 +1,148 @@
-# 2026 HL FMA — VTD 자율주행
+# HL FMA 2026 — 시뮬레이션 부문
 
-# 운용 절차 (사전테스트 · 대회장 · 연구실)
+<img src="docs/asset/readme/hlfma-2026-poster.jpg" width="300" align="right" alt="HL FMA 2026 poster" />
 
-## A. 대회장 / 사전테스트 (제어기 PC 본체만 지참, 케이블 꽂으면 192.168.50.10 자동)
+**HL FMA 2026 (Future Mobility Award) 자율주행 경진대회 — HL FMA [시뮬레이션]**
 
-```bash
-# 0) 받은 경로 CSV 넣기 (seq,x,y) — 한 줄 수정
-cp /media/.../route.csv ~/hlfma/route/            # USB 등
-sed -i 's|^csv_path:.*|csv_path: /home/a/hlfma/route/route.csv|' ~/hlfma/route/route_config.yaml
-python3 ~/2026-HL-FMA-VTD/tools/check_route.py ~/hlfma/route/route.csv   # 경로 점검 (선택)
+- **일정**<br />사전 연동테스트 2026. 09. 03.(목), 본선 2026. 09. 12.(토)
+- **장소**<br />원주미래산업진흥원
+- **플랫폼**<br />VTD 2025.2 (Hexagon) 가상주행 환경, 화성 리빙랩(화성시청·남양) OpenDRIVE 맵
+- **미션**<br />당일 공개되는 3 km 이내 도심 경로 완주. 신호교차로·횡단보도·어린이보호구역·터널·정지 차량·돌발 보행자 구간에서 도로교통법 준수 15개 항목을 구간별 감점제로 평가
+- **주최·주관**<br />HL만도, HL클레무브, 한국도로교통공단 / 한라대학교 SW중심대학사업단 (협력 iVH, Cadence)
 
-# 1) 기동 (브리지 + Autoware + rviz, 경로 자동 주입)  — 터미널 1
-cd ~/2026-HL-FMA-VTD && ./start_autonomous.sh
-#    rviz 는 터미널2: ./rviz.sh — ego 위치, 경로(초록), 다음 신호등 확인. 브리지 로그: tail -f ~/hlfma/logs/bridge_latest.log
+<br clear="right" />
+<br />
 
-# 2) 기록 (선택, 터미널 2)
-python3 tools/trace.py 사전테스트1        # → test/<시각>_사전테스트1/ (VTD 이더넷 pcap + 네트워크 상태 + 로그)
+<div align="center">
+<table>
+<tr>
+<td align="center" valign="top" width="180">
+  <a href="https://github.com/JaGyeong1024"><img src="https://github.com/JaGyeong1024.png?size=200" width="110" height="110" alt="" /></a><br />
+  <a href="https://github.com/JaGyeong1024"><b>구자경</b></a>
+</td>
+<td align="center" valign="top" width="180">
+  <a href="https://github.com/namgyu021210"><img src="https://github.com/namgyu021210.png?size=200" width="110" height="110" alt="" /></a><br />
+  <a href="https://github.com/namgyu021210"><b>이남규</b></a>
+</td>
+<td align="center" valign="top" width="180">
+  <a href="https://github.com/mini0909-web"><img src="https://github.com/mini0909-web.png?size=200" width="110" height="110" alt="" /></a><br />
+  <a href="https://github.com/mini0909-web"><b>서민영</b></a>
+</td>
+</tr>
+</table>
+</div>
 
-# 3) 출발 (운영측 Start 후)  — 터미널 3
-./start_hlfma.sh
+<br />
 
-# 종료: 터미널 1 에서 Ctrl+C (브리지도 같이 내려감)
-```
-- 자동 engage 를 원하면: `AUTO_ENGAGE=true ./start_autonomous.sh` (경로 SET 즉시 자율주행 전환)
-- 폴백(자체 스택): `python3 ~/2026-HL-FMA-VTD/tools/run_real.py 192.168.50.11 ~/hlfma/route/route.csv`
+## 프로젝트 개요
 
-## B. 연구실 (시뮬 PC 192.168.50.11)
+- **차량**: 아이오닉 6 (VTD `HyundaiIoniq6_23_Dyn`)
+- **입출력**: VTD TCP 9910 — 20 Hz로 자차 위치·주변 객체 30개·진행방향 신호 상태를 받고, 조향·가속·방향지시등 명령을 보냄
+- **소프트웨어**: Ubuntu 24.04, ROS 2 Jazzy, Autoware (소스 포함, 일부 수정)
 
-```bash
-# 시뮬 PC: 라이선스 + VTD (sudo 비번 필요)
-~/HLFMA/sim_start.sh --setup=00_HL_VTD --autoConfig
-#   VTD 가 CONFIG 단계에 머물면(9910 안 열림): 제어기에서  python3 tools/scp_ctrl.py 192.168.50.11 xml '<SimCtrl><Apply/></SimCtrl>'
+Autoware의 판단·제어를 그대로 쓰고, 인지·측위·차량 인터페이스 자리를 **VTD 브리지**가 대신 채웁니다.
+VTD는 센서 원시 데이터 없이도 객체 목록과 신호 상태를 주기 때문에, 브리지가 이를 Autoware 토픽으로
+바꿔 넣고 Autoware의 제어 출력을 다시 VTD 패킷으로 돌려보냅니다.
 
-# 제어기: 시나리오 로드·Init·Start + 관전 카메라 (연구실 전용 — 대회장 금지)
-cd ~/2026-HL-FMA-VTD/tools && python3 lab_restart_scenario.py 192.168.50.11 HL_FMA_VTD_LivingLab_real.xml --cam high
+## 아키텍처
 
-# 제어기: 기동 (route_config.yaml 의 CSV 사용)
-cd ~/2026-HL-FMA-VTD && ./start_autonomous.sh
-#   또는 특정 CSV:  ROUTE_CSV=~/2026-HL-FMA-VTD/tools/real_route_path1.csv ./start_autonomous.sh
-
-# mock 회귀 (시뮬 PC 없이, 약 6분): 9개 PASS 가 정상
-bash ~/2026-HL-FMA-VTD/tools/regress_mock.sh
-```
-
-## C. 확인 명령
-
-```bash
-tail -f ~/hlfma/logs/bridge_latest.log                       # 연결·경로·신호등·워치독
-ros2 topic echo /api/routing/state --once --qos-durability transient_local --qos-reliability reliable   # state 2 = SET
-ros2 topic echo /api/operation_mode/state --once --qos-durability transient_local --qos-reliability reliable  # mode 2 = AUTONOMOUS
-ros2 topic hz /planning/trajectory                            # 10Hz
-bash ~/2026-HL-FMA-VTD/tools/check_topic_contract.sh          # 발행자 없는 구독 토픽 0 이어야 정상
-```
-
-## D. 빌드 (hlfma_ws — 새 터미널이면 환경은 .bashrc 가 잡음)
-```bash
-cd ~/2026-HL-FMA-VTD/hlfma_ws && colcon build                          # 전체 (증분)
-colcon build --packages-select vtd_autoware_bridge autoware_launch      # 우리 것만 (수 초)
-```
-
----
-
-VTD(Virtual Test Drive) 시뮬레이션 환경에서 동작하는 자율주행 스택.
-시뮬레이터로부터 센서 데이터를 수신해 **인지 → 판단 → 제어** 전 과정을 수행하고 제어 신호를 송출한다.
-
-## 시스템 구성
-
-```
-┌──────────────┐   랜선 직결    ┌──────────────────────┐
-│   VTD PC     │◄──────────────►│  제어기 (이 저장소)   │
-│  시뮬레이션   │   enp89s0      │  인지 · 판단 · 제어   │
-└──────────────┘  2.5GbE        └──────────────────────┘
+```mermaid
+flowchart LR
+  VTD["VTD<br/>(시뮬 PC)"]
+  subgraph BR["vtd_autoware_bridge"]
+    B["bridge_node"]
+    R["route_node"]
+    D["blocked_route_detour"]
+    P["pedestrian_proximity_slowdown"]
+  end
+  subgraph AW["Autoware"]
+    PL["planning<br/>behavior_path · behavior/motion_velocity"]
+    CT["control<br/>MPC (횡) · PID (종)"]
+    SY["system · ADAPI"]
+  end
+  CSV[("경로 CSV")] --> R
+  VTD -- "DataPacket 1109 B @20 Hz" --> B
+  B -- "측위 · 차량 상태<br/>객체 · 신호등" --> PL
+  R -- "set_route_points<br/>engage" --> SY
+  D -- "차선변경 승인 · 접근 속도 제한" --> PL
+  P -- "보행자 예방 감속" --> PL
+  PL --> CT
+  CT -- "control_cmd" --> B
+  B -- "CtrlPacket 9 B" --> VTD
 ```
 
----
-
-## 제어기 PC 사양
-
-기준일: 2026-08-13
-
-### 하드웨어
-
-| 항목 | 내용 |
+| 노드 | 역할 |
 |---|---|
-| 제조사 / 모델 | Micro-Star International (MSI) — GS76 Stealth 11UG (REV 1.0) |
-| CPU | Intel Core i9-11900H (Tiger Lake-H) — 8코어 16스레드, 0.8 ~ 4.9GHz |
-| RAM | 32GB (가용 31GiB) + swap 8GB |
-| GPU (외장) | NVIDIA RTX 3070 Laptop / Max-Q (GA104M, `10de:249d`) — VRAM 8GB, compute capability 8.6, SM 40개 |
-| GPU (내장) | Intel UHD Graphics (Tiger Lake-H GT1, `8086:9a60`) — 드라이버 `i915` |
-| 저장장치 | Micron 3400 NVMe 1TB (`MTFDKBA1T0TFH`, 953.9GB) |
-| 파티션 | `/` = `/dev/nvme0n1p5`, ext4, 720.5GB (여유 630.7GB) |
-| 유선 LAN | Killer E3000 2.5GbE (Realtek `10ec:3000`) — `enp89s0`, MAC `2c:f0:5d:fe:c6:19` |
-| 무선 LAN | Intel Wi-Fi 6E AX210 (`8086:2725`) — `wlp92s0` |
-| BIOS | AMI `E17M1IMS.116` (2022-01-10) |
-| Secure Boot | 비활성화 |
+| `bridge_node` | VTD 패킷 → `/localization/*`, `/vehicle/status/*`, `/perception/object_recognition/objects`, 신호등. Autoware `control_cmd` → VTD 제어 패킷. 객체는 크기(L×W×H)로 차량·자전거·보행자를 분류하고, 신호 상태는 경로상 다음 정지선의 신호등 규제요소에 배정 |
+| `route_node` | 대회 경로 CSV(`seq,x,y`)를 lanelet 중심선에 투영해 waypoint·goal로 주입하고 자율주행 전환까지 요청. 리스폰 시 지나온 점을 빼고 재주입 |
+| `blocked_route_detour` | 정지 차량군에 막히기 전 감속하면서 Autoware 외부요청 차선변경(RTC)을 승인해 우회 |
+| `pedestrian_proximity_slowdown` | 경로 좌우 10 m 안의 보행자·자전거에 대해 충돌 경로에 들어오기 전 예방 감속 (보호구역 별도 상한) |
 
-### 소프트웨어
+인지·측위·센싱·차량 인터페이스는 런치에서 끄고 브리지로 대체합니다. planning이 필수로 구독하는
+점유격자·점군은 브리지가 빈 데이터로 채웁니다.
 
-| 구성요소 | 버전 |
-|---|---|
-| OS | Ubuntu 24.04.4 LTS |
-| 커널 | 7.0.0-28-generic |
-| 세션 타입 | X11 |
-| **ROS 2** | **Jazzy Jalisco** — `ros-jazzy-desktop` 0.11.0 (LTS, 2029.5까지) |
-| NVIDIA 드라이버 | 595.84 (`nvidia-driver-595-open`, DKMS) |
-| CUDA Toolkit | 13.3.73 (`/usr/local/cuda`) |
-| cuDNN | 9.25.0 (cuda-13) |
-| TensorRT | 11.2.1.2+cuda13.3 |
-| gcc | 13.3.0 |
-| Python | 3.12.3 (시스템) |
-| NumPy | 1.26.4 (시스템) |
+## 구성
 
-### 현재 런타임 상태
+```
+hlfma_ws/src/
+  hlfma/                    팀 작성 패키지
+    vtd_autoware_bridge/      VTD ↔ Autoware 브리지, 경로 주입, 우회·감속 노드 (+ pytest)
+    autoware_launch/          대회용 런치·파라미터 (끈 서브시스템, 플래닝 모듈 선택, 튜닝값)
+    hlfma_vehicle_launch/     아이오닉 6 차량 제원 (vehicle_model:=hlfma_vehicle)
+  autoware/                 Autoware 소스 (core · universe · launcher · sensor_component)
+map/                        리빙랩 Lanelet2 맵 (local 좌표 = VTD 월드 좌표)
+tools/                      회귀·계측·분석 도구
+mock_vtd.py                 VTD 모의 서버 (시뮬 PC 없이 전체 스택 회귀)
+start.sh / stop.sh / rviz.sh
+```
 
-| 항목 | 상태 |
-|---|---|
-| GPU 커널 드라이버 | `nvidia` (`nvidia`, `nvidia_modeset`, `nvidia_drm`, `nvidia_uvm` 로드됨) |
-| DKMS | `nvidia/595.84, 7.0.0-28-generic, x86_64: installed` |
-| `enp89s0` | `DOWN` / `NO-CARRIER` (랜선 미연결) |
-| `wlp92s0` | `UP` |
-| CPU governor | `powersave` |
-| 시각 동기 | `systemd-timesyncd` active — `ntp.ubuntu.com`, 타임존 `Asia/Seoul` |
+### Autoware 수정
 
----
+리빙랩 맵과 대회 시나리오에서 드러난 문제를 업스트림 소스에서 직접 고쳤습니다.
+주요 대상은 `behavior_path_planner`의 차선변경·정적 장애물 회피 모듈
+(다차로 우회, 후보 경로 소멸, 범위 밖 접근 크래시, 실선 너머 회피 금지)과
+`route_handler`(맵 위상 순환 시 무한 루프)입니다.
 
-## 환경 변수
+## 빌드 및 실행
 
-`~/.bashrc`에 등록되어 있다.
+ROS 2 Jazzy와 Autoware 의존성(acados 포함)이 설치된 Ubuntu 24.04 기준입니다.
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-export ROS_DOMAIN_ID=43
-export CUDA_HOME=/usr/local/cuda
-export PATH="${CUDA_HOME}/bin:${PATH}"
-export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+cd hlfma_ws
+colcon build --symlink-install
 ```
+
+VTD가 9910 포트를 열어 둔 상태에서 저장소 루트에서 실행합니다.
+
+```bash
+ROUTE_CSV=/path/to/route.csv ./start.sh          # 브리지 + Autoware 기동 → 경로 주입 → 자율주행 전환
+./rviz.sh                                          # 별도 터미널 (선택)
+./stop.sh                                          # 종료
+```
+
+| 실행 | 동작 |
+|---|---|
+| `./start.sh` | 실기 (VTD `192.168.50.11`) |
+| `./start.sh <host>` | 다른 VTD 호스트 |
+| `./start.sh mock` | 시뮬 PC 없이. 먼저 별도 터미널에서 `python3 mock_vtd.py` |
+| `./start.sh psim` | Autoware planning simulator (브리지 없음, 맵·플래닝 확인용) |
+| `ENGAGE=false ./start.sh` | 기동·경로 주입까지만, 출발은 수동 |
+
+## 도구
+
+| 도구 | 용도 |
+|---|---|
+| `tools/regress_mock.sh` | mock VTD + 브리지 + Autoware 전체 회귀 |
+| `tools/harness/` | 수정 단위별 E2E 케이스 (정지·재출발, 우회, 차선변경, 리스폰) |
+| `tools/check_route.py` | 경로 CSV가 맵 차선에 올바로 스냅되는지 점검 |
+| `tools/check_topic_contract.sh` | 구독자만 있고 발행자가 없는 토픽 검출 (브리지 토픽 계약 점검) |
+| `tools/run_rec.sh`, `tools/trace.py` | 실주행 녹화·계측 |
+| `tools/score.py`, `tools/stop_analysis.py` | 주행 기록 자동 채점, 적색 정지 접근 분석 |
+| `tools/xodr_map.py`, `tools/lane_graph.py` | OpenDRIVE 파서, 차선 그래프 |
+
+## License
+
+`hlfma_ws/src/autoware/`는 [Autoware](https://github.com/autowarefoundation/autoware)
+소스로 각 패키지의 라이선스(대부분 Apache License 2.0)를 따릅니다.
+`hlfma_ws/src/hlfma/autoware_launch`, `hlfma_vehicle_launch`는 Autoware의 `autoware_launch`,
+`sample_vehicle_launch`를 기반으로 수정한 것입니다.

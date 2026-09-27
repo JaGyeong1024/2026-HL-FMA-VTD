@@ -1,4 +1,4 @@
-"""size_classifier: docs/대회정보/object_bbox_based_classification.md 실측 11종이 기대 분류로 가는지."""
+"""size_classifier: docs/object_bbox_based_classification.md 실측 11종이 기대 분류로 가는지."""
 import pytest
 
 from vtd_autoware_bridge.size_classifier import (
