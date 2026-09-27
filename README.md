@@ -47,49 +47,6 @@ VTD는 센서 원시 데이터 대신 자차 위치·주변 객체 목록·진�
 Autoware의 **Sensing · Localization · Perception · Vehicle Interface는 끄고** 그 자리를
 `vtd_autoware_bridge`가 채웁니다. **Map · Planning · Control · System은 Autoware를 그대로** 씁니다.
 
-```mermaid
-flowchart LR
-  VTD["VTD"]
-
-  subgraph AW["Autoware"]
-    direction LR
-    MAP["Map<br/>Lanelet2"]
-    subgraph PLN["Planning"]
-      direction TB
-      MIS["mission_planner"] --> BPP["behavior_path_planner<br/>회피 · 차선변경"]
-      BPP --> BVP["behavior_velocity_planner<br/>신호 · 교차로 · 횡단보도"]
-      BVP --> MOT["path_optimizer<br/>motion_velocity_planner"]
-      MOT --> VS["velocity_smoother<br/>planning_validator"]
-    end
-    subgraph CTL["Control"]
-      direction TB
-      TF["trajectory_follower<br/>MPC · PID"] --> GATE["vehicle_cmd_gate"]
-    end
-    SYS["System · ADAPI"]
-  end
-
-  subgraph BR["vtd_autoware_bridge"]
-    direction TB
-    BIN["bridge_node<br/>Localization · Perception 대체"]
-    BOUT["bridge_node<br/>Vehicle Interface 대체"]
-    RN["route_node"]
-    DT["blocked_route_detour"]
-    PS["pedestrian_proximity_slowdown"]
-  end
-
-  VTD -- "DataPacket 1109 B, 20 Hz" --> BIN
-  BIN -- "자차 상태 · 객체 · 신호등" --> PLN
-  MAP --> PLN
-  VS -- "/planning/trajectory" --> TF
-  GATE -- "control_cmd" --> BOUT
-  BOUT -- "CtrlPacket 9 B" --> VTD
-  RN -- "경로 주입 · engage" --> SYS
-  SYS --> MIS
-  DT -- "차선변경 승인 (RTC)" --> BPP
-  DT -- "속도 제한" --> VS
-  PS -- "속도 제한" --> VS
-```
-
 | Autoware 서브시스템 | 구성 |
 |---|---|
 | Sensing · Localization | 끔 — 브리지가 VTD 자차 위치로 `/localization/kinematic_state`, `/tf`, 초기화 상태 발행 |
