@@ -34,6 +34,10 @@
 
 <br />
 
+## 주행 영상
+
+https://github.com/user-attachments/assets/451b78c2-3a54-454e-8af4-2f84cd29729a
+
 ## 프로젝트 개요
 
 - **차량**: 아이오닉 6 (VTD `HyundaiIoniq6_23_Dyn`)
